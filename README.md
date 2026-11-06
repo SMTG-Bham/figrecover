@@ -23,6 +23,15 @@ or with pip:
 python -m pip install git+https://github.com/SMTG-Bham/figrecover
 ```
 
+To have figrecover read the axes for you (see
+[Reading the axes](#reading-the-axes)), install the `ocr` extra instead. It
+adds the [RapidOCR](https://github.com/RapidAI/RapidOCR) text reader and its
+models, so it needs no network access when it runs:
+
+```bash
+uv tool install "figrecover[ocr] @ git+https://github.com/SMTG-Bham/figrecover"
+```
+
 ## Usage
 
 ### 1. Prepare the image
@@ -31,7 +40,8 @@ Crop the image to the axes and the curves. figrecover ignores everything left
 of the y-axis and below the x-axis, then traces the most common colour that
 stands out from the background in what remains. Legends and the top and right
 frame lines are traced too if they are the same colour as a curve, so crop or
-paint them out. Dark backgrounds work as well as light ones.
+paint them out. Dark backgrounds work as well as light ones. To have
+figrecover read the axes, keep their tick labels and titles in the image.
 
 ### 2. Choose reference points
 
@@ -39,6 +49,8 @@ figrecover maps pixels to data with at least three reference points: usually
 the origin, a labelled tick on the x-axis and one on the y-axis. Give their
 data coordinates with `-p` and their pixel positions with `-l`, in the same
 order. Pixel positions are measured from the bottom-left corner of the image.
+With the `ocr` extra, you can leave out both and let figrecover read the tick
+labels instead; see [Reading the axes](#reading-the-axes).
 
 If you leave out `-l`, figrecover opens the image and asks you to click on each
 reference point in turn (press q to cancel). It then prints the matching `-l`
@@ -75,7 +87,7 @@ in blue, so you can check the result at a glance:
 
 | Option | Meaning |
 | --- | --- |
-| `-p`, `--point X,Y` | Data coordinates of a reference point. Repeat for at least three. |
+| `-p`, `--point X,Y` | Data coordinates of a reference point. Repeat for at least three. Default: [read the axes](#reading-the-axes). |
 | `-l`, `--location X,Y` | Pixel position of each reference point, in the same order. Default: click on them. |
 | `-n`, `--series N` | Trace the N most common curve colours, and print the matching `-c` options. Default: 1. |
 | `-c`, `--colour RRGGBB` | Hexadecimal colour of a curve to trace, such as `1f77b4`. Repeat for several curves. |
@@ -134,6 +146,54 @@ figrecover examples/grid.png \
 
 ![A damped oscillation recovered after removing its grid](examples/grid.preview.png)
 
+### Reading the axes
+
+With the `ocr` extra installed, leave out `-p` and `-l`, and figrecover reads
+the tick labels and axis titles itself:
+
+```bash
+figrecover examples/labelled.png --preview labelled.preview.png
+```
+
+It prints what it read, so you can check it:
+
+```text
+figrecover: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10
+figrecover: y-axis "Voltage (mV)" with ticks at -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1
+```
+
+and names the CSV columns after the axis titles:
+
+```text
+Time (s),Voltage (mV)
+-0.00419701,0.999744
+...
+```
+
+The preview circles each tick it read, on its axis line:
+
+![A damped oscillation recovered from a plot whose axes were read](examples/labelled.preview.png)
+
+Each image is calibrated from its own labels, so the plots in a batch can have
+different axes. The other options, such as `-n`, `-c` and `--remove-grid`,
+work as before.
+
+- The x-axis tick labels are the lowest row of three or more numbers, and the
+  y-axis tick labels the leftmost column of three or more numbers above them.
+  Labels whose values are out of line with the rest, such as misread ones, are
+  dropped. An axis with fewer than three labels in line cannot be read, so
+  neither can a logarithmic axis.
+- A scale factor printed beside an axis, such as `1e-5` or `×10³`, multiplies
+  its tick values. An axis offset, such as `+1e3`, cannot be read.
+- figrecover traces the curves from the axis lines, not from the first ticks,
+  so the margins that plotting libraries leave inside the axes are kept. If
+  there are no axis lines, it starts at the first ticks.
+- The titles are the nearest text below the x-axis tick labels and left of the
+  y-axis ones. A column without a title is named `x` or `y`. Titles of a single
+  letter are easily misread, such as `x` as `X`, or missed.
+
+When a plot's labels cannot be read, give `-p` as before.
+
 ### Python
 
 The same steps are available as a library:
@@ -147,6 +207,17 @@ calibration = Calibration.from_points(
     pixels=[(80, 44), (576, 44), (80, 147)],
 )
 data = calibration.to_data(trace_curve(image, calibration.origin))
+```
+
+or, with the `ocr` extra, reading the axes:
+
+```python
+from figrecover import load_image, read_axes, trace_curve
+
+image = load_image("examples/labelled.png")
+axes = read_axes(image)
+data = axes.calibration.to_data(trace_curve(image, axes.calibration.origin))
+print(axes.x_title, axes.y_title)  # Time (s) Voltage (mV)
 ```
 
 For several curves, `find_colours` returns the colours of the most common

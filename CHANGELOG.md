@@ -12,10 +12,15 @@ The first release.
   a `series` column.
 - Reference points can be clicked on, after which figrecover prints the
   matching `-l` options to reuse for similar plots.
+- With the `ocr` extra, figrecover reads the axes when `-p` is left out: it
+  calibrates each image from its tick labels, applying scale factors such as
+  `1e-5`, traces from where the axis lines cross, and names the CSV columns
+  after the axis titles.
 - `--preview` saves a faded copy of the image with each recovered curve drawn
   in its colour, and `--remove-grid` paints over grid lines before tracing.
 - Transparent pixels are treated as white, and plots with a dark background
   work as well as light ones.
 - A typed Python API: `Calibration`, `load_image`, `remove_grid`,
-  `find_colours`, `trace_curves` and `trace_curve`.
+  `find_colours`, `trace_curves`, `trace_curve` and, with the `ocr` extra,
+  `read_axes`.
 - Requires Python 3.14 on Linux, with NumPy and OpenCV.
