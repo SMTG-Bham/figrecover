@@ -3,6 +3,7 @@
 import argparse
 import csv
 import io
+import math
 import os
 import re
 import sys
@@ -47,6 +48,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error(
             "--log needs -p; figrecover finds logarithmic axes itself when reading them"
         )
+    outputs = {"-o": arguments.output, "--preview": arguments.preview}
+    for option, path in outputs.items():
+        if path is not None and path.resolve() == arguments.image.resolve():
+            parser.error(f"{option} would overwrite the image")
+    if (
+        None not in outputs.values()
+        and len({p.resolve() for p in outputs.values()}) == 1
+    ):
+        parser.error("-o and --preview name the same file")
 
     try:
         _digitize(arguments)
@@ -143,6 +153,7 @@ def _digitize(arguments: argparse.Namespace) -> None:
     """Write the curves in the image as CSV."""
     image = load_image(arguments.image)
     if arguments.points:
+        _check_locations(arguments.locations, image)
         pixels = arguments.locations or _click_locations(image, arguments.points)
         calibration = Calibration.from_points(
             arguments.points,
@@ -163,6 +174,15 @@ def _digitize(arguments: argparse.Namespace) -> None:
         _save_preview(arguments.preview, image, curves, colours, pixels)
     data = [calibration.to_data(curve) for curve in curves]
     _write_csv(arguments.output or sys.stdout, data, names)
+
+
+def _check_locations(locations: Sequence[Point], image: Image) -> None:
+    """Check that each -l location lies on the image."""
+    height, width = image.shape[:2]
+    for x, y in locations:
+        if not (0 <= x <= width and 0 <= y <= height):
+            msg = f"the -l location {x:g},{y:g} lies outside the {width}x{height} image"
+            raise ValueError(msg)
 
 
 def _click_locations(image: Image, points: Sequence[Point]) -> list[Point]:
@@ -260,6 +280,9 @@ def _point(text: str) -> Point:
     except ValueError:
         msg = f"expected a point written as x,y, got {text!r}"
         raise argparse.ArgumentTypeError(msg) from None
+    if not (math.isfinite(x) and math.isfinite(y)):
+        msg = f"expected finite numbers in the point {text!r}"
+        raise argparse.ArgumentTypeError(msg)
     return x, y
 
 

@@ -281,6 +281,10 @@ def test_can_be_cancelled(monkeypatch: pytest.MonkeyPatch) -> None:
         ([*SPECTRUM, *LOCATIONS, "--preview", "no/such/dir.png"], "cannot write"),
         ([*SERIES, "-n", "5"], "found only 4 of 5 curves"),
         ([*SERIES, "-c", "00ffff"], "no curve of colour #00ffff found"),
+        (
+            [*SPECTRUM, "-l", "80,44", "-l", "5760,44", "-l", "80,147"],
+            "the -l location 5760,44 lies outside the 640x400 image",
+        ),
     ],
 )
 def test_reports_errors(
@@ -306,6 +310,11 @@ def test_accepts_points_with_spaces_and_exponents(
         (["plot.png", "-p", "0"], "expected a point written as x,y, got '0'"),
         (["plot.png", "-p", "1,2,3"], "expected a point written as x,y"),
         (["plot.png", "-p", "a,b"], "expected a point written as x,y"),
+        (["plot.png", "-p", "nan,0"], "expected finite numbers in the point 'nan,0'"),
+        (["plot.png", "-p", "0,-inf"], "expected finite numbers in the point"),
+        (["plot.png", "-o", "plot.png"], "-o would overwrite the image"),
+        (["plot.png", "--preview", "./plot.png"], "--preview would overwrite the"),
+        (["plot.png", "-o", "a.png", "--preview", "./a.png"], "name the same file"),
         ([*SERIES, "-n", "0"], "expected a positive whole number, got '0'"),
         ([*SERIES, "-n", "two"], "expected a positive whole number"),
         ([*SERIES, "-c", "red"], "expected a colour written as RRGGBB, got 'red'"),

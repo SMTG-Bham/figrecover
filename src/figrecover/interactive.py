@@ -32,7 +32,7 @@ def pick_points(image: Image, labels: Sequence[str]) -> list[Point]:
     clicks: list[Point] = []
 
     def on_mouse(event: int, x: int, y: int, _flags: int, _param: object) -> None:
-        if event == cv2.EVENT_LBUTTONDOWN:
+        if event == cv2.EVENT_LBUTTONDOWN and y < height:  # not on the caption
             clicks.append((x, height - y))
 
     with _window(on_mouse):
