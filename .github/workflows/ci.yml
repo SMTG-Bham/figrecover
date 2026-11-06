@@ -1,5 +1,9 @@
 name: CI
 
+# Every job uses the Python version in .python-version. Don't pass
+# python-version to setup-uv: it overrides the file, so a version that uv
+# cannot install would go unnoticed in that job.
+
 on:
   push:
     branches: [main]
@@ -42,7 +46,7 @@ jobs:
         run: uv run --locked mypy
 
   test:
-    name: Test (Python ${{ matrix.python-version }}, ${{ matrix.resolution }})
+    name: Test (${{ matrix.resolution }} dependencies)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -51,12 +55,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.14"]
-        resolution: [locked]
-        include:
-          # The oldest dependency versions allowed by pyproject.toml.
-          - python-version: "3.14"
-            resolution: lowest-direct
+        # locked: the versions pinned in uv.lock.
+        # lowest-direct: the oldest versions allowed by pyproject.toml.
+        resolution: [locked, lowest-direct]
 
     steps:
       - name: Check out the repository
@@ -66,8 +67,6 @@ jobs:
 
       - name: Set up uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-        with:
-          python-version: ${{ matrix.python-version }}
 
       - name: Test with the locked dependencies
         if: matrix.resolution == 'locked'
