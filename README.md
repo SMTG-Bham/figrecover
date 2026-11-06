@@ -142,7 +142,10 @@ three pixels at the steepest point.
 
 The project uses [uv](https://docs.astral.sh/uv/) 0.13 or newer, which
 installs the Python version pinned in `.python-version` if it is missing.
-Create the environment and install the Git hooks once:
+uv prefers its own Python builds, so if the only uv-managed Python 3.14 is the
+free-threaded `3.14t`, it picks that one and tries to compile OpenCV from
+source; run `uv python install 3.14` once to add the standard build, which uv
+then prefers. Create the environment and install the Git hooks once:
 
 ```bash
 uv sync

@@ -54,13 +54,17 @@ def synthetic_plot(grid: int | None = None) -> tuple[Image, Calibration]:
     return image, Calibration.from_points(data, pixels)
 
 
-def test_trace_curve_recovers_a_known_curve() -> None:
-    image, calibration = synthetic_plot()
+def assert_traces_curve(image: Image, calibration: Calibration) -> None:
+    """Check that the curve traced in a synthetic plot follows ``curve``."""
     data = calibration.to_data(trace_curve(image, calibration.origin))
 
     assert len(data) > 300
     assert np.all(np.diff(data[:, 0]) > 0)
     np.testing.assert_allclose(data[:, 1], curve(data[:, 0]), atol=0.05)
+
+
+def test_trace_curve_recovers_a_known_curve() -> None:
+    assert_traces_curve(*synthetic_plot())
 
 
 def test_trace_curve_ignores_the_axes() -> None:
@@ -72,22 +76,18 @@ def test_trace_curve_ignores_the_axes() -> None:
 
 
 def test_trace_curve_ignores_a_light_grid() -> None:
-    image, calibration = synthetic_plot(grid=200)
-    data = calibration.to_data(trace_curve(image, calibration.origin))
-
-    assert len(data) > 300
-    np.testing.assert_allclose(data[:, 1], curve(data[:, 0]), atol=0.05)
+    assert_traces_curve(*synthetic_plot(grid=200))
 
 
 def test_remove_grid_lets_the_curve_be_traced() -> None:
     image, calibration = synthetic_plot(grid=0)
-    cleaned = remove_grid(image)
-    data = calibration.to_data(trace_curve(cleaned, calibration.origin))
+    original = image.copy()
 
-    assert np.all(cleaned[10, :] == 255)
-    assert len(data) > 300
-    np.testing.assert_allclose(data[:, 1], curve(data[:, 0]), atol=0.05)
-    assert np.array_equal(image, synthetic_plot(grid=0)[0])  # not modified
+    cleaned = remove_grid(image)
+
+    assert np.array_equal(image, original)  # not modified
+    assert np.all(cleaned[10, :] == 255)  # a grid line is gone
+    assert_traces_curve(cleaned, calibration)
 
 
 def test_trace_curve_needs_a_curve() -> None:
@@ -150,7 +150,7 @@ def test_load_image_inverts_dark_images(tmp_path: Path) -> None:
     loaded = load_image(path)
 
     assert np.array_equal(loaded, image)
-    assert len(trace_curve(loaded, calibration.origin)) > 300
+    assert_traces_curve(loaded, calibration)
 
 
 def test_load_image_reports_unreadable_files(tmp_path: Path) -> None:

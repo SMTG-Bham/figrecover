@@ -54,7 +54,7 @@ test = [
 ]
 
 [tool.pytest]
-addopts = ["-ra", "--import-mode=importlib", "--cov", "--cov-report=term-missing"]
+addopts = ["-ra", "--import-mode=importlib", "--cov"]
 testpaths = ["tests"]
 strict = true
 filterwarnings = ["error"]

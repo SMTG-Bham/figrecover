@@ -10,15 +10,18 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 
-from figrecover import Image, __version__, interactive
+from figrecover import Image, Point, __version__, interactive
 from figrecover.cli import main
 
 type Curve = Callable[[npt.NDArray[np.float64]], npt.NDArray[np.float64]]
 
 EXAMPLES = Path(__file__).parents[1] / "examples"
 POINTS = ["-p", "0,0", "-p", "10,0", "-p", "0,1"]
+# The pixel positions of POINTS that examples/make_examples.py prints.
 LOCATIONS = ["-l", "80,44", "-l", "576,44", "-l", "80,147"]
+GRID_LOCATIONS = ["-l", "80,44", "-l", "576,44", "-l", "80,167"]
 SPECTRUM = [str(EXAMPLES / "spectrum.png"), *POINTS]
+GRID = [str(EXAMPLES / "grid.png"), *POINTS]
 
 
 def spectrum(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
@@ -67,11 +70,7 @@ def test_writes_csv_and_preview_files(
 
 
 def test_removes_grids(capsys: pytest.CaptureFixture[str]) -> None:
-    arguments = [
-        *(str(EXAMPLES / "grid.png"), "--remove-grid", *POINTS),
-        *("-l", "80,44", "-l", "576,44", "-l", "80,167"),
-    ]
-    assert main(arguments) == 0
+    assert main([*GRID, *GRID_LOCATIONS, "--remove-grid"]) == 0
     assert_recovers(capsys.readouterr().out, damped)
 
 
@@ -92,7 +91,7 @@ def test_asks_for_missing_locations_and_prints_them(
 ) -> None:
     asked: list[Sequence[str]] = []
 
-    def pick_points(_image: Image, labels: Sequence[str]) -> list[tuple[float, float]]:
+    def pick_points(_image: Image, labels: Sequence[str]) -> list[Point]:
         asked.append(labels)
         return [(80, 44), (576, 44), (80, 147)]
 
@@ -106,7 +105,7 @@ def test_asks_for_missing_locations_and_prints_them(
 
 
 def test_can_be_cancelled(monkeypatch: pytest.MonkeyPatch) -> None:
-    def pick_points(_image: Image, _labels: Sequence[str]) -> list[tuple[float, float]]:
+    def pick_points(_image: Image, _labels: Sequence[str]) -> list[Point]:
         raise KeyboardInterrupt
 
     monkeypatch.setattr(interactive, "pick_points", pick_points)

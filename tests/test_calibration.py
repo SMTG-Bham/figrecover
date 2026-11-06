@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from figrecover import Calibration
+from figrecover import Calibration, Point
 
 
 def test_calibration_maps_reference_points_exactly() -> None:
@@ -51,7 +51,7 @@ def test_calibration_needs_three_points() -> None:
     ],
 )
 def test_calibration_needs_points_spanning_each_axis(
-    data: list[tuple[float, float]], pixels: list[tuple[float, float]], axis: str
+    data: list[Point], pixels: list[Point], axis: str
 ) -> None:
     with pytest.raises(ValueError, match=f"span the {axis}-axis"):
         Calibration.from_points(data, pixels)
