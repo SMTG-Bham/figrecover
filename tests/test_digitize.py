@@ -223,6 +223,26 @@ def test_trace_curves_matches_similar_colours() -> None:
     assert_follows(pixels, calibration, curve, atol=0.075)
 
 
+def test_find_colours_tells_close_colours_apart() -> None:
+    # Neighbouring colours of eight from viridis, 36 levels apart.
+    teal, green = (39, 127, 142), (31, 161, 135)
+    image, calibration = synthetic_plot(curves=[(teal, rising), (green, falling)])
+
+    colours = find_colours(image, 2, calibration.origin)
+    traced = trace_curves(image, [teal, green], calibration.origin)
+
+    np.testing.assert_allclose(sorted(colours), sorted([teal, green]), atol=8)
+    for pixels, function in zip(traced, [rising, falling], strict=True):
+        assert_follows(pixels, calibration, function, atol=0.075)
+
+
+def test_trace_curves_needs_a_curve_for_each_colour_given() -> None:
+    image, calibration = synthetic_plot(curves=[(BLUE, curve), (ORANGE, rising)])
+
+    with pytest.raises(ValueError, match="colours #1f77b4 and #3c82a0 both match"):
+        trace_curves(image, [BLUE, (60, 130, 160)], calibration.origin)
+
+
 def test_trace_curves_needs_a_curve_of_each_colour() -> None:
     image, calibration = synthetic_plot(curves=[(BLUE, curve)])
     with pytest.raises(ValueError, match="no curve of colour #00ff00 found"):

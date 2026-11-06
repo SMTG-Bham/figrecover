@@ -1,5 +1,6 @@
 """Find the curves in an image of a plot."""
 
+import itertools
 import os
 from collections.abc import Sequence
 
@@ -23,6 +24,8 @@ GRID_LINE_LENGTH = 120
 
 _BIN_WIDTH = 32  # colour histogram bins are this many levels wide in each channel
 _SAME_COLOUR = 48  # colours closer than this are shades of one colour
+_FINE_BIN_WIDTH = 16  # a second look at each colour, in narrower bins,
+_FINE_SAME_COLOUR = 20  # can split it into colours this far apart
 _MATCH_DISTANCE = 96  # a requested colour picks a curve colour at most this far away
 _MIN_CURVE_FRACTION = 0.75  # a curve has at least this many pixels per column
 _CONTRAST = 128  # a curve differs from the background by this much in some channel
@@ -168,11 +171,21 @@ def trace_curves(
         pixel centres, measured from the bottom-left corner and sorted by x.
 
     Raises:
-        ValueError: If no curve has one of the colours.
+        ValueError: If no curve has one of the colours, or two of them match
+            the same curve.
     """
     plot, left, top = _plot_area(image, origin)
     palette = _palette(plot)
     indices = [_match(palette, colour) for colour in colours]
+    for (first, index), (second, other) in itertools.combinations(
+        zip(colours, indices, strict=True), 2
+    ):
+        if index == other:
+            msg = (
+                f"colours #{bytes(first).hex()} and #{bytes(second).hex()} both "
+                f"match the curve of colour #{bytes(_to_colour(palette[index])).hex()}"
+            )
+            raise ValueError(msg)
     labels = _classify(plot, palette)
     height = image.shape[0]
     return [_follow(labels == index, left, top, height) for index in indices]
@@ -269,33 +282,66 @@ def _palette(plot: Image) -> npt.NDArray[np.float64]:
 def _common_colours(plot: Image) -> npt.NDArray[np.float64]:
     """Return the colours with enough pixels to span the plot, most common first.
 
-    Pixels are counted in a coarse colour histogram. Starting from the fullest
-    bin, each bin joins the colour of an earlier bin within ``_SAME_COLOUR``,
-    so a colour that straddles the bin edges is counted once. The most common
-    colour, the background, is always returned.
+    Pixels are counted in a coarse colour histogram, so that a colour blurred
+    by antialiasing or compression is counted once. Each common colour but the
+    background is then counted again from its own pixels, in narrower bins,
+    and split if that finds two or more colours with enough pixels, such as
+    neighbouring colours of a colour map. The most common colour, the
+    background, is always returned.
     """
     pixels = plot.reshape(-1, 3)
-    bins = np.ravel_multi_index((pixels // _BIN_WIDTH).T, (256 // _BIN_WIDTH,) * 3)
+    minimum = plot.shape[1] * _MIN_CURVE_FRACTION
+    colours, totals, owners = _cluster(pixels, _BIN_WIDTH, _SAME_COLOUR)
+    found: list[tuple[npt.NDArray[np.float64], int]] = []
+    for index in np.flatnonzero(totals[1:] >= minimum) + 1:
+        parts, sizes, _ = _cluster(
+            pixels[owners == index], _FINE_BIN_WIDTH, _FINE_SAME_COLOUR
+        )
+        if np.count_nonzero(sizes >= minimum) > 1:
+            found += zip(parts[sizes >= minimum], sizes[sizes >= minimum], strict=True)
+        else:
+            found.append((colours[index], totals[index]))
+    found.sort(key=lambda pair: -pair[1])
+    return np.array([colours[0], *(colour for colour, _ in found)])
+
+
+def _cluster(
+    pixels: npt.NDArray[np.uint8], width: int, same: float
+) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+    """Group pixels into colours with a histogram whose bins are ``width`` wide.
+
+    Starting from the fullest bin, each bin joins the colour of an earlier bin
+    closer than ``same``, so a colour that straddles the bin edges is counted
+    once.
+
+    Returns:
+        The colours, most pixels first; how many pixels each has; and which
+        colour each pixel joined.
+    """
+    bins = np.ravel_multi_index((pixels // width).T, (256 // width,) * 3)
     counts = np.bincount(bins)
     sums = np.column_stack([np.bincount(bins, weights=level) for level in pixels.T])
 
     full = np.argsort(-counts, kind="stable")[: np.count_nonzero(counts)]
     colours = [sums[full[0]] / counts[full[0]]]
     totals = [counts[full[0]]]
+    owner = np.zeros(len(counts), dtype=np.intp)  # the colour each bin joined
     for bin_ in full[1:]:
         colour = sums[bin_] / counts[bin_]
         distances = np.linalg.norm(np.array(colours) - colour, axis=1)
         nearest = int(np.argmin(distances))
-        if distances[nearest] < _SAME_COLOUR:
+        if distances[nearest] < same:
             totals[nearest] += counts[bin_]
+            owner[bin_] = nearest
         else:
+            owner[bin_] = len(colours)
             colours.append(colour)
             totals.append(counts[bin_])
 
     ranked = np.argsort(-np.array(totals), kind="stable")
-    minimum = plot.shape[1] * _MIN_CURVE_FRACTION
-    common = [ranked[0], *(i for i in ranked[1:] if totals[i] >= minimum)]
-    return np.array(colours)[common]
+    rank = np.empty_like(ranked)
+    rank[ranked] = np.arange(len(ranked))
+    return np.array(colours)[ranked], np.array(totals)[ranked], rank[owner[bins]]
 
 
 def _classify(plot: Image, colours: npt.NDArray[np.float64]) -> npt.NDArray[np.intp]:
