@@ -19,6 +19,9 @@ AXIS_MARGIN = 3
 FRAME_REACH = 0.5
 """Fraction of the plot area that each line of a frame around the axes spans."""
 
+FRAME_WIDTH = 8
+"""Most pixels across a line of a frame around the axes, so a filled area is not one."""
+
 GRID_LINE_LENGTH = 120
 """Shortest straight run of pixels that ``remove_grid`` treats as a line."""
 
@@ -28,7 +31,10 @@ _FINE_BIN_WIDTH = 16  # a second look at each colour, in narrower bins,
 _FINE_SAME_COLOUR = 20  # can split it into colours this far apart
 _MATCH_DISTANCE = 96  # a requested colour picks a curve colour at most this far away
 _MIN_CURVE_FRACTION = 0.75  # a curve has at least this many pixels per column
-_CONTRAST = 128  # a curve differs from the background by this much in some channel
+_CONTRAST = 64  # a curve differs from the background by this much in some channel
+_AREA_DEPTH = 4  # a colour whose pixels lie this deep inside its shapes fills areas
+_LINE_SPAN = 0.6  # straight lines across this fraction of the plot are grid lines
+_BACKGROUND_SHARE = 1 / 3  # a background has this many pixels of a fill's, or more
 _COVERAGE_COST = 0.25  # how much a pixel's distance from full coverage counts
 _MIN_COVERAGE = 0.5  # less covered pixels belong to the background
 _MIN_PIXELS = 4  # smaller specks are noise, such as where two other curves cross
@@ -121,9 +127,11 @@ def find_colours(image: Image, count: int = 1, origin: Point = (0, 0)) -> list[C
 
     The plot area is the part of the image above and right of ``origin``. Its
     common colours are those with enough pixels to span it; the most common
-    is the background. Curves are the common colours that differ from the
-    background by at least half the full range in some channel, so light grid
-    lines are not taken for curves.
+    is the background, unless it is a filled area and the colour along the top
+    edge of the plot area is the background instead. Curves are the common
+    colours that differ from the background by at least a quarter of
+    the full range in some channel, and that neither fill areas nor are drawn
+    mostly in straight lines across the plot, as grid lines are.
 
     Args:
         image: Colour image of a plot.
@@ -138,12 +146,19 @@ def find_colours(image: Image, count: int = 1, origin: Point = (0, 0)) -> list[C
     Raises:
         ValueError: If there are fewer than ``count`` curves.
     """
-    palette = _palette(_plot_area(image, origin)[0])
-    contrast = np.abs(palette[1:] - palette[0]).max(axis=1)
-    curves = palette[1:][contrast >= _CONTRAST]
+    plot = _plot_area(image, origin)[0]
+    palette = _palette(plot)
+    labels = _classify(plot, palette)
+    curves = [
+        colour
+        for index, colour in enumerate(palette[1:], start=1)
+        if np.abs(colour - palette[0]).max() >= _CONTRAST
+        and not _fills_areas(labels == index)
+        and not _draws_grid(labels == index)
+    ]
     if len(curves) < count:
         msg = f"found only {len(curves)} of {count} curves"
-        raise ValueError(msg if len(curves) else "no curve found")
+        raise ValueError(msg if curves else "no curve found")
     return [_to_colour(colour) for colour in curves[:count]]
 
 
@@ -171,8 +186,8 @@ def trace_curves(
         pixel centres, measured from the bottom-left corner and sorted by x.
 
     Raises:
-        ValueError: If no curve has one of the colours, or two of them match
-            the same curve.
+        ValueError: If no curve has one of the colours, two of them match the
+            same curve, or one fills areas.
     """
     plot, left, top = _plot_area(image, origin)
     palette = _palette(plot)
@@ -187,6 +202,10 @@ def trace_curves(
             )
             raise ValueError(msg)
     labels = _classify(plot, palette)
+    for colour, index in zip(colours, indices, strict=True):
+        if _fills_areas(labels == index):
+            msg = f"colour #{bytes(colour).hex()} fills areas rather than a curve"
+            raise ValueError(msg)
     height = image.shape[0]
     return [_follow(labels == index, left, top, height) for index in indices]
 
@@ -232,9 +251,10 @@ def _inside_frame(ink: npt.NDArray[np.bool_]) -> tuple[int, int]:
     """Find the frame closing the axes in the part of an image beyond them.
 
     The frame's top is the topmost line that runs right from the left edge,
-    next to the y-axis, across at least ``FRAME_REACH`` of the width. Its
-    right side runs down from the end of the top, as far again of the rest
-    of the height. Both are dropped with ``AXIS_MARGIN`` beyond them.
+    next to the y-axis, across at least ``FRAME_REACH`` of the width, and is
+    at most ``FRAME_WIDTH`` pixels thick. Its right side runs down from the
+    end of the top, as far again of the rest of the height. Both are dropped
+    with ``AXIS_MARGIN`` beyond them.
 
     Returns:
         The first row below the frame and the number of columns left of it,
@@ -249,6 +269,8 @@ def _inside_frame(ink: npt.NDArray[np.bool_]) -> tuple[int, int]:
     first = last = long[0]
     while last + 1 < height and runs[last + 1] >= width * FRAME_REACH:
         last += 1  # a thick line
+    if last - first >= FRAME_WIDTH:
+        return 0, width  # an area, not a line
     end = int(runs[first])
     for column in range(max(end - AXIS_MARGIN, 0), end):
         below = ink[first:, column]
@@ -261,12 +283,26 @@ def _inside_frame(ink: npt.NDArray[np.bool_]) -> tuple[int, int]:
 def _palette(plot: Image) -> npt.NDArray[np.float64]:
     """Return the background colour followed by the other common colours.
 
+    The background is the most common colour, unless that is a filled area:
+    when the colour most common along the top edge of the plot differs from it
+    by at least ``_CONTRAST``, and has at least ``_BACKGROUND_SHARE`` as many
+    pixels, the top edge's colour is the background.
+
     Antialiasing blends the edges of each curve with the background, and a
     blend can be common enough to count as a colour of its own. It is dropped
     if most of its pixels touch those of a colour that differs more from the
     background.
     """
     colours = _common_colours(plot)
+    pixels = plot.reshape(-1, 3).astype(np.float64)
+    nearest = np.linalg.norm(pixels[:, np.newaxis] - colours, axis=2).argmin(axis=1)
+    counts = np.bincount(nearest, minlength=len(colours))
+    edge = int(np.bincount(nearest[: plot.shape[1]]).argmax())  # the top row
+    if (
+        np.abs(colours[edge] - colours[0]).max() >= _CONTRAST
+        and counts[edge] >= counts[0] * _BACKGROUND_SHARE
+    ):
+        colours = colours[[edge, *(i for i in range(len(colours)) if i != edge)]]
     labels = _classify(plot, colours)
     strength = np.linalg.norm(colours - colours[0], axis=1)
     keep = [0]
@@ -277,6 +313,34 @@ def _palette(plot: Image) -> npt.NDArray[np.float64]:
         if 2 * np.count_nonzero(own & (touching > 0)) < np.count_nonzero(own):
             keep.append(index)
     return colours[keep]
+
+
+def _fills_areas(in_colour: npt.NDArray[np.bool_]) -> bool:
+    """Return whether a colour's pixels fill areas rather than draw lines.
+
+    Most pixels of a line lie close to its edges, and most of an area's lie
+    more than ``_AREA_DEPTH`` pixels inside it.
+    """
+    depth = cv2.distanceTransform(in_colour.astype(np.uint8), cv2.DIST_L2, 3)
+    return bool(np.median(depth[in_colour]) > _AREA_DEPTH)
+
+
+def _draws_grid(in_colour: npt.NDArray[np.bool_]) -> bool:
+    """Return whether most of a colour's pixels lie on lines across the plot.
+
+    The lines are horizontal or vertical, and run across at least
+    ``_LINE_SPAN`` of the plot area, as grid lines do.
+    """
+    height, width = in_colour.shape
+    mask = in_colour.astype(np.uint8)
+    lines = [
+        cv2.morphologyEx(
+            mask, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, shape)
+        )
+        for shape in ((round(width * _LINE_SPAN), 1), (1, round(height * _LINE_SPAN)))
+    ]
+    on_lines = np.count_nonzero(cv2.bitwise_or(*lines))
+    return bool(2 * on_lines > np.count_nonzero(mask))
 
 
 def _common_colours(plot: Image) -> npt.NDArray[np.float64]:
