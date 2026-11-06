@@ -172,6 +172,57 @@ def test_reads_minus_signs(monkeypatch: pytest.MonkeyPatch) -> None:
     assert [value for _, value in found.y_ticks] == [-1, 0, 1]
 
 
+def test_reads_separators_percentages_and_exponents(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    labels = [
+        *x_labels(["0", "1,000", "2,000", "3,000"]),
+        *y_labels(["0%", "50%", "100%"]),
+    ]
+
+    found = read(monkeypatch, labels)
+
+    assert [value for _, value in found.x_ticks] == [0, 1000, 2000, 3000]
+    assert [value for _, value in found.y_ticks] == [0, 50, 100]
+
+
+def test_reads_scientific_notation(monkeypatch: pytest.MonkeyPatch) -> None:
+    # R labels a logarithmic axis 1e+01, 1e+02, ...
+    labels = [
+        *x_labels(["1e+01", "1e+02", "1e+03"]),
+        *y_labels(["0.0E0", "2.5E-3", "5.0e-3"]),
+    ]
+
+    found = read(monkeypatch, labels)
+
+    assert [value for _, value in found.x_ticks] == [10, 100, 1000]
+    assert found.calibration.x_log
+    assert [value for _, value in found.y_ticks] == [0, 0.0025, 0.005]
+
+
+def test_ignores_tick_marks_read_as_dashes(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Without axis lines, OCR can read the tick above an x-axis label as a
+    # minus sign, making the label's box taller, and the tick after a y-axis
+    # label as a dash.
+    ticked = [_Text(f"-{i}", 70 + 80 * i, 38, 90 + 80 * i, 62) for i in range(3)]
+    labels = [*ticked, *y_labels(["0 -", "1 -", "2 -"])]
+
+    found = read(monkeypatch, labels, lines=False)
+
+    assert [value for _, value in found.x_ticks] == [0, 1, 2]
+    assert [value for _, value in found.y_ticks] == [0, 1, 2]
+
+
+def test_keeps_minus_signs_of_labels_of_the_usual_height(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    labels = [*x_labels(["-2", "-1", "0"]), *y_labels(["0", "1", "2"])]
+
+    found = read(monkeypatch, labels)
+
+    assert [value for _, value in found.x_ticks] == [-2, -1, 0]
+
+
 def test_drops_misread_tick_labels(monkeypatch: pytest.MonkeyPatch) -> None:
     # The third x label, 2, was misread as 1; the third y label, 1, as 10.
     labels = [

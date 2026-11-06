@@ -21,7 +21,12 @@ MIN_TICKS = 3
 _TICK_TOLERANCE = 0.1  # a tick label this fraction of the tick spacing off is misread
 _AXIS_REACH = 3  # an axis line may lie this many pixels beyond the first tick
 _RAISED = 0.25  # a superscript sits this fraction of its label's height up or more
-_NUMBER = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)")
+_RAISED_TICK = 1.4  # a label this many times taller than usual has a tick on top
+_NUMBER = re.compile(  # 1, -2.5, 1,000, 2.5e-3 or 10%
+    r"([+-]?(?:\d{1,3}(?:,\d{3})+(?:\.\d*)?|\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)%?",
+    re.IGNORECASE,
+)
+_TRAILING_DASH = re.compile(r"(.*\d%?)-+")  # a tick mark after a y-axis label
 _POWER = re.compile(  # 10^2, 10^{2}, 10-2 or 2x10^2: a power of ten, as OCR reads it
     r"(?:(\d+(?:\.\d*)?|\.\d+)[x\u00d7])?10(?:\^\{?|(?=[+-]))([+-]?\d+)\}?"
 )
@@ -134,16 +139,18 @@ def read_axes(image: Image) -> Axes:
     numbers = [
         text
         for text in texts
-        if _NUMBER.fullmatch(text.plain) or _POWER.fullmatch(text.plain)
+        if _NUMBER.fullmatch(_reading(text)) or _POWER.fullmatch(_reading(text))
     ]
     x_row = _lowest_row(numbers)
-    x_labels, x_values, x_log = _in_line(x_row, lambda t: t.x, "x", ink)
-    above = [text for text in numbers if text.y > max(t.top for t in x_labels)]
+    above = [text for text in numbers if text.y > max(t.top for t in x_row)]
     y_column = _leftmost_column(above)
-    y_labels, y_values, y_log = _in_line(y_column, lambda t: t.y, "y", ink)
+    # Tick marks run beside the y-axis labels, so they keep the usual height.
+    height = float(np.median([text.top - text.bottom for text in y_column]))
+    x_labels, x_values, x_log = _in_line(x_row, lambda t: t.x, "x", ink, height)
+    y_labels, y_values, y_log = _in_line(y_column, lambda t: t.y, "y", ink, height)
     origin = _cross_axes(ink > 0, x_labels, y_labels)
 
-    words = [text for text in texts if text not in numbers]
+    words = [text for text in texts if text not in {*x_labels, *y_labels}]
     x_scale, y_scale = _scales(words, origin, y_labels)
     words = [word for word in words if not _SCALE.fullmatch(word.plain)]
     x_ticks = tuple(
@@ -237,12 +244,14 @@ def _in_line(
     position: Callable[[_Text], float],
     name: str,
     ink: npt.NDArray[np.uint8],
+    height: float,
 ) -> tuple[list[_Text], list[float], bool]:
     """Return the most tick labels whose values are in line with their positions.
 
     The values are taken on a linear scale and on a logarithmic one, and the
     scale on which more labels are in line wins, the linear one in a tie. The
-    ink shows which labels have superscripts.
+    ink shows which labels have superscripts, and ``height`` is the usual
+    height of a label.
 
     Returns:
         The labels in line, by position, their values, and whether the scale
@@ -250,7 +259,7 @@ def _in_line(
     """
     labels = sorted(labels, key=position)
     pixels = np.array([position(label) for label in labels])
-    values = _values(labels, ink)
+    values = _values(labels, ink, height)
     tolerance = _TICK_TOLERANCE * np.median(np.diff(pixels))
     linear = _most_in_line(pixels, values, tolerance)
     exponents = np.log10(values, out=np.full_like(values, np.nan), where=values > 0)
@@ -267,7 +276,7 @@ def _in_line(
 
 
 def _values(
-    labels: Sequence[_Text], ink: npt.NDArray[np.uint8]
+    labels: Sequence[_Text], ink: npt.NDArray[np.uint8], height: float
 ) -> npt.NDArray[np.float64]:
     """Return the values of tick labels, which are numbers or powers of ten.
 
@@ -275,20 +284,36 @@ def _values(
     power of ten, or reads as 10 followed by digits of which the last is drawn
     raised, all those that read as 10 followed by digits are powers of ten.
     """
+    readings = [_reading(label, height) for label in labels]
     powers = any(
-        _POWER.fullmatch(label.plain)
-        or (_RUN_TOGETHER.fullmatch(label.plain) and _raised(ink, label))
-        for label in labels
+        _POWER.fullmatch(reading)
+        or (_RUN_TOGETHER.fullmatch(reading) and _raised(ink, label))
+        for label, reading in zip(labels, readings, strict=True)
     )
     values = []
-    for label in labels:
-        if powers and (match := _RUN_TOGETHER.fullmatch(label.plain)):
+    for reading in readings:
+        if powers and (match := _RUN_TOGETHER.fullmatch(reading)):
             values.append(10.0 ** int(match[1]))
-        elif match := _POWER.fullmatch(label.plain):
+        elif match := _POWER.fullmatch(reading):
             values.append(float(match[1] or 1) * 10.0 ** int(match[2]))
-        else:
-            values.append(float(label.plain))
+        else:  # a number, less any % and thousands separators
+            values.append(float(_NUMBER.sub(r"\1", reading).replace(",", "")))
     return np.array(values)
+
+
+def _reading(label: _Text, height: float = math.inf) -> str:
+    """Return a label's plain text without dashes that are tick marks.
+
+    Where no axis line joins them, OCR can read a tick mark as a dash: after
+    a y-axis label, or before an x-axis label, whose box the tick then makes
+    ``_RAISED_TICK`` times taller than the usual ``height`` or more.
+    """
+    text = label.plain
+    if match := _TRAILING_DASH.fullmatch(text):
+        text = match[1]
+    if text.startswith("-") and label.top - label.bottom >= _RAISED_TICK * height:
+        text = text[1:]
+    return text
 
 
 def _raised(ink: npt.NDArray[np.uint8], label: _Text) -> bool:
