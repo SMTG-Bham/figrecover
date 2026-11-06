@@ -16,11 +16,14 @@ The first release.
   calibrates each image from its tick labels, applying scale factors such as
   `1e-5`, traces from where the axis lines cross, and names the CSV columns
   after the axis titles.
+- Logarithmic axes work too. figrecover finds them itself when it reads the
+  axes, including tick labels written as powers of ten, such as 10⁻², even
+  where OCR misses the superscripts; and `--log` names them for `-p`.
 - `--preview` saves a faded copy of the image with each recovered curve drawn
   in its colour, and `--remove-grid` paints over grid lines before tracing.
 - Transparent pixels are treated as white, and plots with a dark background
   work as well as light ones.
-- A typed Python API: `Calibration`, `load_image`, `remove_grid`,
-  `find_colours`, `trace_curves`, `trace_curve` and, with the `ocr` extra,
-  `read_axes`.
+- A typed Python API: `Calibration`, with linear or logarithmic axes,
+  `load_image`, `remove_grid`, `find_colours`, `trace_curves`, `trace_curve`
+  and, with the `ocr` extra, `read_axes`.
 - Requires Python 3.14 on Linux, with NumPy and OpenCV.

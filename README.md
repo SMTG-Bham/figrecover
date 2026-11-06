@@ -50,7 +50,8 @@ the origin, a labelled tick on the x-axis and one on the y-axis. Give their
 data coordinates with `-p` and their pixel positions with `-l`, in the same
 order. Pixel positions are measured from the bottom-left corner of the image.
 With the `ocr` extra, you can leave out both and let figrecover read the tick
-labels instead; see [Reading the axes](#reading-the-axes).
+labels instead; see [Reading the axes](#reading-the-axes). For logarithmic
+axes, see [Logarithmic axes](#logarithmic-axes).
 
 If you leave out `-l`, figrecover opens the image and asks you to click on each
 reference point in turn (press q to cancel). It then prints the matching `-l`
@@ -89,6 +90,7 @@ in blue, so you can check the result at a glance:
 | --- | --- |
 | `-p`, `--point X,Y` | Data coordinates of a reference point. Repeat for at least three. Default: [read the axes](#reading-the-axes). |
 | `-l`, `--location X,Y` | Pixel position of each reference point, in the same order. Default: click on them. |
+| `--log AXES` | The axes of the `-p` reference points that are logarithmic: `x`, `y` or `xy`. Default: neither. |
 | `-n`, `--series N` | Trace the N most common curve colours, and print the matching `-c` options. Default: 1. |
 | `-c`, `--colour RRGGBB` | Hexadecimal colour of a curve to trace, such as `1f77b4`. Repeat for several curves. |
 | `-o`, `--output FILE` | CSV file to write. Default: standard output. |
@@ -181,8 +183,8 @@ work as before.
 - The x-axis tick labels are the lowest row of three or more numbers, and the
   y-axis tick labels the leftmost column of three or more numbers above them.
   Labels whose values are out of line with the rest, such as misread ones, are
-  dropped. An axis with fewer than three labels in line cannot be read, so
-  neither can a logarithmic axis.
+  dropped. An axis with fewer than three labels in line cannot be read.
+  Logarithmic axes are read too; see [Logarithmic axes](#logarithmic-axes).
 - A scale factor printed beside an axis, such as `1e-5` or `×10³`, multiplies
   its tick values. An axis offset, such as `+1e3`, cannot be read.
 - figrecover traces the curves from the axis lines, not from the first ticks,
@@ -193,6 +195,43 @@ work as before.
   letter are easily misread, such as `x` as `X`, or missed.
 
 When a plot's labels cannot be read, give `-p` as before.
+
+### Logarithmic axes
+
+When figrecover reads the axes, it finds logarithmic ones itself: an axis is
+logarithmic if more of its tick labels fall in line on a logarithmic scale
+than on a linear one. It says so as it prints the ticks:
+
+```bash
+figrecover examples/logarithmic.png --preview logarithmic.preview.png
+```
+
+```text
+figrecover: logarithmic x-axis "Frequency (Hz)" with ticks at 1, 10, 100, 1000, 10000
+figrecover: logarithmic y-axis "Power (mW)" with ticks at 0.1, 1, 10, 100, 1000
+```
+
+![A low-pass filter's response recovered from a plot with logarithmic axes](examples/logarithmic.preview.png)
+
+The tick labels can be decimals, such as `0.01` and `1000`, or powers of ten
+with superscript exponents, such as 10⁻² and 2×10³, as matplotlib draws them.
+OCR often misses a superscript, reading 10² as `102`, so figrecover checks
+how such a label is drawn: if its last digit sits raised above the others,
+it is an exponent. Once one label on an axis is a power of ten, figrecover
+reads all those that start with 10 as powers too, so an axis whose labels
+all read as `100`, `101`, `102` is still logarithmic when they are drawn as
+10⁰, 10¹, 10². Labels really drawn as 100, 101, 102 stay linear. As on a
+linear axis, three labelled ticks are needed, so an axis labelled only at 10⁰
+and 10¹ cannot be read.
+
+With `-p`, name the logarithmic axes with `--log x`, `--log y` or `--log xy`.
+Reference points on a logarithmic axis must be positive, so take the lowest
+labelled tick as the origin, rather than zero:
+
+```bash
+figrecover examples/logarithmic.png \
+    -p 1,0.1 -p 1e4,0.1 -p 1,1e3 -l 93,66 -l 610,66 -l 93,380 --log xy
+```
 
 ### Python
 
@@ -220,6 +259,9 @@ data = axes.calibration.to_data(trace_curve(image, axes.calibration.origin))
 print(axes.x_title, axes.y_title)  # Time (s) Voltage (mV)
 ```
 
+For logarithmic axes, pass `x_log=True` or `y_log=True` to
+`Calibration.from_points`; `read_axes` sets them itself.
+
 For several curves, `find_colours` returns the colours of the most common
 curves as `(red, green, blue)` tuples, and `trace_curves` traces one curve per
 colour:
@@ -240,8 +282,8 @@ lines first, if needed.
 1. The image is read in colour and stretched to the full 0–255 range.
    Transparent pixels become white.
 2. A least-squares fit through the reference points gives a linear map from
-   pixels to data for each axis. The leftmost and lowest reference points mark
-   the axes.
+   pixels to data for each axis, or to the logarithm of the data for a
+   logarithmic axis. The leftmost and lowest reference points mark the axes.
 3. Pixels left of and below the axes are ignored, which drops the axes, their
    ticks and labels.
 4. A coarse colour histogram gives the common colours: those with enough pixels
@@ -270,7 +312,7 @@ three pixels at the steepest point.
   dotted lines may not be found.
 - Where curves cross, the one drawn underneath loses a few pixels, and its
   points there can be a pixel or two out.
-- The axes must be horizontal and vertical, with linear scales.
+- The axes must be horizontal and vertical, with linear or logarithmic scales.
 - Each column gives one point, so steep peaks come out slightly lower, and
   vertical lines in the plot area become single points.
 - `--remove-grid` also removes straight horizontal or vertical stretches of
@@ -334,6 +376,7 @@ protection.
 ├── .github/                 # CI, PyPI release and Dependabot
 ├── examples/                # example plots, their previews and the script that draws them
 ├── src/figrecover/
+│   ├── axes.py              # reading the axes from their tick labels
 │   ├── calibration.py       # pixel-to-data mapping
 │   ├── digitize.py          # image loading, grid removal, curve colours and tracing
 │   ├── interactive.py       # window for clicking on reference points
