@@ -314,6 +314,37 @@ def test_trace_curves_refuses_filled_areas() -> None:
         trace_curves(image, [BLUE], calibration.origin)
 
 
+def test_trace_curve_follows_both_sides_of_a_loop() -> None:
+    image, calibration = synthetic_plot(curves=[])
+    # An ellipse centred on (5, 2), 3 wide and 1 tall in data units.
+    centre = (
+        ORIGIN[0] + 5 * PIXELS_PER_UNIT[0],
+        to_row(ORIGIN[1] + 2 * PIXELS_PER_UNIT[1]),
+    )
+    axes = (3 * PIXELS_PER_UNIT[0], 1 * PIXELS_PER_UNIT[1])
+    cv2.ellipse(image, centre, axes, 0, 0, 360, BLACK, 2, cv2.LINE_AA)
+
+    data = calibration.to_data(trace_curve(image, calibration.origin))
+
+    middle = data[np.abs(data[:, 0] - 5) < 2]
+    np.testing.assert_allclose(
+        np.abs(middle[:, 1] - 2), np.sqrt(1 - ((middle[:, 0] - 5) / 3) ** 2), atol=0.05
+    )
+    assert np.count_nonzero(middle[:, 1] > 2) == np.count_nonzero(middle[:, 1] < 2)
+
+
+def test_trace_curve_ignores_short_marks_beside_a_curve() -> None:
+    image, calibration = synthetic_plot()
+    xs = np.arange(1.0, 10.0)
+    heights = ORIGIN[1] + (curve(xs) + 0.6) * PIXELS_PER_UNIT[1]
+    for x, height in zip(xs, heights, strict=True):  # like caps of error bars
+        column = round(ORIGIN[0] + x * PIXELS_PER_UNIT[0])
+        row = to_row(float(height))
+        cv2.line(image, (column - 4, row), (column + 4, row), BLACK, 2)
+
+    assert_traces_curve(image, calibration)
+
+
 def test_trace_curves_ignores_specks() -> None:
     image, calibration = synthetic_plot(curves=[(BLUE, curve)], x_range=(0.5, 6))
     for column in range(300, WIDTH, 10):  # beyond the curve

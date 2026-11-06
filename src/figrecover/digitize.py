@@ -38,6 +38,8 @@ _BACKGROUND_SHARE = 1 / 3  # a background has this many pixels of a fill's, or m
 _COVERAGE_COST = 0.25  # how much a pixel's distance from full coverage counts
 _MIN_COVERAGE = 0.5  # less covered pixels belong to the background
 _MIN_PIXELS = 4  # smaller specks are noise, such as where two other curves cross
+_RUN_GAP = 6  # a curve's pixels in a column this far apart or less are one run
+_MIN_BRANCH = 0.05  # branches across less of the plot's width than this are minor
 
 
 def load_image(path: str | os.PathLike[str]) -> Image:
@@ -172,8 +174,9 @@ def trace_curves(
     axes, their ticks and labels. Each pixel belongs to the common colour
     that it best matches when blended with the background, so the antialiased
     edges of a curve count towards it, and specks of fewer than four pixels
-    are ignored. Each image column that a curve crosses gives one point, at
-    the median height of the curve's pixels there.
+    are ignored. Each image column gives one point for each branch of a curve
+    that crosses it, at the median height of the branch's pixels there, so
+    both sides of a loop are traced. See ``_follow`` for what a branch is.
 
     Args:
         image: Colour image of a plot.
@@ -183,7 +186,8 @@ def trace_curves(
 
     Returns:
         One ``(n, 2)`` array per colour, of the pixel ``(x, y)`` coordinates of
-        pixel centres, measured from the bottom-left corner and sorted by x.
+        pixel centres, measured from the bottom-left corner and sorted by x,
+        then y.
 
     Raises:
         ValueError: If no curve has one of the colours, two of them match the
@@ -450,7 +454,15 @@ def _match(palette: npt.NDArray[np.float64], colour: Colour) -> int:
 def _follow(
     in_colour: npt.NDArray[np.bool_], left: int, top: int, height: int
 ) -> npt.NDArray[np.float64]:
-    """Return the median height of a curve's pixels in each column it crosses.
+    """Return a point at the middle of each branch of a curve in each column.
+
+    In each column, the curve's pixels form runs, split by gaps of more than
+    ``_RUN_GAP`` pixels. Runs in neighbouring columns that overlap, one to
+    one, belong to one branch. A column gives a point at the median height
+    of each of its runs whose branch spans at least ``_MIN_BRANCH`` of the
+    width, so both sides of a loop give points, while short pieces such as
+    the caps of error bars are ignored. A column with no such run, as where
+    branches meet, gives one point at the median height of all its pixels.
 
     The curve's pixels are in a part of an image ``height`` pixels tall, from
     column ``left`` and row ``top``.
@@ -460,11 +472,59 @@ def _follow(
     areas[0] = 0  # the pixels outside the curve
     in_curve = (areas >= _MIN_PIXELS)[specks]
 
-    columns, rows = np.nonzero(in_curve.T)  # sorted by column
-    xs, starts = np.unique(columns, return_index=True)
-    ys = [np.median(group) for group in np.split(rows, starts)[1:]]
-    # The centre of the pixel in column c and row r is at (c + 0.5, height - r - 0.5).
-    return np.column_stack((xs + left + 0.5, height - top - np.array(ys) - 0.5))
+    columns = np.flatnonzero(in_curve.any(axis=0))
+    runs = [_runs(np.flatnonzero(in_curve[:, column])) for column in columns]
+    branches = _branches(columns, runs)
+    lengths = np.bincount(np.concatenate(branches))
+    minimum = in_curve.shape[1] * _MIN_BRANCH
+
+    points: list[tuple[float, float]] = []
+    for column, column_runs, column_branches in zip(
+        columns, runs, branches, strict=True
+    ):
+        major = [
+            run
+            for run, branch in zip(column_runs, column_branches, strict=True)
+            if lengths[branch] >= minimum
+        ]
+        # The centre of the pixel in column c and row r is at
+        # (c + 0.5, height - r - 0.5).
+        points.extend(
+            (column + left + 0.5, height - top - float(np.median(rows)) - 0.5)
+            for rows in major or [np.concatenate(column_runs)]
+        )
+    data = np.array(points, dtype=np.float64)
+    return data[np.lexsort((data[:, 1], data[:, 0]))]
+
+
+def _runs(rows: npt.NDArray[np.intp]) -> list[npt.NDArray[np.intp]]:
+    """Split the sorted rows of a column into runs with gaps of up to ``_RUN_GAP``."""
+    return np.split(rows, np.flatnonzero(np.diff(rows) > _RUN_GAP + 1) + 1)
+
+
+def _branches(
+    columns: npt.NDArray[np.intp], runs: Sequence[Sequence[npt.NDArray[np.intp]]]
+) -> list[npt.NDArray[np.intp]]:
+    """Number the branch of each run, left to right.
+
+    A run continues the branch of a run in the column before it if each
+    overlaps the other, touching corners included, and nothing else there.
+    """
+    branches = [np.arange(len(runs[0]))]
+    count = len(runs[0])
+    for index in range(1, len(columns)):
+        before, now = runs[index - 1], runs[index]
+        touching = np.array(
+            [[r[0] <= s[-1] + 1 and s[0] <= r[-1] + 1 for s in now] for r in before]
+        ) & (columns[index] - columns[index - 1] == 1)
+        numbers = np.arange(count, count + len(now))
+        for j in range(len(now)):
+            (partners,) = np.nonzero(touching[:, j])
+            if len(partners) == 1 and np.count_nonzero(touching[partners[0]]) == 1:
+                numbers[j] = branches[-1][partners[0]]
+        branches.append(numbers)
+        count += len(now)
+    return branches
 
 
 def _to_colour(levels: npt.NDArray[np.float64]) -> Colour:
