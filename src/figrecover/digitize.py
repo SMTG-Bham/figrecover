@@ -77,10 +77,7 @@ def remove_grid(image: Image) -> Image:
     Returns:
         A copy of the image with the lines painted in the background colour.
     """
-    grey = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-    _, ink = cv2.threshold(grey, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)
-    if np.count_nonzero(ink) > ink.size / 2:  # a dark background, so light ink
-        ink = cv2.bitwise_not(ink)
+    ink = ink_mask(image)
     horizontal, vertical = (
         cv2.morphologyEx(
             ink, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, shape)
@@ -92,6 +89,25 @@ def remove_grid(image: Image) -> Image:
     cleaned = image.copy()
     cleaned[lines > 0] = np.median(image, axis=(0, 1))
     return cleaned
+
+
+def ink_mask(image: Image) -> npt.NDArray[np.uint8]:
+    """Find the pixels that are drawn on, such as lines and text.
+
+    Pixels are split into light and dark ones by Otsu's method, and the less
+    common of the two is taken to be ink, so a dark background works too.
+
+    Args:
+        image: Colour image of a plot.
+
+    Returns:
+        A ``(height, width)`` array, 255 at ink and 0 at the background.
+    """
+    grey = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+    _, ink = cv2.threshold(grey, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)
+    if np.count_nonzero(ink) > ink.size / 2:  # a dark background, so light ink
+        ink = cv2.bitwise_not(ink)
+    return np.asarray(ink, dtype=np.uint8)
 
 
 def find_colours(image: Image, count: int = 1, origin: Point = (0, 0)) -> list[Colour]:

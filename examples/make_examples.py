@@ -30,6 +30,11 @@ def damped(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
     return 1.2 + np.exp(-x / 4) * np.cos(2 * x)
 
 
+def ringing(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return a damped oscillation about zero."""
+    return np.exp(-x / 4) * np.cos(2 * x)
+
+
 def decay(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
     """Return an exponential decay."""
     return 2.5 * np.exp(-x / 3)
@@ -50,13 +55,26 @@ def trend(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
     return 0.4 + 0.2 * x
 
 
-def draw(name: str, curves: dict[str, Curve], ylim: float, *, grid: bool) -> None:
-    """Draw curves, keyed by colour, over x from 0 to 10, and print the points."""
+def draw(
+    name: str,
+    curves: dict[str, Curve],
+    ylim: float | None,
+    *,
+    grid: bool,
+    titles: tuple[str, str] = ("x", "y"),
+) -> None:
+    """Draw curves, keyed by colour, over x from 0 to 10, and print the points.
+
+    Without ylim, matplotlib leaves a margin around the curves, so the axes do
+    not start at a labelled tick.
+    """
     figure, axes = plt.subplots(figsize=(6.4, 4), dpi=100)
     x = np.linspace(0, 10, 2000)
     for colour, curve in curves.items():
         axes.plot(x, curve(x), color=colour, linewidth=1.5)
-    axes.set(xlim=(0, 10), ylim=(0, ylim), xlabel="x", ylabel="y")
+    axes.set(xlabel=titles[0], ylabel=titles[1])
+    if ylim is not None:
+        axes.set(xlim=(0, 10), ylim=(0, ylim))
     if grid:
         axes.grid(color="0.25", linewidth=0.8)
     else:
@@ -73,3 +91,5 @@ draw("spectrum", {"black": spectrum}, 3, grid=False)
 draw("grid", {"black": damped}, 2.5, grid=True)
 series = {"tab:blue": decay, "tab:orange": growth, "tab:green": wave, "black": trend}
 draw("series", series, 3, grid=False)
+titles = ("Time (s)", "Voltage (mV)")
+draw("labelled", {"black": ringing}, None, grid=False, titles=titles)

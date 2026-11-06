@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from figrecover import Calibration, Point
+from figrecover import Calibration, Point, Tick
 
 
 def test_calibration_maps_reference_points_exactly() -> None:
@@ -55,3 +55,28 @@ def test_calibration_needs_points_spanning_each_axis(
 ) -> None:
     with pytest.raises(ValueError, match=f"span the {axis}-axis"):
         Calibration.from_points(data, pixels)
+
+
+def test_calibration_fits_ticks_on_each_axis() -> None:
+    x_ticks = [(80.0, 0.0), (179.0, 2.0), (278.0, 4.0)]
+    y_ticks = [(44.0, 0.0), (147.0, 1.0)]
+    calibration = Calibration.from_ticks(x_ticks, y_ticks, origin=(70, 40))
+
+    np.testing.assert_allclose(
+        calibration.to_data([(80, 44), (278, 147)]), [(0, 0), (4, 1)], atol=1e-12
+    )
+    assert calibration.origin == (70, 40)
+
+
+@pytest.mark.parametrize(
+    ("x_ticks", "y_ticks", "axis"),
+    [
+        ([], [(0, 0), (1, 1)], "x"),
+        ([(0, 0), (1, 1)], [(5, 0), (5, 1)], "y"),
+    ],
+)
+def test_calibration_needs_ticks_spanning_each_axis(
+    x_ticks: list[Tick], y_ticks: list[Tick], axis: str
+) -> None:
+    with pytest.raises(ValueError, match=f"the ticks must span the {axis}-axis"):
+        Calibration.from_ticks(x_ticks, y_ticks, origin=(0, 0))
