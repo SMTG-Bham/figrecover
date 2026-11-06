@@ -43,6 +43,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("give the reference points of the -l locations with -p")
     if 0 < len(arguments.points) < MIN_POINTS:
         parser.error(f"give at least {MIN_POINTS} reference points with -p")
+    if arguments.log and not arguments.points:
+        parser.error(
+            "--log needs -p; figrecover finds logarithmic axes itself when reading them"
+        )
 
     try:
         _digitize(arguments)
@@ -87,6 +91,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="pixel position of each reference point, in the same order, measured "
         "from the bottom-left corner (default: click on them, then reuse the "
         "printed -l options)",
+    )
+    parser.add_argument(
+        "--log",
+        choices=["x", "y", "xy"],
+        default="",
+        help="the axes of the -p reference points that are logarithmic (default: "
+        "neither)",
     )
     curves = parser.add_mutually_exclusive_group()
     curves.add_argument(
@@ -133,7 +144,12 @@ def _digitize(arguments: argparse.Namespace) -> None:
     image = load_image(arguments.image)
     if arguments.points:
         pixels = arguments.locations or _click_locations(image, arguments.points)
-        calibration = Calibration.from_points(arguments.points, pixels)
+        calibration = Calibration.from_points(
+            arguments.points,
+            pixels,
+            x_log="x" in arguments.log,
+            y_log="y" in arguments.log,
+        )
         names = ("x", "y")
     else:
         calibration, pixels, names = _read_axes(image)
@@ -166,13 +182,14 @@ def _read_axes(image: Image) -> tuple[Calibration, list[Point], tuple[str, str]]
     """
     axes = read_axes(image)
     x_origin, y_origin = axes.calibration.origin
-    for name, title, ticks in (
-        ("x", axes.x_title, axes.x_ticks),
-        ("y", axes.y_title, axes.y_ticks),
+    for name, title, ticks, log in (
+        ("x", axes.x_title, axes.x_ticks, axes.calibration.x_log),
+        ("y", axes.y_title, axes.y_ticks, axes.calibration.y_log),
     ):
         values = ", ".join(f"{value:g}" for _, value in ticks)
+        scale = "logarithmic " if log else ""
         titled = f' "{title}"' if title else ""
-        message = f"figrecover: {name}-axis{titled} with ticks at {values}"
+        message = f"figrecover: {scale}{name}-axis{titled} with ticks at {values}"
         print(message, file=sys.stderr)
     pixels = [(x, y_origin) for x, _ in axes.x_ticks]
     pixels += [(x_origin, y) for y, _ in axes.y_ticks]

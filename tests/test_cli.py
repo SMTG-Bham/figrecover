@@ -24,6 +24,7 @@ SPECTRUM = [str(EXAMPLES / "spectrum.png"), *POINTS]
 GRID = [str(EXAMPLES / "grid.png"), *POINTS]
 SERIES = [str(EXAMPLES / "series.png"), *POINTS, *LOCATIONS]
 LABELLED = str(EXAMPLES / "labelled.png")
+LOGARITHMIC = str(EXAMPLES / "logarithmic.png")
 
 
 def spectrum(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
@@ -56,6 +57,11 @@ def ringing(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
     return np.exp(-x / 4) * np.cos(2 * x)
 
 
+def lowpass(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return the curve that examples/make_examples.py draws in logarithmic.png."""
+    return 1e3 / (1 + (x / 100) ** 2)
+
+
 def trend(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
     """Return the black line that examples/make_examples.py draws in series.png."""
     return 0.4 + 0.2 * x
@@ -78,6 +84,18 @@ def assert_follows(data: npt.NDArray[np.float64], curve: Curve) -> None:
 def assert_recovers(text: str, curve: Curve, header: str = "x,y") -> None:
     """Check that CSV output follows the true curve."""
     assert_follows(read_csv(text, header), curve)
+
+
+def assert_follows_lowpass(data: npt.NDArray[np.float64]) -> None:
+    """Check that x and y columns follow lowpass on logarithmic axes, x from 1 to 10^4.
+
+    The y values must be within 0.03 decades, or 7 percent, of the true ones.
+    """
+    assert data[:, 0].min() < 1.1
+    assert data[:, 0].max() > 9000
+    np.testing.assert_allclose(
+        np.log10(data[:, 1]), np.log10(lowpass(data[:, 0])), atol=0.03
+    )
 
 
 def assert_recovers_series(text: str, curves: Sequence[Curve]) -> None:
@@ -197,6 +215,30 @@ def test_reads_the_axes_without_reference_points(
     assert np.any(np.all(image == (255, 0, 0), axis=-1))  # the ticks, in blue
 
 
+def test_reads_logarithmic_axes(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main([LOGARITHMIC]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.err == (
+        'figrecover: logarithmic x-axis "Frequency (Hz)" with ticks at '
+        "1, 10, 100, 1000, 10000\n"
+        'figrecover: logarithmic y-axis "Power (mW)" with ticks at '
+        "0.1, 1, 10, 100, 1000\n"
+    )
+    assert_follows_lowpass(read_csv(captured.out, "Frequency (Hz),Power (mW)"))
+
+
+def test_calibrates_logarithmic_axes_from_reference_points(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    points = ["-p", "1,0.1", "-p", "1e4,0.1", "-p", "1,1e3"]
+    # The pixel positions of the points that examples/make_examples.py prints.
+    locations = ["-l", "93,66", "-l", "610,66", "-l", "93,380"]
+
+    assert main([LOGARITHMIC, *points, *locations, "--log", "xy"]) == 0
+    assert_follows_lowpass(read_csv(capsys.readouterr().out))
+
+
 def test_quotes_titles_in_the_csv_header(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -270,6 +312,8 @@ def test_accepts_points_with_spaces_and_exponents(
         ([*SERIES, "-c", "#12345"], "expected a colour written as RRGGBB"),
         ([*SERIES, "-n", "2", "-c", "000000"], "not allowed with argument"),
         (["plot.png", "-l", "80,44"], "give the reference points of the -l"),
+        (["plot.png", "--log", "x"], "--log needs -p"),
+        ([*SPECTRUM, "--log", "z"], "invalid choice: 'z'"),
         ([], "required: image"),
     ],
 )
