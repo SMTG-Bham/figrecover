@@ -75,14 +75,17 @@ def synthetic_plot(
     columns = ORIGIN[0] + x * PIXELS_PER_UNIT[0]
     for colour, function in curves:
         heights = ORIGIN[1] + function(x) * PIXELS_PER_UNIT[1]
-        points = np.column_stack((columns, HEIGHT - heights)).round().astype(np.int32)
+        # OpenCV draws point (c, r) at the pixel centred on (c + 0.5, HEIGHT - r - 0.5),
+        # here to a sixteenth of a pixel.
+        points = np.column_stack((columns - 0.5, HEIGHT - heights - 0.5))
         cv2.polylines(
             image,
-            [points],
+            [(points * 16).round().astype(np.int32)],
             isClosed=False,
             color=colour,
             thickness=2,
             lineType=cv2.LINE_AA,
+            shift=4,
         )
 
     data = [(0.0, 0.0), (10.0, 0.0), (0.0, 1.0)]
@@ -183,7 +186,8 @@ def test_trace_curves_matches_similar_colours() -> None:
 
     (pixels,) = trace_curves(image, [(60, 130, 160)], calibration.origin)
 
-    assert_follows(pixels, calibration, curve)
+    # The orange line is drawn over the curve where they cross.
+    assert_follows(pixels, calibration, curve, atol=0.075)
 
 
 def test_trace_curves_needs_a_curve_of_each_colour() -> None:
@@ -198,7 +202,8 @@ def test_light_curves_can_be_traced_but_are_not_found() -> None:
     with pytest.raises(ValueError, match="found only 1 of 2 curves"):
         find_colours(image, 2, calibration.origin)
     (pixels,) = trace_curves(image, [LIGHT_BLUE], calibration.origin)
-    assert_follows(pixels, calibration, curve)
+    # The black line is drawn over the curve where they cross.
+    assert_follows(pixels, calibration, curve, atol=0.075)
 
 
 def test_trace_curves_ignores_specks() -> None:

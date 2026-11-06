@@ -58,7 +58,7 @@ def test_pick_points_returns_clicks_from_the_bottom_left(window: FakeWindow) -> 
 
     points = interactive.pick_points(IMAGE, ["0,0", "1,0", "0,1"])
 
-    assert points == [(10, 10), (150, 10), (10, 80)]
+    assert points == [(10.5, 9.5), (150.5, 9.5), (10.5, 79.5)]  # pixel centres
     assert window.destroyed
     assert window.shown[0].shape == (130, 200, 3)  # the image with a caption
 
@@ -68,7 +68,7 @@ def test_pick_points_ignores_clicks_on_the_caption(window: FakeWindow) -> None:
 
     points = interactive.pick_points(IMAGE, ["0,0"])
 
-    assert points == [(10, 10)]
+    assert points == [(10.5, 9.5)]
 
 
 def test_pick_points_stops_when_q_is_pressed(window: FakeWindow) -> None:

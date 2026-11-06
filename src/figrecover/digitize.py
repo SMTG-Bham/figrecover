@@ -161,8 +161,8 @@ def trace_curves(
             bottom-left corner.
 
     Returns:
-        One ``(n, 2)`` array per colour, of pixel ``(x, y)`` coordinates
-        measured from the bottom-left corner and sorted by x.
+        One ``(n, 2)`` array per colour, of the pixel ``(x, y)`` coordinates of
+        pixel centres, measured from the bottom-left corner and sorted by x.
 
     Raises:
         ValueError: If no curve has one of the colours.
@@ -186,8 +186,8 @@ def trace_curve(image: Image, origin: Point = (0, 0)) -> npt.NDArray[np.float64]
             bottom-left corner.
 
     Returns:
-        An ``(n, 2)`` array of pixel ``(x, y)`` coordinates, measured from the
-        bottom-left corner and sorted by x.
+        An ``(n, 2)`` array of the pixel ``(x, y)`` coordinates of pixel
+        centres, measured from the bottom-left corner and sorted by x.
 
     Raises:
         ValueError: If no curve is found.
@@ -311,7 +311,8 @@ def _follow(
     columns, rows = np.nonzero(in_curve.T)  # sorted by column
     xs, starts = np.unique(columns, return_index=True)
     ys = [np.median(group) for group in np.split(rows, starts)[1:]]
-    return np.column_stack((xs + left, height - np.array(ys)))
+    # The centre of the pixel in column c and row r is at (c + 0.5, height - r - 0.5).
+    return np.column_stack((xs + left + 0.5, height - np.array(ys) - 0.5))
 
 
 def _to_colour(levels: npt.NDArray[np.float64]) -> Colour:

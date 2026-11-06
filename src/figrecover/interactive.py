@@ -21,8 +21,8 @@ def pick_points(image: Image, labels: Sequence[str]) -> list[Point]:
         labels: A short description of each point, such as ``"0,0"``.
 
     Returns:
-        The pixel coordinates of the clicks, measured from the bottom-left
-        corner.
+        The pixel coordinates of the centres of the pixels clicked on, measured
+        from the bottom-left corner.
 
     Raises:
         KeyboardInterrupt: If the user presses q or Escape or closes the
@@ -33,7 +33,7 @@ def pick_points(image: Image, labels: Sequence[str]) -> list[Point]:
 
     def on_mouse(event: int, x: int, y: int, _flags: int, _param: object) -> None:
         if event == cv2.EVENT_LBUTTONDOWN and y < height:  # not on the caption
-            clicks.append((x, height - y))
+            clicks.append((x + 0.5, height - y - 0.5))
 
     with _window(on_mouse):
         while len(clicks) < len(labels):

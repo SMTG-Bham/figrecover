@@ -151,7 +151,8 @@ def test_fits_the_ticks(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert list(found.x_ticks) == [(80, 0), (160, 1), (240, 2), (320, 3)]
     assert list(found.y_ticks) == [(80, 0), (140, 0.5), (200, 1), (260, 1.5)]
-    assert found.calibration.origin == (60.0, 60.0)  # AXIS_LINES
+    # The centres of the pixels of the lines through AXIS_LINES.
+    assert found.calibration.origin == (60.5, 59.5)
     np.testing.assert_allclose(
         found.calibration.to_data([(80, 80), (320, 260)]),
         [(0, 0), (3, 1.5)],

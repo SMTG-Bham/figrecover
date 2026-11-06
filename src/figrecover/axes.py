@@ -352,19 +352,22 @@ def _cross_axes(
     start = math.ceil(max(label.right for label in y_labels))
     rows = slice(height - math.floor(last_y), height - math.ceil(first_y) + 1)
     columns = ink[rows, start : math.floor(first_x) + _AXIS_REACH + 1]
-    x = _first_line(columns.sum(axis=0), last_y - first_y, start, first_x)
+    x = _first_line(columns.sum(axis=0), last_y - first_y, start + 0.5, first_x)
 
     start = math.ceil(max(label.top for label in x_labels))
     rows = slice(height - math.floor(first_y) - _AXIS_REACH, height - start + 1)
     lines = ink[rows, math.ceil(first_x) : math.floor(last_x) + 1][::-1]
-    y = _first_line(lines.sum(axis=1), last_x - first_x, start, first_y)
+    y = _first_line(lines.sum(axis=1), last_x - first_x, start - 0.5, first_y)
     return x, y
 
 
 def _first_line(
-    counts: npt.NDArray[np.intp], span: float, start: int, default: float
+    counts: npt.NDArray[np.intp], span: float, start: float, default: float
 ) -> float:
-    """Return the position of the first count of at least half the span."""
+    """Return the position of the first count of at least half the span.
+
+    ``start`` is the position of the centre of the first pixel counted.
+    """
     long = np.flatnonzero(counts >= span / 2)
     return float(start + long[0]) if len(long) else default
 

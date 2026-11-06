@@ -21,7 +21,8 @@ class Calibration:
     Each axis maps linearly from pixels to data, or, if it is logarithmic, to
     the base-10 logarithm of the data. Pixel coordinates are measured from the
     bottom-left corner of the image, with x increasing to the right and y
-    increasing upwards.
+    increasing upwards, so the centre of the bottom-left pixel is at
+    (0.5, 0.5).
 
     Attributes:
         x_scale: Data units per pixel along the x-axis, or decades per pixel
