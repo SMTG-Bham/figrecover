@@ -1,5 +1,6 @@
 """Tests for reading the axes of a plot from the text in its image."""
 
+import dataclasses
 import math
 from collections.abc import Sequence
 from pathlib import Path
@@ -9,7 +10,7 @@ import numpy as np
 import pytest
 
 from figrecover import Axes, Image, axes, load_image, read_axes
-from figrecover.axes import _Text
+from figrecover.axes import _PLAIN, _read_text, _Text
 
 EXAMPLES = Path(__file__).parents[1] / "examples"
 HEIGHT, WIDTH = 300, 400
@@ -66,6 +67,26 @@ def test_reads_logarithmic_axes() -> None:
     np.testing.assert_allclose(np.log10(data), np.log10(expected), atol=0.01)
     assert found.x_title == "Frequency (Hz)"
     assert found.y_title == "Power (mW)"
+
+
+def test_reads_powers_of_ten_whose_superscripts_ocr_missed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def read_text(image: Image) -> list[_Text]:
+        """Read the text as OCR does, but with every superscript written plain."""
+        return [
+            dataclasses.replace(line, text=line.text.translate(_PLAIN))
+            for line in _read_text(image)
+        ]
+
+    monkeypatch.setattr(axes, "_read_text", read_text)
+
+    found = read_axes(load_image(EXAMPLES / "logarithmic.png"))
+
+    # The x-axis labels read as 100 to 104, so only their raised last digits
+    # show that they are powers of ten.
+    assert [value for _, value in found.x_ticks] == [1, 10, 100, 1000, 10000]
+    assert found.calibration.x_log
 
 
 @pytest.mark.parametrize("name", ["labelled", "spectrum"])
@@ -220,6 +241,47 @@ def test_reads_numbers_like_102_without_powers_of_ten(
     assert [value for _, value in found.y_ticks] == [1, 10, 100]
     assert not found.calibration.x_log
     assert found.calibration.y_log
+
+
+def write(image: Image, x: float, y: float, content: str, superscript: str) -> _Text:
+    """Write text centred on a pixel position, then a smaller, raised superscript.
+
+    Returns:
+        The text as OCR reads it if it misses the superscript, and its box.
+    """
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    (width, height), _ = cv2.getTextSize(content, font, 0.5, 1)
+    left, baseline = round(x - width / 2), HEIGHT - round(y - height / 2)
+    cv2.putText(image, content, (left, baseline), font, 0.5, (0, 0, 0), 1)
+    above = (left + width, baseline - height // 2)
+    cv2.putText(image, superscript, above, font, 0.35, (0, 0, 0), 1)
+    return _Text(
+        content + superscript, x - width / 2 - 2, y - 10, x + width / 2 + 10, y + 10
+    )
+
+
+@pytest.mark.parametrize(
+    ("raised", "values", "log"),
+    [(True, [1, 10, 100], True), (False, [100, 101, 102], False)],
+)
+def test_reads_raised_last_digits_as_exponents(
+    monkeypatch: pytest.MonkeyPatch, raised: bool, values: list[float], log: bool
+) -> None:
+    # OCR reads 10 to the 0, 1 and 2 as 100, 101 and 102, like the numbers.
+    image = plot()
+    labels = []
+    for i in range(3):
+        content, superscript = ("10", f"{i}") if raised else (f"10{i}", "")
+        labels.append(write(image, 80 + 80 * i, 45, content, superscript))
+    monkeypatch.setattr(
+        axes, "_read_text", lambda _image: [*labels, *y_labels(["0", "1", "2"])]
+    )
+
+    found = read_axes(image)
+
+    assert [label.text for label in labels] == ["100", "101", "102"]
+    assert [value for _, value in found.x_ticks] == values
+    assert found.calibration.x_log is log
 
 
 def test_needs_y_axis_tick_labels(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -20,6 +20,7 @@ MIN_TICKS = 3
 
 _TICK_TOLERANCE = 0.1  # a tick label this fraction of the tick spacing off is misread
 _AXIS_REACH = 3  # an axis line may lie this many pixels beyond the first tick
+_RAISED = 0.25  # a superscript sits this fraction of its label's height up or more
 _NUMBER = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)")
 _POWER = re.compile(  # 10^2, 10^{2}, 10-2 or 2x10^2: a power of ten, as OCR reads it
     r"(?:(\d+(?:\.\d*)?|\.\d+)[x\u00d7])?10(?:\^\{?|(?=[+-]))([+-]?\d+)\}?"
@@ -104,8 +105,9 @@ def read_axes(image: Image) -> Axes:
 
     Numbers may be written as powers of ten, such as 10^2 or 2x10^3 with
     superscript exponents. OCR often misses superscripts, reading 10^2 as 102,
-    so if any label on an axis is a power of ten, so are those that read as 10
-    followed by digits.
+    so a label that reads as 10 followed by digits is a power of ten if its
+    last digit is drawn raised, or if any other label on its axis is a power
+    of ten.
     An axis is logarithmic if more of its labels fall in line on a logarithmic
     scale than on a linear one.
 
@@ -127,15 +129,18 @@ def read_axes(image: Image) -> Axes:
             to add to its tick values.
     """
     texts = _read_text(image)
+    ink = ink_mask(image)
     numbers = [
         text
         for text in texts
         if _NUMBER.fullmatch(text.plain) or _POWER.fullmatch(text.plain)
     ]
-    x_labels, x_values, x_log = _in_line(_lowest_row(numbers), lambda t: t.x, "x")
+    x_row = _lowest_row(numbers)
+    x_labels, x_values, x_log = _in_line(x_row, lambda t: t.x, "x", ink)
     above = [text for text in numbers if text.y > max(t.top for t in x_labels)]
-    y_labels, y_values, y_log = _in_line(_leftmost_column(above), lambda t: t.y, "y")
-    origin = _cross_axes(image, x_labels, y_labels)
+    y_column = _leftmost_column(above)
+    y_labels, y_values, y_log = _in_line(y_column, lambda t: t.y, "y", ink)
+    origin = _cross_axes(ink > 0, x_labels, y_labels)
 
     words = [text for text in texts if text not in numbers]
     x_scale, y_scale = _scales(words, origin)
@@ -227,12 +232,16 @@ def _groups(texts: Sequence[_Text], key: Callable[[_Text], float]) -> list[list[
 
 
 def _in_line(
-    labels: Sequence[_Text], position: Callable[[_Text], float], name: str
+    labels: Sequence[_Text],
+    position: Callable[[_Text], float],
+    name: str,
+    ink: npt.NDArray[np.uint8],
 ) -> tuple[list[_Text], list[float], bool]:
     """Return the most tick labels whose values are in line with their positions.
 
     The values are taken on a linear scale and on a logarithmic one, and the
-    scale on which more labels are in line wins, the linear one in a tie.
+    scale on which more labels are in line wins, the linear one in a tie. The
+    ink shows which labels have superscripts.
 
     Returns:
         The labels in line, by position, their values, and whether the scale
@@ -240,7 +249,7 @@ def _in_line(
     """
     labels = sorted(labels, key=position)
     pixels = np.array([position(label) for label in labels])
-    values = _values(labels)
+    values = _values(labels, ink)
     tolerance = _TICK_TOLERANCE * np.median(np.diff(pixels))
     linear = _most_in_line(pixels, values, tolerance)
     exponents = np.log10(values, out=np.full_like(values, np.nan), where=values > 0)
@@ -256,13 +265,20 @@ def _in_line(
     return list(itertools.compress(labels, best)), values[best].tolist(), log
 
 
-def _values(labels: Sequence[_Text]) -> npt.NDArray[np.float64]:
+def _values(
+    labels: Sequence[_Text], ink: npt.NDArray[np.uint8]
+) -> npt.NDArray[np.float64]:
     """Return the values of tick labels, which are numbers or powers of ten.
 
-    If any label is a power of ten, so are those that read as 10 followed by
-    digits, such as 102 for 10^2, as OCR often misses superscripts.
+    OCR often misses superscripts, reading 10^2 as 102. So if any label is a
+    power of ten, or reads as 10 followed by digits of which the last is drawn
+    raised, all those that read as 10 followed by digits are powers of ten.
     """
-    powers = any(_POWER.fullmatch(label.plain) for label in labels)
+    powers = any(
+        _POWER.fullmatch(label.plain)
+        or (_RUN_TOGETHER.fullmatch(label.plain) and _raised(ink, label))
+        for label in labels
+    )
     values = []
     for label in labels:
         if powers and (match := _RUN_TOGETHER.fullmatch(label.plain)):
@@ -272,6 +288,31 @@ def _values(labels: Sequence[_Text]) -> npt.NDArray[np.float64]:
         else:
             values.append(float(label.plain))
     return np.array(values)
+
+
+def _raised(ink: npt.NDArray[np.uint8], label: _Text) -> bool:
+    """Return whether the last character of a label is raised, as an exponent is.
+
+    The characters are the pieces of ink in the label's box at least a third as
+    tall as the tallest, which leaves out points, minus signs and tick marks.
+    The last is raised if its bottom is ``_RAISED`` of the characters' height
+    or more above the lowest bottom.
+    """
+    height = ink.shape[0]
+    box = ink[
+        max(height - math.ceil(label.top), 0) : height - math.floor(label.bottom),
+        max(math.floor(label.left), 0) : math.ceil(label.right),
+    ]
+    stats = cv2.connectedComponentsWithStats(box)[2][1:]  # the first is background
+    if not len(stats):
+        return False
+    tall = stats[:, cv2.CC_STAT_HEIGHT]
+    characters = stats[tall >= tall.max() / 3]
+    tops = characters[:, cv2.CC_STAT_TOP]
+    bottoms = tops + characters[:, cv2.CC_STAT_HEIGHT]
+    rights = characters[:, cv2.CC_STAT_LEFT] + characters[:, cv2.CC_STAT_WIDTH]
+    lift = bottoms.max() - bottoms[np.argmax(rights)]  # rows count downwards
+    return bool(lift >= _RAISED * (bottoms.max() - tops.min()))
 
 
 def _most_in_line(
@@ -295,7 +336,7 @@ def _most_in_line(
 
 
 def _cross_axes(
-    image: Image, x_labels: Sequence[_Text], y_labels: Sequence[_Text]
+    ink: npt.NDArray[np.bool_], x_labels: Sequence[_Text], y_labels: Sequence[_Text]
 ) -> Point:
     """Find where the axis lines cross, or failing that the first ticks.
 
@@ -303,8 +344,7 @@ def _cross_axes(
     labels to just past the first x-axis tick, with ink along at least half of
     the span of the y-axis ticks. The x-axis line is found the same way.
     """
-    ink = ink_mask(image) > 0
-    height = image.shape[0]
+    height = ink.shape[0]
     first_x, last_x = x_labels[0].x, x_labels[-1].x
     first_y, last_y = y_labels[0].y, y_labels[-1].y
 
