@@ -112,8 +112,9 @@ def read_axes(image: Image) -> Axes:
     Numbers may be written as powers of ten, such as 10^2 or 2x10^3 with
     superscript exponents. OCR often misses superscripts, reading 10^2 as 102,
     so a label that reads as 10 followed by digits is a power of ten if its
-    last digit is drawn raised, or if any other label on its axis is a power
-    of ten.
+    last digit is drawn raised, a raised minus sign before it making the
+    exponent negative, or if most of the other labels on its axis that read
+    as 10 followed by digits or as powers of ten show that they are.
     An axis is logarithmic if more of its labels fall in line on a logarithmic
     scale than on a linear one.
 
@@ -280,20 +281,33 @@ def _values(
 ) -> npt.NDArray[np.float64]:
     """Return the values of tick labels, which are numbers or powers of ten.
 
-    OCR often misses superscripts, reading 10^2 as 102. So if any label is a
-    power of ten, or reads as 10 followed by digits of which the last is drawn
-    raised, all those that read as 10 followed by digits are powers of ten.
+    OCR often misses superscripts, reading 10^2 as 102. A label that reads as
+    10 followed by digits is a power of ten if its last digit is drawn raised,
+    or if most of the other labels that read as powers of ten or as 10 and
+    digits show that they are powers, by their text or a raised digit. One
+    misread label, such as 100 read with a degree sign for its last 0, so
+    does not make an axis of 100, 101 and 102 logarithmic.
     """
     readings = [_reading(label, height) for label in labels]
-    powers = any(
-        _POWER.fullmatch(reading)
-        or (_RUN_TOGETHER.fullmatch(reading) and _raised(ink, label))
+    signs = [
+        _exponent_sign(ink, label) if _RUN_TOGETHER.fullmatch(reading) else None
         for label, reading in zip(labels, readings, strict=True)
-    )
+    ]
+    shown = [
+        bool(_POWER.fullmatch(reading)) or sign is not None
+        for reading, sign in zip(readings, signs, strict=True)
+    ]
+    candidates = [
+        index
+        for index, reading in enumerate(readings)
+        if _POWER.fullmatch(reading) or _RUN_TOGETHER.fullmatch(reading)
+    ]
     values = []
-    for reading in readings:
-        if powers and (match := _RUN_TOGETHER.fullmatch(reading)):
-            values.append(10.0 ** int(match[1]))
+    for index, (reading, sign) in enumerate(zip(readings, signs, strict=True)):
+        others = [shown[other] for other in candidates if other != index]
+        mostly = 2 * sum(others) > len(others)
+        if (match := _RUN_TOGETHER.fullmatch(reading)) and (sign or mostly):
+            values.append(10.0 ** ((sign or 1) * int(match[1])))
         elif match := _POWER.fullmatch(reading):
             values.append(float(match[1] or 1) * 10.0 ** int(match[2]))
         else:  # a number, less any % and thousands separators
@@ -316,13 +330,15 @@ def _reading(label: _Text, height: float = math.inf) -> str:
     return text
 
 
-def _raised(ink: npt.NDArray[np.uint8], label: _Text) -> bool:
-    """Return whether the last character of a label is raised, as an exponent is.
+def _exponent_sign(ink: npt.NDArray[np.uint8], label: _Text) -> int | None:
+    """Return the sign of a label's exponent, or None if it has none.
 
     The characters are the pieces of ink in the label's box at least a third as
     tall as the tallest, which leaves out points, minus signs and tick marks.
-    The last is raised if its bottom is ``_RAISED`` of the characters' height
-    or more above the lowest bottom.
+    The last is an exponent if its bottom is ``_RAISED`` of the characters'
+    height or more above the lowest bottom. The exponent is negative if a
+    flat piece, at least twice as wide as tall, lies level with the exponent
+    and before it, after the middle of the second character, the 0 of 10.
     """
     height = ink.shape[0]
     box = ink[
@@ -331,14 +347,28 @@ def _raised(ink: npt.NDArray[np.uint8], label: _Text) -> bool:
     ]
     stats = cv2.connectedComponentsWithStats(box)[2][1:]  # the first is background
     if not len(stats):
-        return False
-    tall = stats[:, cv2.CC_STAT_HEIGHT]
-    characters = stats[tall >= tall.max() / 3]
-    tops = characters[:, cv2.CC_STAT_TOP]
-    bottoms = tops + characters[:, cv2.CC_STAT_HEIGHT]
-    rights = characters[:, cv2.CC_STAT_LEFT] + characters[:, cv2.CC_STAT_WIDTH]
-    lift = bottoms.max() - bottoms[np.argmax(rights)]  # rows count downwards
-    return bool(lift >= _RAISED * (bottoms.max() - tops.min()))
+        return None
+    left, top, width, tall = stats[:, :4].T
+    characters = np.flatnonzero(tall >= tall.max() / 3)
+    bottoms = top + tall
+    last = characters[np.argmax(left[characters] + width[characters])]
+    lift = bottoms[characters].max() - bottoms[last]  # rows count downwards
+    if lift < _RAISED * (bottoms[characters].max() - top[characters].min()):
+        return None
+    after = np.sort(left[characters] + width[characters] / 2)[
+        min(1, len(characters) - 1)
+    ]
+    middles = top + tall / 2
+    centres = left + width / 2
+    minus = (
+        (tall < tall.max() / 3)
+        & (width >= 2 * tall)
+        & (top[last] <= middles)
+        & (middles <= bottoms[last])
+        & (after < centres)
+        & (centres < left[last])
+    )
+    return -1 if minus.any() else 1
 
 
 def _most_in_line(

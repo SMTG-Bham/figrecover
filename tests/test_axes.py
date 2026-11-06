@@ -89,6 +89,24 @@ def test_reads_powers_of_ten_whose_superscripts_ocr_missed(
     assert found.calibration.x_log
 
 
+def test_reads_negative_exponents_whose_minus_ocr_missed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def read_text(image: Image) -> list[_Text]:
+        """Read the text as OCR does, but with superscripts plain and no minus."""
+        return [
+            dataclasses.replace(line, text=line.text.translate(_PLAIN).replace("-", ""))
+            for line in _read_text(image)
+        ]
+
+    monkeypatch.setattr(axes, "_read_text", read_text)
+
+    found = read_axes(load_image(EXAMPLES / "logarithmic.png"))
+
+    # 10 to the -1 reads as 101, and only its raised minus sign shows it.
+    assert [value for _, value in found.y_ticks] == [0.1, 1, 10, 100, 1000]
+
+
 @pytest.mark.parametrize("name", ["labelled", "spectrum"])
 def test_finds_where_the_axis_lines_cross(name: str) -> None:
     # The axes of labelled.png start before the first ticks, and those of
@@ -262,6 +280,21 @@ def test_reads_powers_of_ten(monkeypatch: pytest.MonkeyPatch) -> None:
     np.testing.assert_allclose(
         found.calibration.to_data([(120, 110)]), [(10**-0.5, 10**-0.5)]
     )
+
+
+def test_one_misread_label_does_not_make_powers_of_ten(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 101 misread with a degree sign for a superscript 0.
+    labels = [
+        *x_labels(["100", "10\N{DEGREE SIGN}", "102", "103"]),
+        *y_labels(["0", "1", "2"]),
+    ]
+
+    found = read(monkeypatch, labels)
+
+    assert [value for _, value in found.x_ticks] == [100, 102, 103]
+    assert not found.calibration.x_log
 
 
 def test_reads_multiples_of_powers_of_ten(monkeypatch: pytest.MonkeyPatch) -> None:
