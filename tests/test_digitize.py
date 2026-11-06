@@ -128,6 +128,39 @@ def test_trace_curve_ignores_the_axes() -> None:
     assert pixels[:, 1].min() > ORIGIN[1] + 2
 
 
+def frame(image: Image, colour: Colour = BLACK) -> None:
+    """Close the axes of a synthetic plot with a frame, as matplotlib does."""
+    top, right = 10, WIDTH - 20
+    cv2.line(image, (ORIGIN[0], top), (right, top), colour, 2)
+    cv2.line(image, (right, top), (right, to_row(ORIGIN[1])), colour, 2)
+
+
+def test_trace_curve_ignores_a_frame() -> None:
+    image, calibration = synthetic_plot()
+    frame(image)
+
+    pixels = trace_curve(image, calibration.origin)
+
+    assert pixels[:, 0].max() < WIDTH - 20
+    assert_follows(pixels, calibration, curve)
+
+
+def test_find_colours_ignores_a_frame() -> None:
+    image, calibration = synthetic_plot(curves=[(BLUE, curve)], x_range=(0.5, 3))
+    frame(image)
+
+    assert find_colours(image, 1, calibration.origin) == [BLUE]
+
+
+def test_a_line_along_the_top_is_not_a_frame() -> None:
+    image, calibration = synthetic_plot()
+    cv2.line(image, (ORIGIN[0], 10), (WIDTH - 20, 10), BLUE, 2)  # no right side
+
+    (pixels,) = trace_curves(image, [BLUE], calibration.origin)
+
+    assert np.all(pixels[:, 1] > HEIGHT - 12)
+
+
 def test_trace_curve_ignores_a_light_grid() -> None:
     assert_traces_curve(*synthetic_plot(grid=200))
 

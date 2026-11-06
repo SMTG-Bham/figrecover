@@ -15,6 +15,9 @@ type Colour = tuple[int, int, int]
 AXIS_MARGIN = 3
 """Pixels beyond the axes that are ignored, so the axis lines are not traced."""
 
+FRAME_REACH = 0.5
+"""Fraction of the plot area that each line of a frame around the axes spans."""
+
 GRID_LINE_LENGTH = 120
 """Shortest straight run of pixels that ``remove_grid`` treats as a line."""
 
@@ -167,11 +170,12 @@ def trace_curves(
     Raises:
         ValueError: If no curve has one of the colours.
     """
-    plot, left = _plot_area(image, origin)
+    plot, left, top = _plot_area(image, origin)
     palette = _palette(plot)
     indices = [_match(palette, colour) for colour in colours]
     labels = _classify(plot, palette)
-    return [_follow(labels == index, left, image.shape[0]) for index in indices]
+    height = image.shape[0]
+    return [_follow(labels == index, left, top, height) for index in indices]
 
 
 def trace_curve(image: Image, origin: Point = (0, 0)) -> npt.NDArray[np.float64]:
@@ -195,16 +199,50 @@ def trace_curve(image: Image, origin: Point = (0, 0)) -> npt.NDArray[np.float64]
     return trace_curves(image, find_colours(image, 1, origin), origin)[0]
 
 
-def _plot_area(image: Image, origin: Point) -> tuple[Image, int]:
-    """Return the part of the image above and right of the axes, and its left edge."""
+def _plot_area(image: Image, origin: Point) -> tuple[Image, int, int]:
+    """Return the part of the image inside the axes, and its left and top edges.
+
+    That is the part above and right of the axes, or if a frame closes them,
+    as matplotlib draws by default, the part inside the frame too.
+    """
     height = image.shape[0]
     left = max(0, int(origin[0]) + AXIS_MARGIN)
     bottom = max(0, height - int(origin[1]) - AXIS_MARGIN)
-    plot = image[:bottom, left:]
-    if plot.size == 0:
+    if image[:bottom, left:].size == 0:
         msg = "the axes leave no plot area to trace"
         raise ValueError(msg)
-    return plot, left
+    top, right = _inside_frame(ink_mask(image)[:bottom, left:] > 0)
+    return image[top:bottom, left : left + right], left, top
+
+
+def _inside_frame(ink: npt.NDArray[np.bool_]) -> tuple[int, int]:
+    """Find the frame closing the axes in the part of an image beyond them.
+
+    The frame's top is the topmost line that runs right from the left edge,
+    next to the y-axis, across at least ``FRAME_REACH`` of the width. Its
+    right side runs down from the end of the top, as far again of the rest
+    of the height. Both are dropped with ``AXIS_MARGIN`` beyond them.
+
+    Returns:
+        The first row below the frame and the number of columns left of it,
+        or 0 and the width if there is no frame.
+    """
+    height, width = ink.shape
+    rows = ink.all(axis=1)
+    runs = np.where(rows, width, np.argmin(ink, axis=1))  # ink from the left edge
+    long = np.flatnonzero(runs >= width * FRAME_REACH)
+    if not len(long):
+        return 0, width
+    first = last = long[0]
+    while last + 1 < height and runs[last + 1] >= width * FRAME_REACH:
+        last += 1  # a thick line
+    end = int(runs[first])
+    for column in range(max(end - AXIS_MARGIN, 0), end):
+        below = ink[first:, column]
+        run = len(below) if below.all() else int(np.argmin(below))
+        if run >= (height - first) * FRAME_REACH:
+            return last + 1 + AXIS_MARGIN, max(column - AXIS_MARGIN, 0)
+    return 0, width
 
 
 def _palette(plot: Image) -> npt.NDArray[np.float64]:
@@ -300,9 +338,13 @@ def _match(palette: npt.NDArray[np.float64], colour: Colour) -> int:
 
 
 def _follow(
-    in_colour: npt.NDArray[np.bool_], left: int, height: int
+    in_colour: npt.NDArray[np.bool_], left: int, top: int, height: int
 ) -> npt.NDArray[np.float64]:
-    """Return the median height of a curve's pixels in each column it crosses."""
+    """Return the median height of a curve's pixels in each column it crosses.
+
+    The curve's pixels are in a part of an image ``height`` pixels tall, from
+    column ``left`` and row ``top``.
+    """
     _, specks, stats, _ = cv2.connectedComponentsWithStats(in_colour.astype(np.uint8))
     areas = stats[:, cv2.CC_STAT_AREA]
     areas[0] = 0  # the pixels outside the curve
@@ -312,7 +354,7 @@ def _follow(
     xs, starts = np.unique(columns, return_index=True)
     ys = [np.median(group) for group in np.split(rows, starts)[1:]]
     # The centre of the pixel in column c and row r is at (c + 0.5, height - r - 0.5).
-    return np.column_stack((xs + left + 0.5, height - np.array(ys) - 0.5))
+    return np.column_stack((xs + left + 0.5, height - top - np.array(ys) - 0.5))
 
 
 def _to_colour(levels: npt.NDArray[np.float64]) -> Colour:
