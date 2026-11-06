@@ -10,7 +10,7 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 
-from figrecover import Image, Point, __version__, interactive
+from figrecover import Axes, Calibration, Image, Point, __version__, cli, interactive
 from figrecover.cli import main
 
 type Curve = Callable[[npt.NDArray[np.float64]], npt.NDArray[np.float64]]
@@ -23,6 +23,7 @@ GRID_LOCATIONS = ["-l", "80,44", "-l", "576,44", "-l", "80,167"]
 SPECTRUM = [str(EXAMPLES / "spectrum.png"), *POINTS]
 GRID = [str(EXAMPLES / "grid.png"), *POINTS]
 SERIES = [str(EXAMPLES / "series.png"), *POINTS, *LOCATIONS]
+LABELLED = str(EXAMPLES / "labelled.png")
 
 
 def spectrum(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
@@ -50,6 +51,11 @@ def wave(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
     return 1.25 + np.sin(x) / 2
 
 
+def ringing(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return the curve that examples/make_examples.py draws in labelled.png."""
+    return np.exp(-x / 4) * np.cos(2 * x)
+
+
 def trend(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
     """Return the black line that examples/make_examples.py draws in series.png."""
     return 0.4 + 0.2 * x
@@ -69,9 +75,9 @@ def assert_follows(data: npt.NDArray[np.float64], curve: Curve) -> None:
     np.testing.assert_allclose(data[:, 1], curve(data[:, 0]), atol=0.04)
 
 
-def assert_recovers(text: str, curve: Curve) -> None:
+def assert_recovers(text: str, curve: Curve, header: str = "x,y") -> None:
     """Check that CSV output follows the true curve."""
-    assert_follows(read_csv(text), curve)
+    assert_follows(read_csv(text, header), curve)
 
 
 def assert_recovers_series(text: str, curves: Sequence[Curve]) -> None:
@@ -172,6 +178,50 @@ def test_asks_for_missing_locations_and_prints_them(
     assert_recovers(captured.out, spectrum)
 
 
+def test_reads_the_axes_without_reference_points(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    preview = tmp_path / "preview.png"
+
+    assert main([LABELLED, "--preview", str(preview)]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.err == (
+        'figrecover: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10\n'
+        'figrecover: y-axis "Voltage (mV)" with ticks at '
+        "-0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1\n"
+    )
+    assert_recovers(captured.out, ringing, header="Time (s),Voltage (mV)")
+    image = cv2.imread(str(preview))
+    assert image is not None
+    assert np.any(np.all(image == (255, 0, 0), axis=-1))  # the ticks, in blue
+
+
+def test_quotes_titles_in_the_csv_header(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    calibration = Calibration.from_points(
+        [(0, 0), (10, 0), (0, 1)], [(80, 44), (576, 44), (80, 147)]
+    )
+    axes = Axes(calibration, ((80, 0), (576, 10)), ((44, 0), (147, 1)), "E, eV", None)
+    monkeypatch.setattr(cli, "read_axes", lambda _image: axes)
+
+    assert main([str(EXAMPLES / "spectrum.png")]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.err == (
+        'figrecover: x-axis "E, eV" with ticks at 0, 10\n'
+        "figrecover: y-axis with ticks at 0, 1\n"
+    )
+    assert_recovers(captured.out, spectrum, header='"E, eV",y')
+
+
+@pytest.mark.usefixtures("without_ocr")
+def test_reports_a_missing_ocr_extra(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main([LABELLED]) == 1
+    assert "needs the ocr extra" in capsys.readouterr().err
+
+
 def test_can_be_cancelled(monkeypatch: pytest.MonkeyPatch) -> None:
     def pick_points(_image: Image, _labels: Sequence[str]) -> list[Point]:
         raise KeyboardInterrupt
@@ -219,7 +269,7 @@ def test_accepts_points_with_spaces_and_exponents(
         ([*SERIES, "-c", "red"], "expected a colour written as RRGGBB, got 'red'"),
         ([*SERIES, "-c", "#12345"], "expected a colour written as RRGGBB"),
         ([*SERIES, "-n", "2", "-c", "000000"], "not allowed with argument"),
-        (["plot.png"], "required: -p/--point"),
+        (["plot.png", "-l", "80,44"], "give the reference points of the -l"),
         ([], "required: image"),
     ],
 )
