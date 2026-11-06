@@ -30,11 +30,32 @@ def damped(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
     return 1.2 + np.exp(-x / 4) * np.cos(2 * x)
 
 
-def draw(name: str, curve: Curve, ylim: float, *, grid: bool) -> None:
-    """Draw a curve over x from 0 to 10, and print the reference points."""
+def decay(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return an exponential decay."""
+    return 2.5 * np.exp(-x / 3)
+
+
+def growth(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return an exponential approach to a limit, crossing ``decay``."""
+    return 2.5 * (1 - np.exp(-x / 3))
+
+
+def wave(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return a sine wave that crosses ``decay`` and ``growth``."""
+    return 1.25 + np.sin(x) / 2
+
+
+def trend(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return a straight line that crosses the other series."""
+    return 0.4 + 0.2 * x
+
+
+def draw(name: str, curves: dict[str, Curve], ylim: float, *, grid: bool) -> None:
+    """Draw curves, keyed by colour, over x from 0 to 10, and print the points."""
     figure, axes = plt.subplots(figsize=(6.4, 4), dpi=100)
     x = np.linspace(0, 10, 2000)
-    axes.plot(x, curve(x), color="black", linewidth=1.5)
+    for colour, curve in curves.items():
+        axes.plot(x, curve(x), color=colour, linewidth=1.5)
     axes.set(xlim=(0, 10), ylim=(0, ylim), xlabel="x", ylabel="y")
     if grid:
         axes.grid(color="0.25", linewidth=0.8)
@@ -48,5 +69,7 @@ def draw(name: str, curve: Curve, ylim: float, *, grid: bool) -> None:
     plt.close(figure)
 
 
-draw("spectrum", spectrum, 3, grid=False)
-draw("grid", damped, 2.5, grid=True)
+draw("spectrum", {"black": spectrum}, 3, grid=False)
+draw("grid", {"black": damped}, 2.5, grid=True)
+series = {"tab:blue": decay, "tab:orange": growth, "tab:green": wave, "black": trend}
+draw("series", series, 3, grid=False)

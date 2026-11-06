@@ -2,9 +2,11 @@
 
 import argparse
 import os
+import re
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from typing import TextIO
 
 import cv2
 import numpy as np
@@ -12,7 +14,14 @@ import numpy.typing as npt
 
 from . import __version__, interactive
 from .calibration import MIN_POINTS, Calibration, Point
-from .digitize import Image, load_image, remove_grid, trace_curve
+from .digitize import (
+    Colour,
+    Image,
+    find_colours,
+    load_image,
+    remove_grid,
+    trace_curves,
+)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -44,8 +53,8 @@ def _build_parser() -> argparse.ArgumentParser:
     """Create the command-line argument parser."""
     parser = argparse.ArgumentParser(
         prog="figrecover",
-        description="Recover the curve in an image of a plot as CSV, with "
-        "columns x and y.",
+        description="Recover the curves in an image of a plot as CSV, with "
+        "columns x and y, and a series column if there are several curves.",
     )
     parser.add_argument("--version", action="version", version=__version__)
     parser.add_argument("image", type=Path, help="image of the plot")
@@ -72,6 +81,26 @@ def _build_parser() -> argparse.ArgumentParser:
         "from the bottom-left corner (default: click on them, then reuse the "
         "printed -l options)",
     )
+    curves = parser.add_mutually_exclusive_group()
+    curves.add_argument(
+        "-n",
+        "--series",
+        type=_count,
+        metavar="N",
+        help="trace the N most common curve colours, then reuse the printed -c "
+        "options (default: 1)",
+    )
+    curves.add_argument(
+        "-c",
+        "--colour",
+        dest="colours",
+        action="append",
+        default=[],
+        type=_colour,
+        metavar="RRGGBB",
+        help="hexadecimal colour of a curve to trace, such as 1f77b4; repeat for "
+        "several curves",
+    )
     parser.add_argument(
         "-o",
         "--output",
@@ -83,7 +112,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "--preview",
         type=Path,
         metavar="IMAGE",
-        help="also save the image with the recovered curve drawn in red",
+        help="also save a faded copy of the image with each recovered curve "
+        "drawn in its colour",
     )
     parser.add_argument(
         "--remove-grid", action="store_true", help="paint over grid lines first"
@@ -92,23 +122,19 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _digitize(arguments: argparse.Namespace) -> None:
-    """Write the curve in the image as CSV."""
+    """Write the curves in the image as CSV."""
     image = load_image(arguments.image)
     pixels = arguments.locations or _click_locations(image, arguments.points)
     calibration = Calibration.from_points(arguments.points, pixels)
     traced = remove_grid(image) if arguments.remove_grid else image
-    curve = trace_curve(traced, calibration.origin)
+    colours = arguments.colours or _find_colours(
+        traced, arguments.series, calibration.origin
+    )
+    curves = trace_curves(traced, colours, calibration.origin)
 
     if arguments.preview:
-        _save_preview(arguments.preview, image, curve, pixels)
-    np.savetxt(
-        arguments.output or sys.stdout,
-        calibration.to_data(curve),
-        fmt="%.6g",
-        delimiter=",",
-        header="x,y",
-        comments="",
-    )
+        _save_preview(arguments.preview, image, curves, colours, pixels)
+    _write_csv(arguments.output or sys.stdout, [calibration.to_data(c) for c in curves])
 
 
 def _click_locations(image: Image, points: Sequence[Point]) -> list[Point]:
@@ -119,18 +145,48 @@ def _click_locations(image: Image, points: Sequence[Point]) -> list[Point]:
     return pixels
 
 
+def _find_colours(image: Image, count: int | None, origin: Point) -> list[Colour]:
+    """Find the curve colours, and print the -c options to reuse if -n was given."""
+    colours = find_colours(image, count or 1, origin)
+    if count is not None:
+        options = " ".join(f"-c {bytes(colour).hex()}" for colour in colours)
+        print(f"figrecover: colours: {options}", file=sys.stderr)
+    return colours
+
+
+def _write_csv(file: Path | TextIO, curves: Sequence[npt.NDArray[np.float64]]) -> None:
+    """Write the curves as CSV, with a series column if there are several."""
+    if len(curves) == 1:
+        table, header, fmt = curves[0], "x,y", ["%.6g"] * 2
+    else:
+        table = np.vstack(
+            [
+                np.column_stack((np.full(len(curve), series), curve))
+                for series, curve in enumerate(curves, start=1)
+            ]
+        )
+        header, fmt = "series,x,y", ["%d", "%.6g", "%.6g"]
+    np.savetxt(file, table, fmt=fmt, delimiter=",", header=header, comments="")
+
+
 def _save_preview(
     path: Path,
     image: Image,
-    curve: npt.NDArray[np.float64],
+    curves: Sequence[npt.NDArray[np.float64]],
+    colours: Sequence[Colour],
     pixels: Sequence[Point],
 ) -> None:
-    """Save the image with the curve in red and the reference points in blue."""
+    """Save a faded copy of the image with the curves and reference points on it.
+
+    Each curve is drawn in its own colour, and the reference points in blue.
+    """
     height = image.shape[0]
     grey = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-    preview = cv2.cvtColor(grey, cv2.COLOR_GRAY2BGR)
-    for x, y in curve:
-        cv2.circle(preview, (round(x), round(height - y)), 1, (0, 0, 255), -1)
+    preview = cv2.cvtColor(255 - (255 - grey) // 3, cv2.COLOR_GRAY2BGR)
+    for curve, (red, green, blue) in zip(curves, colours, strict=True):
+        for x, y in curve:
+            centre = (round(x), round(height - y))
+            cv2.circle(preview, centre, 1, (blue, green, red), -1)
     for x, y in pixels:
         cv2.circle(preview, (round(x), round(height - y)), 6, (255, 0, 0), 2)
     if not cv2.imwrite(os.fspath(path), preview, [cv2.IMWRITE_PNG_COMPRESSION, 9]):
@@ -146,3 +202,25 @@ def _point(text: str) -> Point:
         msg = f"expected a point written as x,y, got {text!r}"
         raise argparse.ArgumentTypeError(msg) from None
     return x, y
+
+
+def _count(text: str) -> int:
+    """Parse a positive whole number."""
+    try:
+        count = int(text)
+    except ValueError:
+        count = 0
+    if count < 1:
+        msg = f"expected a positive whole number, got {text!r}"
+        raise argparse.ArgumentTypeError(msg)
+    return count
+
+
+def _colour(text: str) -> Colour:
+    """Parse a colour written in hexadecimal as ``RRGGBB``, with or without a ``#``."""
+    match = re.fullmatch(r"#?([0-9a-f]{6})", text.strip(), re.IGNORECASE)
+    if match is None:
+        msg = f"expected a colour written as RRGGBB, got {text!r}"
+        raise argparse.ArgumentTypeError(msg)
+    red, green, blue = bytes.fromhex(match[1])
+    return red, green, blue

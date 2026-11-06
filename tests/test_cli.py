@@ -22,6 +22,7 @@ LOCATIONS = ["-l", "80,44", "-l", "576,44", "-l", "80,147"]
 GRID_LOCATIONS = ["-l", "80,44", "-l", "576,44", "-l", "80,167"]
 SPECTRUM = [str(EXAMPLES / "spectrum.png"), *POINTS]
 GRID = [str(EXAMPLES / "grid.png"), *POINTS]
+SERIES = [str(EXAMPLES / "series.png"), *POINTS, *LOCATIONS]
 
 
 def spectrum(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
@@ -34,19 +35,51 @@ def damped(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
     return 1.2 + np.exp(-x / 4) * np.cos(2 * x)
 
 
-def read_csv(text: str) -> npt.NDArray[np.float64]:
+def decay(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return the blue curve that examples/make_examples.py draws in series.png."""
+    return 2.5 * np.exp(-x / 3)
+
+
+def growth(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return the orange curve that examples/make_examples.py draws in series.png."""
+    return 2.5 * (1 - np.exp(-x / 3))
+
+
+def wave(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return the green curve that examples/make_examples.py draws in series.png."""
+    return 1.25 + np.sin(x) / 2
+
+
+def trend(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return the black line that examples/make_examples.py draws in series.png."""
+    return 0.4 + 0.2 * x
+
+
+def read_csv(text: str, header: str = "x,y") -> npt.NDArray[np.float64]:
     """Parse CSV output, checking its header."""
-    header, _, body = text.partition("\n")
-    assert header == "x,y"
+    first, _, body = text.partition("\n")
+    assert first == header
     return np.loadtxt(body.splitlines(), delimiter=",", ndmin=2)
 
 
-def assert_recovers(text: str, curve: Curve) -> None:
-    """Check that CSV output follows the true curve across the whole x-axis."""
-    data = read_csv(text)
+def assert_follows(data: npt.NDArray[np.float64], curve: Curve) -> None:
+    """Check that x and y columns follow the true curve across the whole x-axis."""
     assert data[:, 0].min() < 0.1
     assert data[:, 0].max() > 9.9
     np.testing.assert_allclose(data[:, 1], curve(data[:, 0]), atol=0.04)
+
+
+def assert_recovers(text: str, curve: Curve) -> None:
+    """Check that CSV output follows the true curve."""
+    assert_follows(read_csv(text), curve)
+
+
+def assert_recovers_series(text: str, curves: Sequence[Curve]) -> None:
+    """Check that each series in CSV output follows its true curve, in order."""
+    data = read_csv(text, header="series,x,y")
+    assert set(data[:, 0]) == set(range(1, len(curves) + 1))
+    for series, curve in enumerate(curves, start=1):
+        assert_follows(data[data[:, 0] == series, 1:], curve)
 
 
 def test_writes_csv_to_standard_output(capsys: pytest.CaptureFixture[str]) -> None:
@@ -72,6 +105,41 @@ def test_writes_csv_and_preview_files(
 def test_removes_grids(capsys: pytest.CaptureFixture[str]) -> None:
     assert main([*GRID, *GRID_LOCATIONS, "--remove-grid"]) == 0
     assert_recovers(capsys.readouterr().out, damped)
+
+
+def test_traces_several_series_and_prints_their_colours(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main([*SERIES, "-n", "4"]) == 0
+
+    captured = capsys.readouterr()
+    colours = "-c 2ea12e -c ff7f0e -c 1f77b4 -c 040404"  # the longest first
+    assert captured.err == f"figrecover: colours: {colours}\n"
+    assert_recovers_series(captured.out, [wave, growth, decay, trend])
+
+
+def test_traces_the_given_colours(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    preview = tmp_path / "preview.png"
+
+    arguments = [*SERIES, "-c", "1f77b4", "-c", "#FF7F0E", "--preview", str(preview)]
+    assert main(arguments) == 0
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert_recovers_series(captured.out, [decay, growth])
+    image = cv2.imread(str(preview))
+    assert image is not None
+    for blue, green, red in [(180, 119, 31), (14, 127, 255)]:  # each curve's colour
+        assert np.any(np.all(image == (blue, green, red), axis=-1))
+
+
+def test_writes_one_series_without_a_series_column(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main([*SERIES, "-c", "2ca02c"]) == 0
+    assert_recovers(capsys.readouterr().out, wave)
 
 
 def test_handles_dark_images(
@@ -119,6 +187,8 @@ def test_can_be_cancelled(monkeypatch: pytest.MonkeyPatch) -> None:
         (["missing.png", *POINTS, *LOCATIONS], "cannot read image"),
         ([*SPECTRUM, "-l", "80,44"], "got 3 data points but 1 pixel locations"),
         ([*SPECTRUM, *LOCATIONS, "--preview", "no/such/dir.png"], "cannot write"),
+        ([*SERIES, "-n", "5"], "found only 4 of 5 curves"),
+        ([*SERIES, "-c", "00ffff"], "no curve of colour #00ffff found"),
     ],
 )
 def test_reports_errors(
@@ -144,6 +214,11 @@ def test_accepts_points_with_spaces_and_exponents(
         (["plot.png", "-p", "0"], "expected a point written as x,y, got '0'"),
         (["plot.png", "-p", "1,2,3"], "expected a point written as x,y"),
         (["plot.png", "-p", "a,b"], "expected a point written as x,y"),
+        ([*SERIES, "-n", "0"], "expected a positive whole number, got '0'"),
+        ([*SERIES, "-n", "two"], "expected a positive whole number"),
+        ([*SERIES, "-c", "red"], "expected a colour written as RRGGBB, got 'red'"),
+        ([*SERIES, "-c", "#12345"], "expected a colour written as RRGGBB"),
+        ([*SERIES, "-n", "2", "-c", "000000"], "not allowed with argument"),
         (["plot.png"], "required: -p/--point"),
         ([], "required: image"),
     ],
