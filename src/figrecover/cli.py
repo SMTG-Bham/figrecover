@@ -127,7 +127,8 @@ def _save_preview(
 ) -> None:
     """Save the image with the curve in red and the reference points in blue."""
     height = image.shape[0]
-    preview = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+    grey = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+    preview = cv2.cvtColor(grey, cv2.COLOR_GRAY2BGR)
     for x, y in curve:
         cv2.circle(preview, (round(x), round(height - y)), 1, (0, 0, 255), -1)
     for x, y in pixels:
