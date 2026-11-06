@@ -1,5 +1,6 @@
 """Tests for reading images and tracing curves."""
 
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import cv2
@@ -7,11 +8,24 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 
-from figrecover import Calibration, Image, load_image, remove_grid, trace_curve
+from figrecover import (
+    Calibration,
+    Colour,
+    Image,
+    find_colours,
+    load_image,
+    remove_grid,
+    trace_curve,
+    trace_curves,
+)
+
+type Function = Callable[[npt.NDArray[np.float64]], npt.NDArray[np.float64]]
 
 HEIGHT, WIDTH = 200, 400
 ORIGIN = (40, 30)  # pixel position of the axes, from the bottom-left corner
 PIXELS_PER_UNIT = (35, 40)
+BLACK, BLUE, ORANGE = (0, 0, 0), (31, 119, 180), (255, 127, 14)
+LIGHT_BLUE = (166, 206, 227)
 
 
 def curve(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
@@ -19,31 +33,57 @@ def curve(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
     return 1.5 + np.sin(x)
 
 
+def rising(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return a line that crosses ``curve`` and ``falling``."""
+    return 0.5 + 0.2 * x
+
+
+def falling(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return a line that crosses ``curve`` and ``rising``."""
+    return 3 - 0.25 * x
+
+
 def to_row(y_pixel: float) -> int:
     """Convert a height above the bottom edge to an image row."""
     return round(HEIGHT - y_pixel)
 
 
-def synthetic_plot(grid: int | None = None) -> tuple[Image, Calibration]:
-    """Draw axes and a known curve, and return the image and its calibration.
+def synthetic_plot(
+    grid: int | None = None,
+    curves: Sequence[tuple[Colour, Function]] = ((BLACK, curve),),
+    x_range: tuple[float, float] = (0.5, 10),
+) -> tuple[Image, Calibration]:
+    """Draw axes and known curves, and return the image and its calibration.
 
     Args:
         grid: The grey level of grid lines to draw, if any.
+        curves: The colour and function of each curve, drawn in order.
+        x_range: The data range to draw the curves over.
     """
-    image = np.full((HEIGHT, WIDTH), 255, dtype=np.uint8)
+    image = np.full((HEIGHT, WIDTH, 3), 255, dtype=np.uint8)
     if grid is not None:
         for column in range(60, WIDTH, 50):
-            cv2.line(image, (column, 0), (column, HEIGHT), grid, 1)
+            cv2.line(image, (column, 0), (column, HEIGHT), (grid,) * 3, 1)
         for row in range(10, HEIGHT, 50):
-            cv2.line(image, (0, row), (WIDTH, row), grid, 1)
-    cv2.line(image, (ORIGIN[0], 0), (ORIGIN[0], to_row(ORIGIN[1])), 0, 2)
-    cv2.line(image, (ORIGIN[0], to_row(ORIGIN[1])), (WIDTH, to_row(ORIGIN[1])), 0, 2)
+            cv2.line(image, (0, row), (WIDTH, row), (grid,) * 3, 1)
+    cv2.line(image, (ORIGIN[0], 0), (ORIGIN[0], to_row(ORIGIN[1])), BLACK, 2)
+    cv2.line(
+        image, (ORIGIN[0], to_row(ORIGIN[1])), (WIDTH, to_row(ORIGIN[1])), BLACK, 2
+    )
 
-    x = np.linspace(0.5, 10, 500)
+    x = np.linspace(*x_range, 500)
     columns = ORIGIN[0] + x * PIXELS_PER_UNIT[0]
-    heights = ORIGIN[1] + curve(x) * PIXELS_PER_UNIT[1]
-    points = np.column_stack((columns, HEIGHT - heights)).round().astype(np.int32)
-    cv2.polylines(image, [points], isClosed=False, color=0, thickness=2)
+    for colour, function in curves:
+        heights = ORIGIN[1] + function(x) * PIXELS_PER_UNIT[1]
+        points = np.column_stack((columns, HEIGHT - heights)).round().astype(np.int32)
+        cv2.polylines(
+            image,
+            [points],
+            isClosed=False,
+            color=colour,
+            thickness=2,
+            lineType=cv2.LINE_AA,
+        )
 
     data = [(0.0, 0.0), (10.0, 0.0), (0.0, 1.0)]
     pixels = [
@@ -54,13 +94,23 @@ def synthetic_plot(grid: int | None = None) -> tuple[Image, Calibration]:
     return image, Calibration.from_points(data, pixels)
 
 
-def assert_traces_curve(image: Image, calibration: Calibration) -> None:
-    """Check that the curve traced in a synthetic plot follows ``curve``."""
-    data = calibration.to_data(trace_curve(image, calibration.origin))
+def assert_follows(
+    pixels: npt.NDArray[np.float64],
+    calibration: Calibration,
+    function: Function,
+    atol: float = 0.05,
+) -> None:
+    """Check that traced pixels follow a function across most of the plot."""
+    data = calibration.to_data(pixels)
 
     assert len(data) > 300
     assert np.all(np.diff(data[:, 0]) > 0)
-    np.testing.assert_allclose(data[:, 1], curve(data[:, 0]), atol=0.05)
+    np.testing.assert_allclose(data[:, 1], function(data[:, 0]), atol=atol)
+
+
+def assert_traces_curve(image: Image, calibration: Calibration) -> None:
+    """Check that the curve traced in a synthetic plot follows ``curve``."""
+    assert_follows(trace_curve(image, calibration.origin), calibration, curve)
 
 
 def test_trace_curve_recovers_a_known_curve() -> None:
@@ -79,6 +129,11 @@ def test_trace_curve_ignores_a_light_grid() -> None:
     assert_traces_curve(*synthetic_plot(grid=200))
 
 
+def test_trace_curve_handles_dark_backgrounds() -> None:
+    image, calibration = synthetic_plot()
+    assert_traces_curve(255 - image, calibration)
+
+
 def test_remove_grid_lets_the_curve_be_traced() -> None:
     image, calibration = synthetic_plot(grid=0)
     original = image.copy()
@@ -90,8 +145,74 @@ def test_remove_grid_lets_the_curve_be_traced() -> None:
     assert_traces_curve(cleaned, calibration)
 
 
+def test_remove_grid_handles_dark_backgrounds() -> None:
+    image, calibration = synthetic_plot(grid=0)
+
+    cleaned = remove_grid(255 - image)
+
+    assert np.all(cleaned[10, :] == 0)  # a grid line is gone
+    assert_traces_curve(cleaned, calibration)
+
+
+def test_find_colours_puts_the_longest_curve_first() -> None:
+    image, calibration = synthetic_plot(
+        curves=[(ORANGE, rising), (BLUE, curve)], x_range=(0.5, 6)
+    )
+    cv2.line(image, (300, 50), (WIDTH, 50), BLUE, 2)  # makes the blue curve longer
+
+    colours = find_colours(image, 2, calibration.origin)
+
+    np.testing.assert_allclose(colours, [BLUE, ORANGE], atol=8)
+
+
+def test_trace_curves_separates_crossing_curves() -> None:
+    curves = [(BLUE, curve), (ORANGE, rising), (BLACK, falling)]
+    image, calibration = synthetic_plot(curves=curves)
+
+    colours = find_colours(image, 3, calibration.origin)
+    traced = trace_curves(image, [BLUE, ORANGE, BLACK], calibration.origin)
+
+    assert len(colours) == 3
+    for pixels, (_, function) in zip(traced, curves, strict=True):
+        # A curve loses some pixels where a later one is drawn over it.
+        assert_follows(pixels, calibration, function, atol=0.075)
+
+
+def test_trace_curves_matches_similar_colours() -> None:
+    image, calibration = synthetic_plot(curves=[(BLUE, curve), (ORANGE, rising)])
+
+    (pixels,) = trace_curves(image, [(60, 130, 160)], calibration.origin)
+
+    assert_follows(pixels, calibration, curve)
+
+
+def test_trace_curves_needs_a_curve_of_each_colour() -> None:
+    image, calibration = synthetic_plot(curves=[(BLUE, curve)])
+    with pytest.raises(ValueError, match="no curve of colour #00ff00 found"):
+        trace_curves(image, [BLUE, (0, 255, 0)], calibration.origin)
+
+
+def test_light_curves_can_be_traced_but_are_not_found() -> None:
+    image, calibration = synthetic_plot(curves=[(LIGHT_BLUE, curve), (BLACK, rising)])
+
+    with pytest.raises(ValueError, match="found only 1 of 2 curves"):
+        find_colours(image, 2, calibration.origin)
+    (pixels,) = trace_curves(image, [LIGHT_BLUE], calibration.origin)
+    assert_follows(pixels, calibration, curve)
+
+
+def test_trace_curves_ignores_specks() -> None:
+    image, calibration = synthetic_plot(curves=[(BLUE, curve)], x_range=(0.5, 6))
+    for column in range(300, WIDTH, 10):  # beyond the curve
+        image[column % 37 + 20, column : column + 3] = BLUE
+
+    (pixels,) = trace_curves(image, [BLUE], calibration.origin)
+
+    assert calibration.to_data(pixels)[:, 0].max() < 6.1
+
+
 def test_trace_curve_needs_a_curve() -> None:
-    image = np.full((HEIGHT, WIDTH), 255, dtype=np.uint8)
+    image = np.full((HEIGHT, WIDTH, 3), 255, dtype=np.uint8)
     image[50:60, 50:60] = 0  # too small to be a curve
     with pytest.raises(ValueError, match="no curve found"):
         trace_curve(image)
@@ -103,19 +224,31 @@ def test_trace_curve_needs_a_plot_area() -> None:
         trace_curve(image, (WIDTH, 0))
 
 
-def test_load_image_converts_colour_to_full_range_greyscale(tmp_path: Path) -> None:
+def test_load_image_reads_colour_stretched_to_the_full_range(tmp_path: Path) -> None:
     path = tmp_path / "colour.png"
-    image = np.full((10, 20, 3), (200, 180, 160), dtype=np.uint8)
+    image = np.full((10, 20, 3), (200, 180, 160), dtype=np.uint8)  # BGR
     image[5, :] = (40, 50, 60)
     cv2.imwrite(str(path), image)
 
     loaded = load_image(path)
 
-    assert loaded.shape == (10, 20)
+    assert loaded.shape == (10, 20, 3)
     assert loaded.dtype == np.uint8
-    assert loaded.min() == 0
-    assert loaded.max() == 255
+    assert np.all(loaded[0, :] == (191, 223, 255))  # RGB
+    assert np.all(loaded[5, :] == (32, 16, 0))
+
+
+def test_load_image_reads_greyscale_as_colour(tmp_path: Path) -> None:
+    path = tmp_path / "grey.png"
+    image = np.full((10, 20), 200, dtype=np.uint8)
+    image[5, :] = 100
+    cv2.imwrite(str(path), image)
+
+    loaded = load_image(path)
+
+    assert loaded.shape == (10, 20, 3)
     assert np.all(loaded[5, :] == 0)
+    assert np.all(np.delete(loaded, 5, axis=0) == 255)
 
 
 def test_load_image_puts_transparent_pixels_on_white(tmp_path: Path) -> None:
@@ -142,24 +275,16 @@ def test_load_image_scales_16_bit_images(tmp_path: Path) -> None:
     assert np.all(loaded[:, 5:] == 255)
 
 
-def test_load_image_inverts_dark_images(tmp_path: Path) -> None:
-    path = tmp_path / "dark.png"
-    image, calibration = synthetic_plot()
-    cv2.imwrite(str(path), 255 - image)
-
-    loaded = load_image(path)
-
-    assert np.array_equal(loaded, image)
-    assert_traces_curve(loaded, calibration)
-
-
 def test_load_image_reports_unreadable_files(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="cannot read image"):
         load_image(tmp_path / "missing.png")
 
 
-def test_load_image_rejects_blank_images(tmp_path: Path) -> None:
+@pytest.mark.parametrize("colour", [128, (200, 180, 160)])
+def test_load_image_rejects_blank_images(
+    tmp_path: Path, colour: int | tuple[int, int, int]
+) -> None:
     path = tmp_path / "blank.png"
-    cv2.imwrite(str(path), np.full((10, 20), 128, dtype=np.uint8))
+    cv2.imwrite(str(path), np.full((10, 20, 3), colour, dtype=np.uint8))
     with pytest.raises(ValueError, match="single colour"):
         load_image(path)

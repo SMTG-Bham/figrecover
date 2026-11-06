@@ -1,8 +1,8 @@
 # figrecover
 
-Recover data from images of plots. figrecover finds the curve in a picture of
-a plot, such as a scanned figure or a screenshot, and writes its points as CSV
-in the plot's own units.
+Recover data from images of plots. figrecover finds the curves in a picture of
+a plot, such as a scanned figure or a screenshot, and writes their points as
+CSV in the plot's own units. Curves are told apart by colour.
 
 It suits batches of similar plots: calibrate once, then digitize every image
 the same way from the command line.
@@ -27,11 +27,11 @@ python -m pip install git+https://github.com/SMTG-Bham/figrecover
 
 ### 1. Prepare the image
 
-Crop the image to the axes and the curve. figrecover ignores everything left
-of the y-axis and below the x-axis, then traces the most common dark grey level
-in what remains. Legends, other curves and the top and right frame lines are
-traced too if they are the same grey, so crop or paint them out. Images with a
-dark background are inverted automatically.
+Crop the image to the axes and the curves. figrecover ignores everything left
+of the y-axis and below the x-axis, then traces the most common colour that
+stands out from the background in what remains. Legends and the top and right
+frame lines are traced too if they are the same colour as a curve, so crop or
+paint them out. Dark backgrounds work as well as light ones.
 
 ### 2. Choose reference points
 
@@ -61,14 +61,14 @@ The CSV file has a header and one row per image column the curve crosses:
 
 ```text
 x,y
-0.0604839,0.504854
-0.0806452,0.504854
+0.0604839,0.5
+0.0806452,0.5
 ...
 ```
 
 Without `-o`, the CSV goes to standard output. The preview draws the recovered
-curve in red and the reference points in blue, so you can check the result at a
-glance:
+curve in its own colour over a faded copy of the plot, and the reference points
+in blue, so you can check the result at a glance:
 
 ![The input plot](examples/spectrum.png)
 ![The recovered curve drawn over the plot](examples/spectrum.preview.png)
@@ -77,14 +77,54 @@ glance:
 | --- | --- |
 | `-p`, `--point X,Y` | Data coordinates of a reference point. Repeat for at least three. |
 | `-l`, `--location X,Y` | Pixel position of each reference point, in the same order. Default: click on them. |
+| `-n`, `--series N` | Trace the N most common curve colours, and print the matching `-c` options. Default: 1. |
+| `-c`, `--colour RRGGBB` | Hexadecimal colour of a curve to trace, such as `1f77b4`. Repeat for several curves. |
 | `-o`, `--output FILE` | CSV file to write. Default: standard output. |
-| `--preview IMAGE` | Also save the image with the recovered curve drawn on it. |
+| `--preview IMAGE` | Also save a faded copy of the image with the recovered curves drawn on it. |
 | `--remove-grid` | Paint over grid lines before tracing. |
+
+### Several curves
+
+Give the number of curves with `-n`:
+
+```bash
+figrecover examples/series.png \
+    -p 0,0 -p 10,0 -p 0,1 -l 80,44 -l 576,44 -l 80,147 \
+    -n 4 --preview series.preview.png
+```
+
+figrecover traces the four most common colours that stand out from the
+background, longest curve first, and prints their colours as `-c` options:
+
+```text
+figrecover: colours: -c 2ea12e -c ff7f0e -c 1f77b4 -c 040404
+```
+
+The CSV gains a `series` column that numbers the curves in that order:
+
+```text
+series,x,y
+1,0.0604839,1.28155
+1,0.0806452,1.29126
+...
+```
+
+![Four crossing curves, each recovered in its own colour](examples/series.preview.png)
+
+Which curve is longest can change from one plot to the next, so for a batch,
+pass the printed `-c` options instead of `-n`. They fix the order of the
+series, and each picks the curve whose colour is nearest, so they also work on
+similar plots whose colours differ slightly, such as JPEG files. Give only the
+`-c` options of the curves you want. The colours of plotting libraries work
+too, such as `-c 1f77b4` for matplotlib's first colour.
+
+`-n` skips light curves, such as pale blue or light grey ones, so that it does
+not mistake grid lines for curves; trace them with `-c` instead.
 
 ### Grids
 
-A light grid needs no special handling, because the curve is darker than the
-grid. A dark grid has to be removed first:
+A light grid needs no special handling, because the curves stand out more
+from the background than the grid does. A dark grid has to be removed first:
 
 ```bash
 figrecover examples/grid.png \
@@ -109,34 +149,61 @@ calibration = Calibration.from_points(
 data = calibration.to_data(trace_curve(image, calibration.origin))
 ```
 
-`remove_grid(image)` paints over grid lines first, if needed.
+For several curves, `find_colours` returns the colours of the most common
+curves as `(red, green, blue)` tuples, and `trace_curves` traces one curve per
+colour:
+
+```python
+from figrecover import find_colours, trace_curves
+
+colours = find_colours(image, 4, calibration.origin)
+curves = trace_curves(image, colours, calibration.origin)
+data = [calibration.to_data(curve) for curve in curves]
+```
+
+`load_image` returns an RGB array, and `remove_grid(image)` paints over grid
+lines first, if needed.
 
 ## How it works
 
-1. The image is read as greyscale and stretched to the full 0–255 range.
-   Transparent pixels become white, and a mostly dark image is inverted.
+1. The image is read in colour and stretched to the full 0–255 range.
+   Transparent pixels become white.
 2. A least-squares fit through the reference points gives a linear map from
    pixels to data for each axis. The leftmost and lowest reference points mark
    the axes.
 3. Pixels left of and below the axes are ignored, which drops the axes, their
    ticks and labels.
-4. The curve is the most common grey level that is less than half as bright
-   as the background and has enough pixels to span the plot.
-5. Each image column the curve crosses gives one point, at the median height
-   of the curve's pixels in that column.
+4. A coarse colour histogram gives the common colours: those with enough pixels
+   to span the plot, merging shades less than 48 levels apart. The most common
+   is the background. Antialiasing blends the edges of each curve with the
+   background, and a blend can be common too, so a colour whose pixels mostly
+   touch those of a colour further from the background is dropped.
+5. The curves are the common colours that differ from the background by at
+   least 128 levels in some channel, most pixels first. `-c` instead picks the
+   common colour nearest to each given colour, up to 96 levels away.
+6. Each pixel belongs to the common colour that it best matches when blended
+   with the background, if it is at least half-way there, so a curve's
+   antialiased edges count towards it. Specks of fewer than four pixels, such
+   as where two other curves cross, are ignored.
+7. Each image column a curve crosses gives one point, at the median height of
+   the curve's pixels in that column.
 
 On the examples, the recovered values are within 0.03 of the true curves, about
 three pixels at the steepest point.
 
 ## Limitations
 
-- One curve per image. Colour images are converted to grey, so curves are told
-  apart by brightness only.
+- Curves are told apart by colour only, so curves of the same colour are traced
+  as one, and line styles and markers are ignored.
+- A curve needs enough pixels to span the plot, so short curves and sparse
+  dotted lines may not be found.
+- Where curves cross, the one drawn underneath loses a few pixels, and its
+  points there can be a pixel or two out.
 - The axes must be horizontal and vertical, with linear scales.
 - Each column gives one point, so steep peaks come out slightly lower, and
   vertical lines in the plot area become single points.
-- `--remove-grid` also removes straight horizontal or vertical stretches of the
-  curve that are 120 pixels or longer.
+- `--remove-grid` also removes straight horizontal or vertical stretches of
+  curves that are 120 pixels or longer.
 
 ## Development
 
@@ -197,7 +264,7 @@ protection.
 ├── examples/                # example plots, their previews and the script that draws them
 ├── src/figrecover/
 │   ├── calibration.py       # pixel-to-data mapping
-│   ├── digitize.py          # image loading, grid removal and curve tracing
+│   ├── digitize.py          # image loading, grid removal, curve colours and tracing
 │   ├── interactive.py       # window for clicking on reference points
 │   └── cli.py               # the figrecover command
 └── tests/

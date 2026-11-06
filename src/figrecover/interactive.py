@@ -39,7 +39,8 @@ def pick_points(image: Image, labels: Sequence[str]) -> list[Point]:
         while len(clicks) < len(labels):
             label = labels[len(clicks)]
             left = len(labels) - len(clicks)
-            cv2.imshow(WINDOW, _caption(image, f"Click on {label} ({left} left)"))
+            caption = _caption(image, f"Click on {label} ({left} left)")
+            cv2.imshow(WINDOW, cv2.cvtColor(caption, cv2.COLOR_RGB2BGR))
             if not _keep_open():
                 raise KeyboardInterrupt
     return clicks
@@ -65,6 +66,9 @@ def _keep_open() -> bool:
 
 def _caption(image: Image, text: str) -> Image:
     """Return the image with a line of text in a black band beneath it."""
-    band = np.zeros((30, image.shape[1]), dtype=np.uint8)
-    cv2.putText(band, text, (5, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, 255, 1, cv2.LINE_AA)
+    band = np.zeros((30, image.shape[1], 3), dtype=np.uint8)
+    white = (255, 255, 255)
+    cv2.putText(
+        band, text, (5, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, white, 1, cv2.LINE_AA
+    )
     return np.vstack((image, band))

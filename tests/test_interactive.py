@@ -10,7 +10,7 @@ from figrecover import Image, interactive
 
 type MouseCallback = Callable[[int, int, int, int, object], None]
 
-IMAGE = np.full((100, 200), 255, dtype=np.uint8)
+IMAGE = np.full((100, 200, 3), 255, dtype=np.uint8)
 
 
 class FakeWindow:
@@ -60,7 +60,7 @@ def test_pick_points_returns_clicks_from_the_bottom_left(window: FakeWindow) -> 
 
     assert points == [(10, 10), (150, 10), (10, 80)]
     assert window.destroyed
-    assert window.shown[0].shape == (130, 200)  # the image with a caption
+    assert window.shown[0].shape == (130, 200, 3)  # the image with a caption
 
 
 def test_pick_points_stops_when_q_is_pressed(window: FakeWindow) -> None:
