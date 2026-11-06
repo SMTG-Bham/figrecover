@@ -41,8 +41,8 @@ of the y-axis and below the x-axis, and inside a frame around the axes, as
 matplotlib draws, everything beyond the frame too. It then traces the most
 common colour that stands out from the background in what remains, skipping
 filled areas and grid lines. Legends are traced too if they are the same
-colour as a curve, so crop or paint them out. Dark backgrounds work as well as
-light ones. To have figrecover read the axes, keep their tick labels and
+colour as a curve, so crop or paint them out, unless the series are told apart
+by their [markers](#markers). Dark backgrounds work as well as light ones. To have figrecover read the axes, keep their tick labels and
 titles in the image.
 
 ### 2. Choose reference points
@@ -97,6 +97,7 @@ in blue, so you can check the result at a glance:
 | `--log AXES` | The axes of the `-p` reference points that are logarithmic: `x`, `y` or `xy`. Default: neither. |
 | `-n`, `--series N` | Trace the N most common curve colours, and print the matching `-c` options. Default: 1. |
 | `-c`, `--colour RRGGBB` | Hexadecimal colour of a curve to trace, such as `1f77b4`. Repeat for several curves. |
+| `-m`, `--marker X,Y` | Pixel position of the marker in a series' legend key, to find the series by its markers' shape. Repeat for each series. See [Markers](#markers). |
 | `-o`, `--output FILE` | CSV file to write. Default: standard output. |
 | `--preview IMAGE` | Also save a faded copy of the image with the recovered curves drawn on it. |
 | `--remove-grid` | Paint over grid lines before tracing. |
@@ -141,6 +142,41 @@ across the plot, such as grid lines, and very pale ones, less than 64 levels
 from the background; trace a pale curve with `-c` instead. Curves in
 neighbouring colours of a colour map, such as viridis, are told apart, and two
 `-c` colours that match the same curve are an error.
+
+### Markers
+
+When the series share a colour and differ in their markers, as in many
+spreadsheet charts, give the pixel position of the marker in each series'
+legend key with `-m`, measured from the bottom-left corner like `-l`:
+
+```bash
+figrecover examples/markers.png \
+    -p 0,0 -p 10,0 -p 0,1 -l 55,83 -l 627,83 -l 55,185 \
+    -m 148,18 -m 260,18 -m 377,18 -m 483,18 --preview markers.preview.png
+```
+
+figrecover cuts each key's marker out of the legend, leaving out the line
+through it, and finds the markers of that shape in the plot. The CSV has a
+point at the middle of each marker, numbered by series in the order of the
+`-m` options, and figrecover prints how many markers each series has:
+
+```text
+figrecover: markers found in each series: 18, 19, 18, 18
+```
+
+The preview rings each marker, and each key, in a colour for its series:
+
+![Four series told apart by their markers](examples/markers.preview.png)
+
+- The markers can be filled or open, such as squares, diamonds, triangles,
+  circles and crosses, but each series needs a shape of its own. Use `-c`
+  instead for series in different colours.
+- Lines and error bars that cross a marker are allowed for, but a marker
+  covered by another, as where series cross or crowd together, is missed or
+  taken for the other's. Three markers are missed where the series above
+  cross. Check the preview.
+- The legend must be in the image, but may be in the plot area: its keys are
+  not taken for markers.
 
 ### Grids
 
@@ -296,6 +332,23 @@ curves = trace_curves(image, colours, calibration.origin)
 data = [calibration.to_data(curve) for curve in curves]
 ```
 
+For series told apart by their markers, `find_markers` takes the pixel
+position of each series' legend key, and returns the middle of each marker of
+that shape:
+
+```python
+from figrecover import Calibration, find_markers, load_image
+
+image = load_image("examples/markers.png")
+calibration = Calibration.from_points(
+    data=[(0, 0), (10, 0), (0, 1)],
+    pixels=[(55, 83), (627, 83), (55, 185)],
+)
+keys = [(148, 18), (260, 18), (377, 18), (483, 18)]
+markers = find_markers(image, keys, calibration.origin)
+data = [calibration.to_data(series) for series in markers]
+```
+
 `load_image` returns an RGB array, and `remove_grid(image)` paints over grid
 lines first, if needed.
 
@@ -338,13 +391,28 @@ lines first, if needed.
    A column without such a run gives one point at the median height of all
    its pixels.
 
+With `-m`, steps 4 to 7 give way to these:
+
+1. Each key's marker is the piece of ink, 64 levels or more from the
+   background, nearest the key's position. A key at least twice as wide as
+   tall has a line through its marker, along the rows with ink across half
+   the key or more; these rows are left out of the marker, as lines cross the
+   markers in the plot at other angles.
+2. A marker lies where a key's marker correlates with the plot by 0.6 or
+   more, and the plot has at least 60% of the key's ink. Where the markers of
+   several keys match less than three quarters of a marker's width apart, the
+   best match wins. Each marker's middle is placed to a fraction of a pixel.
+
 On the examples, the recovered values are within 0.03 of the true curves, about
-three pixels at the steepest point.
+three pixels at the steepest point, and the markers within 0.02 of the points
+they mark, about two pixels.
 
 ## Limitations
 
-- Curves are told apart by colour only, so curves of the same colour are traced
-  as one, and line styles and markers are ignored.
+- Curves are told apart by colour, or by the shapes of their markers, so
+  curves of the same colour without markers are traced as one, and line
+  styles are ignored. Series told apart by their markers give only the
+  markers that can be seen, not the lines between them.
 - A curve needs enough pixels to span the plot, so short curves and sparse
   dotted lines may not be found.
 - Where curves cross, the one drawn underneath loses a few pixels, and its
