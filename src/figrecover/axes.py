@@ -100,8 +100,9 @@ def read_axes(image: Image) -> Axes:
     numbers, and the y-axis tick labels the leftmost column of at least
     ``MIN_TICKS`` numbers above them, aligned on the right. Labels whose values
     do not fall in line with the others, such as misread ones, are dropped.
-    Each tick lies at the middle of its label. A scale factor printed beside
-    an axis, such as ``1e-5``, multiplies the values of its ticks.
+    Each tick lies at the middle of its label. A scale factor printed where
+    plotting libraries put one, such as ``1e-5`` above the y-axis or below
+    the x-axis, multiplies the values of its axis's ticks.
 
     Numbers may be written as powers of ten, such as 10^2 or 2x10^3 with
     superscript exponents. OCR often misses superscripts, reading 10^2 as 102,
@@ -143,7 +144,7 @@ def read_axes(image: Image) -> Axes:
     origin = _cross_axes(ink > 0, x_labels, y_labels)
 
     words = [text for text in texts if text not in numbers]
-    x_scale, y_scale = _scales(words, origin)
+    x_scale, y_scale = _scales(words, origin, y_labels)
     words = [word for word in words if not _SCALE.fullmatch(word.plain)]
     x_ticks = tuple(
         (label.x, value * x_scale)
@@ -372,12 +373,26 @@ def _first_line(
     return float(start + long[0]) if len(long) else default
 
 
-def _scales(words: Sequence[_Text], origin: Point) -> tuple[float, float]:
-    """Return the scale factors printed beside the x and y axes, or 1."""
+def _scales(
+    words: Sequence[_Text], origin: Point, y_labels: Sequence[_Text]
+) -> tuple[float, float]:
+    """Return the scale factors printed beside the x and y axes, or 1.
+
+    Plotting libraries print the y-axis's scale factor or offset above its
+    tick labels, starting at the axis, and the x-axis's below the axis. Text
+    elsewhere that looks like one, such as a legend entry of 1e-3, is not one.
+    """
+    top = max(label.top for label in y_labels)
+    reach = origin[0] + np.median([label.top - label.bottom for label in y_labels])
     scales = [1.0, 1.0]
     for word in words:
+        if word.y < origin[1]:
+            axis = 0
+        elif word.bottom > top and word.left <= reach:
+            axis = 1
+        else:
+            continue
         if match := _SCALE.fullmatch(word.plain):
-            axis = 1 if word.y > origin[1] else 0  # above the x-axis: the y-axis's
             scales[axis] = 10.0 ** int(match[1])
         elif _OFFSET.fullmatch(word.plain):
             msg = f"cannot read an axis whose ticks are offset by {word.text}"

@@ -312,6 +312,19 @@ def test_applies_scale_factors(monkeypatch: pytest.MonkeyPatch) -> None:
     assert found.x_title is None
 
 
+def test_ignores_text_like_scale_factors_in_the_plot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    labels = [*x_labels(["0", "1", "2"]), *y_labels(["0", "1", "2"])]
+    legend = [text("1e-3", 300, 250), text("1e-2", 300, 230)]
+    annotation = text("\N{MINUS SIGN}2 eV", 200, 150, width=40)
+    above_the_plot = text("1e-5", 300, 290)  # above the y labels, but not the axis
+
+    found = read(monkeypatch, [*labels, *legend, annotation, above_the_plot])
+
+    assert [value for _, value in found.y_ticks] == [0, 1, 2]
+
+
 def test_refuses_offsets(monkeypatch: pytest.MonkeyPatch) -> None:
     labels = [*x_labels(["0", "1", "2"]), *y_labels(["0", "1", "2"])]
 
