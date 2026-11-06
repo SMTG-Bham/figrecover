@@ -20,6 +20,11 @@ MIN_TICKS = 3
 
 _TICK_TOLERANCE = 0.1  # a tick label this fraction of the tick spacing off is misread
 _AXIS_REACH = 3  # an axis line may lie this many pixels beyond the first tick
+_TICK_GAP = 0.6  # tick marks and their padding take this many label heights
+_LINE_COVER = 0.9  # an axis line has ink along this fraction of its labels' span
+_MARK_LENGTH = 2  # a tick mark has ink this many pixels out from its axis line
+_SNAP_REACH = 0.25  # a label lies within this fraction of the tick spacing of its tick
+_SNAP_SLACK = 2  # labels centred within this many pixels of the tick marks stay put
 _RAISED = 0.25  # a superscript sits this fraction of its label's height up or more
 _RAISED_TICK = 1.4  # a label this many times taller than usual has a tick on top
 _NUMBER = re.compile(  # 1, -2.5, 1,000, 2.5e-3 or 10%
@@ -118,9 +123,13 @@ def read_axes(image: Image) -> Axes:
     An axis is logarithmic if more of its labels fall in line on a logarithmic
     scale than on a linear one.
 
-    The axes cross where the axis lines run beside the tick labels, or failing
-    that at the first tick on each axis. The titles are the nearest text
-    beyond the tick labels.
+    The axes cross where the axis lines run beside the tick labels. Without
+    an axis line, its place is taken to be just beyond the tick labels and
+    their tick marks, but no more than halfway to the first tick of the other
+    axis, so a curve along that tick is kept. Where the labels are not
+    centred on tick marks drawn outside an axis line, but end at them, as
+    rotated labels do, each tick lies at the mark nearest the end of its
+    label. The titles are the nearest text beyond the tick labels.
 
     The text is read with RapidOCR, which the ``ocr`` extra installs.
 
@@ -149,18 +158,36 @@ def read_axes(image: Image) -> Axes:
     height = float(np.median([text.top - text.bottom for text in y_column]))
     x_labels, x_values, x_log = _in_line(x_row, lambda t: t.x, "x", ink, height)
     y_labels, y_values, y_log = _in_line(y_column, lambda t: t.y, "y", ink, height)
-    origin = _cross_axes(ink > 0, x_labels, y_labels)
+    x_line, y_line = _axis_lines(ink > 0, x_labels, y_labels)
+    x_pixels = np.array([label.x for label in x_labels])
+    y_pixels = np.array([label.y for label in y_labels])
+    if y_line is not None:  # the x-axis line, with the x-axis ticks
+        marks = _x_marks(ink > 0, y_line)
+        ends = [[label.left for label in x_labels], [label.right for label in x_labels]]
+        x_pixels = _snap([x_pixels, *map(np.array, ends)], marks)
+    if x_line is not None:
+        marks = _y_marks(ink > 0, x_line)
+        ends = [[label.bottom for label in y_labels], [label.top for label in y_labels]]
+        y_pixels = _snap([y_pixels, *map(np.array, ends)], marks)
+    origin = (
+        x_line
+        if x_line is not None
+        else _beyond([t.right for t in y_labels], x_pixels[0], height),
+        y_line
+        if y_line is not None
+        else _beyond([t.top for t in x_labels], y_pixels[0], height),
+    )
 
     words = [text for text in texts if text not in {*x_labels, *y_labels}]
     x_scale, y_scale = _scales(words, origin, y_labels)
     words = [word for word in words if not _SCALE.fullmatch(word.plain)]
     x_ticks = tuple(
-        (label.x, value * x_scale)
-        for label, value in zip(x_labels, x_values, strict=True)
+        (float(pixel), value * x_scale)
+        for pixel, value in zip(x_pixels, x_values, strict=True)
     )
     y_ticks = tuple(
-        (label.y, value * y_scale)
-        for label, value in zip(y_labels, y_values, strict=True)
+        (float(pixel), value * y_scale)
+        for pixel, value in zip(y_pixels, y_values, strict=True)
     )
     return Axes(
         Calibration.from_ticks(x_ticks, y_ticks, origin, x_log=x_log, y_log=y_log),
@@ -391,14 +418,16 @@ def _most_in_line(
     return best
 
 
-def _cross_axes(
+def _axis_lines(
     ink: npt.NDArray[np.bool_], x_labels: Sequence[_Text], y_labels: Sequence[_Text]
-) -> Point:
-    """Find where the axis lines cross, or failing that the first ticks.
+) -> tuple[float | None, float | None]:
+    """Find the x-coordinate of the y-axis line and the y-coordinate of the x-axis's.
 
     The y-axis line is the leftmost column, from the right of the y-axis tick
-    labels to just past the first x-axis tick, with ink along at least half of
-    the span of the y-axis ticks. The x-axis line is found the same way.
+    labels to just past the first x-axis tick, with ink along ``_LINE_COVER``
+    of the span of the y-axis ticks, as a flat stretch of a curve on the first
+    tick seldom has. The x-axis line is found the same way. An axis without
+    such a line gives None.
     """
     height = ink.shape[0]
     first_x, last_x = x_labels[0].x, x_labels[-1].x
@@ -408,24 +437,98 @@ def _cross_axes(
     start = math.ceil(max(label.right for label in y_labels))
     rows = slice(height - math.floor(last_y), height - math.ceil(first_y) + 1)
     columns = ink[rows, start : math.floor(first_x) + _AXIS_REACH + 1]
-    x = _first_line(columns.sum(axis=0), last_y - first_y, start + 0.5, first_x)
+    x = _first_line(columns.sum(axis=0), last_y - first_y, start + 0.5)
 
     start = math.ceil(max(label.top for label in x_labels))
     rows = slice(height - math.floor(first_y) - _AXIS_REACH, height - start + 1)
     lines = ink[rows, math.ceil(first_x) : math.floor(last_x) + 1][::-1]
-    y = _first_line(lines.sum(axis=1), last_x - first_x, start - 0.5, first_y)
+    y = _first_line(lines.sum(axis=1), last_x - first_x, start - 0.5)
     return x, y
 
 
+def _beyond(edges: Sequence[float], first: float, height: float) -> float:
+    """Return where a missing axis line lies, beyond its labels' inner edges.
+
+    Tick marks and their padding take ``_TICK_GAP`` of a label's ``height``
+    beyond the labels, but the line lies no more than halfway from them to
+    ``first``, the first tick of the other axis.
+    """
+    edge = float(np.median(edges))
+    return min(edge + _TICK_GAP * height, (edge + float(first)) / 2)
+
+
 def _first_line(
-    counts: npt.NDArray[np.intp], span: float, start: float, default: float
-) -> float:
-    """Return the position of the first count of at least half the span.
+    counts: npt.NDArray[np.intp], span: float, start: float
+) -> float | None:
+    """Return the position of the first count of ``_LINE_COVER`` of the span, if any.
 
     ``start`` is the position of the centre of the first pixel counted.
     """
-    long = np.flatnonzero(counts >= span / 2)
-    return float(start + long[0]) if len(long) else default
+    long = np.flatnonzero(counts >= span * _LINE_COVER)
+    return float(start + long[0]) if len(long) else None
+
+
+def _x_marks(ink: npt.NDArray[np.bool_], line: float) -> npt.NDArray[np.float64]:
+    """Return the x-coordinates of the tick marks below the x-axis line.
+
+    ``line`` is the line's lowest row, as ``_axis_lines`` finds it, and a tick
+    mark has ink in the ``_MARK_LENGTH`` rows below it.
+    """
+    row = round(ink.shape[0] - line - 0.5)
+    return _middles(ink[row + 1 : row + 1 + _MARK_LENGTH].all(axis=0))
+
+
+def _y_marks(ink: npt.NDArray[np.bool_], line: float) -> npt.NDArray[np.float64]:
+    """Return the y-coordinates of the tick marks left of the y-axis line.
+
+    ``line`` is the line's leftmost column, as ``_axis_lines`` finds it, and a
+    tick mark has ink in the ``_MARK_LENGTH`` columns left of it.
+    """
+    column = round(line - 0.5)
+    marked = ink[:, max(column - _MARK_LENGTH, 0) : column].all(axis=1)
+    return np.asarray(ink.shape[0] - _middles(marked), dtype=np.float64)
+
+
+def _middles(marked: npt.NDArray[np.bool_]) -> npt.NDArray[np.float64]:
+    """Return the middles of the runs of marked pixels, as pixel coordinates."""
+    edges = np.flatnonzero(np.diff(np.concatenate(([0], marked.astype(np.int8), [0]))))
+    return (edges[::2] + edges[1::2]) / 2
+
+
+def _snap(
+    anchors: Sequence[npt.NDArray[np.float64]], marks: npt.NDArray[np.float64]
+) -> npt.NDArray[np.float64]:
+    """Return where the tick of each label lies, from anchors and tick marks.
+
+    The anchors are points of each label by which it may be aligned with its
+    tick: first its middle, then its ends. Ticks lie at the labels' middles,
+    unless those lie more than ``_SNAP_SLACK`` from the marks, by their median
+    distance, and the ends at one side lie at most half as far, and within
+    ``_SNAP_REACH`` of the tick spacing: labels end at their ticks, as rotated
+    labels do. Each label then moves to the mark nearest that end, if it is
+    as close. Tick marks are not always exactly where the ticks are, as
+    plotting libraries may move them to whole pixels, so centred labels stay.
+    """
+    middles, *ends = anchors
+    spacing = float(np.median(np.diff(np.sort(middles))))
+    if len(marks) < MIN_TICKS:
+        return middles
+
+    def offsets(points: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+        return np.abs(points[:, np.newaxis] - marks).min(axis=1)
+
+    def offset(points: npt.NDArray[np.float64]) -> float:
+        return float(np.median(offsets(points)))
+
+    best = min(ends, key=offset)
+    if (
+        offset(middles) <= _SNAP_SLACK
+        or offset(best) > _SNAP_REACH * spacing
+        or 2 * offset(best) > offset(middles)
+    ):
+        return middles
+    nearest = marks[np.abs(best[:, np.newaxis] - marks).argmin(axis=1)]
+    return np.where(offsets(best) <= _SNAP_REACH * spacing, nearest, best)
 
 
 def _scales(

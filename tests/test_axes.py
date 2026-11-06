@@ -374,14 +374,78 @@ def test_needs_y_axis_tick_labels(monkeypatch: pytest.MonkeyPatch) -> None:
         read(monkeypatch, [*x_labels(["0", "1", "2"]), *y_labels(["0", "1"])])
 
 
-def test_uses_the_first_ticks_without_axis_lines(
+def test_starts_beyond_the_labels_without_axis_lines(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     labels = [*x_labels(["0", "1", "2"]), *y_labels(["0", "1", "2"])]
 
     found = read(monkeypatch, labels, lines=False)
 
-    assert found.calibration.origin == (80.0, 80.0)
+    # Beyond the right of the y labels and the top of the x labels by 0.6 of
+    # a label's height, for their tick marks.
+    assert found.calibration.origin == pytest.approx((50 + 8.4, 52 + 8.4))
+
+
+def test_keeps_the_first_tick_in_without_axis_lines(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The first y tick lies 14 pixels above the top of the x labels.
+    labels = [
+        *x_labels(["0", "1", "2"]),
+        *(text(v, 40, 66 + 60 * i) for i, v in enumerate("012")),
+    ]
+
+    found = read(monkeypatch, labels, lines=False)
+
+    assert found.calibration.origin[1] == pytest.approx((52 + 66) / 2)
+
+
+def marked_plot(x_marks: Sequence[int], y_marks: Sequence[int], line: int = 1) -> Image:
+    """Draw a blank plot with axis lines and tick marks outside them."""
+    image = plot()
+    corner = (AXIS_LINES[0], HEIGHT - AXIS_LINES[1])
+    cv2.line(image, (corner[0], 0), corner, (0, 0, 0), line)
+    cv2.line(image, corner, (WIDTH - 1, corner[1]), (0, 0, 0), line)
+    reach = line // 2 + 5
+    for x in x_marks:
+        cv2.line(image, (x, corner[1]), (x, corner[1] + reach), (0, 0, 0), 1)
+    for y in y_marks:
+        cv2.line(
+            image,
+            (corner[0] - reach, HEIGHT - y),
+            (corner[0], HEIGHT - y),
+            (0, 0, 0),
+            1,
+        )
+    return image
+
+
+@pytest.mark.parametrize("line", [1, 3])
+def test_moves_ticks_to_the_marks_drawn(
+    monkeypatch: pytest.MonkeyPatch, line: int
+) -> None:
+    # Rotated x labels end at their ticks, rather than centring on them.
+    rotated = [text(value, 65 + 80 * i, 45, width=30) for i, value in enumerate("012")]
+    labels = [*rotated, *y_labels(["0", "1", "2"])]
+    monkeypatch.setattr(axes, "_read_text", lambda _image: labels)
+
+    found = read_axes(marked_plot([80, 160, 240], [81, 141, 201], line))
+
+    # The centres of the marks' pixels; the y labels are centred on theirs.
+    assert [pixel for pixel, _ in found.x_ticks] == [80.5, 160.5, 240.5]
+    assert [pixel for pixel, _ in found.y_ticks] == [80, 140, 200]
+
+
+def test_keeps_ticks_at_labels_far_from_the_marks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    labels = [*x_labels(["0", "1", "2"]), *y_labels(["0", "1", "2"])]
+    monkeypatch.setattr(axes, "_read_text", lambda _image: labels)
+
+    found = read_axes(marked_plot([120, 200, 280], [110, 170, 230]))  # between
+
+    assert [pixel for pixel, _ in found.x_ticks] == [80, 160, 240]
+    assert [pixel for pixel, _ in found.y_ticks] == [80, 140, 200]
 
 
 def test_applies_scale_factors(monkeypatch: pytest.MonkeyPatch) -> None:
