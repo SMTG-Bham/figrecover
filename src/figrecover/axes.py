@@ -141,8 +141,9 @@ def read_axes(image: Image) -> Axes:
 
     Raises:
         ModuleNotFoundError: If the ``ocr`` extra is not installed.
-        ValueError: If an axis has too few tick labels in line, or an offset
-            to add to its tick values.
+        ValueError: If an axis has too few tick labels in line, an offset to
+            add to its tick values, or the plot has a second y-axis, on the
+            right, with other values.
     """
     texts = _read_text(image)
     ink = ink_mask(image)
@@ -189,8 +190,16 @@ def read_axes(image: Image) -> Axes:
         (float(pixel), value * y_scale)
         for pixel, value in zip(y_pixels, y_values, strict=True)
     )
+    calibration = Calibration.from_ticks(
+        x_ticks, y_ticks, origin, x_log=x_log, y_log=y_log
+    )
+    if y_line is None:
+        end = max(label.right for label in x_labels)
+    else:
+        end = _line_end(ink > 0, y_line, origin[0])
+    _check_one_y_axis(numbers, end, calibration, ink, height)
     return Axes(
-        Calibration.from_ticks(x_ticks, y_ticks, origin, x_log=x_log, y_log=y_log),
+        calibration,
         x_ticks,
         y_ticks,
         _x_title(words, x_labels),
@@ -466,6 +475,50 @@ def _first_line(
     """
     long = np.flatnonzero(counts >= span * _LINE_COVER)
     return float(start + long[0]) if len(long) else None
+
+
+def _line_end(ink: npt.NDArray[np.bool_], line: float, start: float) -> float:
+    """Return where the x-axis line at ``line`` ends, running right from ``start``."""
+    run = ink[round(ink.shape[0] - line - 0.5), math.ceil(start) :]
+    return math.ceil(start) + (len(run) if run.all() else int(np.argmin(run)))
+
+
+def _check_one_y_axis(
+    numbers: Sequence[_Text],
+    end: float,
+    calibration: Calibration,
+    ink: npt.NDArray[np.uint8],
+    height: float,
+) -> None:
+    """Refuse a second y-axis, on the right, whose values differ from the left's.
+
+    Its tick labels would be a column of numbers beyond ``end``, the right end
+    of the x-axis, aligned on the left, with values in line. A copy of the
+    left y-axis on the right, with the same values, is fine.
+
+    Raises:
+        ValueError: If there is such an axis.
+    """
+    beyond = [number for number in numbers if number.left > end]
+    columns = [
+        column
+        for column in _groups(beyond, lambda text: text.left)
+        if len(column) >= MIN_TICKS
+    ]
+    if not columns:
+        return
+    try:
+        labels, values, _ = _in_line(columns[0], lambda t: t.y, "right", ink, height)
+    except ValueError:
+        return  # not an axis
+    heights = np.array([[0.0, label.y] for label in labels])
+    left = calibration.to_data(heights)[:, 1]
+    if not np.allclose(left, values, atol=_TICK_TOLERANCE * np.ptp(values)):
+        msg = (
+            "the plot has a second y-axis, on the right, with other values than "
+            "the left's; crop it out of the image"
+        )
+        raise ValueError(msg)
 
 
 def _x_marks(ink: npt.NDArray[np.bool_], line: float) -> npt.NDArray[np.float64]:

@@ -369,6 +369,67 @@ def test_reads_raised_last_digits_as_exponents(
     assert found.calibration.x_log is log
 
 
+def right_labels(values: Sequence[str]) -> list[_Text]:
+    """Return labels of a second y-axis, beyond the x-axis line, aligned left."""
+    return [
+        _Text(value, 360, 73 + 60 * i, 380, 87 + 60 * i)
+        for i, value in enumerate(values)
+    ]
+
+
+def short_plot() -> Image:
+    """Draw a blank plot whose x-axis line ends at x = 340."""
+    image = plot()
+    image[HEIGHT - AXIS_LINES[1], 341:] = 255
+    return image
+
+
+def test_refuses_a_second_y_axis(monkeypatch: pytest.MonkeyPatch) -> None:
+    labels = [
+        *x_labels(["0", "1", "2"]),
+        *y_labels(["0", "1", "2"]),
+        *right_labels(["0", "50", "100"]),
+    ]
+    monkeypatch.setattr(axes, "_read_text", lambda _image: labels)
+
+    with pytest.raises(ValueError, match="second y-axis, on the right"):
+        read_axes(short_plot())
+
+
+@pytest.mark.parametrize(
+    "right",
+    [
+        ["0", "1", "2"],  # the left axis's values again
+        ["0", "5", "1"],  # not in line, so not an axis
+        ["0", "1"],  # too few labels
+    ],
+)
+def test_accepts_other_labels_on_the_right(
+    monkeypatch: pytest.MonkeyPatch, right: list[str]
+) -> None:
+    labels = [
+        *x_labels(["0", "1", "2"]),
+        *y_labels(["0", "1", "2"]),
+        *right_labels(right),
+    ]
+    monkeypatch.setattr(axes, "_read_text", lambda _image: labels)
+
+    read_axes(short_plot())
+
+
+def test_finds_a_second_y_axis_without_axis_lines(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    labels = [
+        *x_labels(["0", "1", "2"]),
+        *y_labels(["0", "1", "2"]),
+        *right_labels(["5", "6", "7"]),
+    ]
+
+    with pytest.raises(ValueError, match="second y-axis"):
+        read(monkeypatch, labels, lines=False)
+
+
 def test_needs_y_axis_tick_labels(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(ValueError, match="no column of 3 or more numbers"):
         read(monkeypatch, [*x_labels(["0", "1", "2"]), *y_labels(["0", "1"])])
