@@ -21,11 +21,20 @@ MIN_TICKS = 3
 _TICK_TOLERANCE = 0.1  # a tick label this fraction of the tick spacing off is misread
 _AXIS_REACH = 3  # an axis line may lie this many pixels beyond the first tick
 _NUMBER = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)")
+_POWER = re.compile(  # 10^2, 10^{2}, 10-2 or 2x10^2: a power of ten, as OCR reads it
+    r"(?:(\d+(?:\.\d*)?|\.\d+)[x\u00d7])?10(?:\^\{?|(?=[+-]))([+-]?\d+)\}?"
+)
+_RUN_TOGETHER = re.compile(r"10(\d+)")  # 102: 10^2 read without its superscript
 _SCALE = re.compile(r"(?:1e|[x\u00d7]10\^?)([+-]?\d+)")  # 1e-5 or 10 to the -5
 _OFFSET = re.compile(r"[+-].*\d(?:e|[x\u00d7]10).*")  # +1e3, added to the ticks
-_PLAIN = str.maketrans(  # minus signs, en dashes and superscript signs and digits
-    "\u2212\u2013\u207b\u207a\u2070\u00b9\u00b2\u00b3\u2074\u2075\u2076\u2077\u2078\u2079",
-    "---+0123456789",
+# Superscript signs and digits, and the degree and ordinal signs that OCR reads
+# for a superscript zero.
+_SUPERSCRIPT = re.compile(
+    r"\^?([\u207a\u207b\u2070\u00b9\u00b2\u00b3\u2074-\u2079\u00b0\u00ba]+)"
+)
+_PLAIN = str.maketrans(  # minus signs, en dashes and superscripts
+    "\u2212\u2013\u207b\u207a\u2070\u00b9\u00b2\u00b3\u2074\u2075\u2076\u2077\u2078\u2079\u00b0\u00ba",
+    "---+012345678900",
 )
 
 
@@ -35,7 +44,8 @@ class Axes:
 
     Attributes:
         calibration: The map from pixel to data coordinates, fitted to the
-            ticks, whose origin is where the axis lines cross.
+            ticks, whose origin is where the axis lines cross, and which is
+            logarithmic along each logarithmic axis.
         x_ticks: The pixel x-coordinate and value of each x-axis tick read,
             left to right.
         y_ticks: The pixel y-coordinate and value of each y-axis tick read,
@@ -73,8 +83,13 @@ class _Text:
 
     @property
     def plain(self) -> str:
-        """Return the text without spaces, superscripts or typographic minus signs."""
-        return self.text.translate(_PLAIN).replace(" ", "")
+        """Return the text without spaces or typographic minus signs.
+
+        Superscripts become plain characters after a caret, so 10 to the
+        power of -2 reads as 10^-2.
+        """
+        text = _SUPERSCRIPT.sub(r"^\1", self.text.replace(" ", ""))
+        return text.translate(_PLAIN)
 
 
 def read_axes(image: Image) -> Axes:
@@ -86,6 +101,13 @@ def read_axes(image: Image) -> Axes:
     do not fall in line with the others, such as misread ones, are dropped.
     Each tick lies at the middle of its label. A scale factor printed beside
     an axis, such as ``1e-5``, multiplies the values of its ticks.
+
+    Numbers may be written as powers of ten, such as 10^2 or 2x10^3 with
+    superscript exponents. OCR often misses superscripts, reading 10^2 as 102,
+    so if any label on an axis is a power of ten, so are those that read as 10
+    followed by digits.
+    An axis is logarithmic if more of its labels fall in line on a logarithmic
+    scale than on a linear one.
 
     The axes cross where the axis lines run beside the tick labels, or failing
     that at the first tick on each axis. The titles are the nearest text
@@ -105,19 +127,29 @@ def read_axes(image: Image) -> Axes:
             to add to its tick values.
     """
     texts = _read_text(image)
-    numbers = [text for text in texts if _NUMBER.fullmatch(text.plain)]
-    x_labels = _in_line(_lowest_row(numbers), lambda text: text.x, "x")
+    numbers = [
+        text
+        for text in texts
+        if _NUMBER.fullmatch(text.plain) or _POWER.fullmatch(text.plain)
+    ]
+    x_labels, x_values, x_log = _in_line(_lowest_row(numbers), lambda t: t.x, "x")
     above = [text for text in numbers if text.y > max(t.top for t in x_labels)]
-    y_labels = _in_line(_leftmost_column(above), lambda text: text.y, "y")
+    y_labels, y_values, y_log = _in_line(_leftmost_column(above), lambda t: t.y, "y")
     origin = _cross_axes(image, x_labels, y_labels)
 
     words = [text for text in texts if text not in numbers]
     x_scale, y_scale = _scales(words, origin)
     words = [word for word in words if not _SCALE.fullmatch(word.plain)]
-    x_ticks = tuple((label.x, float(label.plain) * x_scale) for label in x_labels)
-    y_ticks = tuple((label.y, float(label.plain) * y_scale) for label in y_labels)
+    x_ticks = tuple(
+        (label.x, value * x_scale)
+        for label, value in zip(x_labels, x_values, strict=True)
+    )
+    y_ticks = tuple(
+        (label.y, value * y_scale)
+        for label, value in zip(y_labels, y_values, strict=True)
+    )
     return Axes(
-        Calibration.from_ticks(x_ticks, y_ticks, origin),
+        Calibration.from_ticks(x_ticks, y_ticks, origin, x_log=x_log, y_log=y_log),
         x_ticks,
         y_ticks,
         _x_title(words, x_labels),
@@ -196,17 +228,62 @@ def _groups(texts: Sequence[_Text], key: Callable[[_Text], float]) -> list[list[
 
 def _in_line(
     labels: Sequence[_Text], position: Callable[[_Text], float], name: str
-) -> list[_Text]:
+) -> tuple[list[_Text], list[float], bool]:
     """Return the most tick labels whose values are in line with their positions.
 
-    Each pair of labels sets a line, and the line that most labels lie close
-    to wins, so a misread label cannot skew it.
+    The values are taken on a linear scale and on a logarithmic one, and the
+    scale on which more labels are in line wins, the linear one in a tie.
+
+    Returns:
+        The labels in line, by position, their values, and whether the scale
+        is logarithmic.
     """
+    labels = sorted(labels, key=position)
     pixels = np.array([position(label) for label in labels])
-    values = np.array([float(label.plain) for label in labels])
-    tolerance = _TICK_TOLERANCE * np.median(np.diff(np.sort(pixels)))
-    best = np.zeros(len(labels), dtype=np.bool_)
-    for first, second in itertools.combinations(range(len(labels)), 2):
+    values = _values(labels)
+    tolerance = _TICK_TOLERANCE * np.median(np.diff(pixels))
+    linear = _most_in_line(pixels, values, tolerance)
+    exponents = np.log10(values, out=np.full_like(values, np.nan), where=values > 0)
+    logarithmic = _most_in_line(pixels, exponents, tolerance)
+    log = bool(np.count_nonzero(logarithmic) > np.count_nonzero(linear))
+    best = logarithmic if log else linear
+    if np.count_nonzero(best) < MIN_TICKS:
+        msg = (
+            f"only {np.count_nonzero(best)} of the {len(labels)} {name}-axis tick "
+            "labels are in line, on a linear or a logarithmic scale"
+        )
+        raise ValueError(msg)
+    return list(itertools.compress(labels, best)), values[best].tolist(), log
+
+
+def _values(labels: Sequence[_Text]) -> npt.NDArray[np.float64]:
+    """Return the values of tick labels, which are numbers or powers of ten.
+
+    If any label is a power of ten, so are those that read as 10 followed by
+    digits, such as 102 for 10^2, as OCR often misses superscripts.
+    """
+    powers = any(_POWER.fullmatch(label.plain) for label in labels)
+    values = []
+    for label in labels:
+        if powers and (match := _RUN_TOGETHER.fullmatch(label.plain)):
+            values.append(10.0 ** int(match[1]))
+        elif match := _POWER.fullmatch(label.plain):
+            values.append(float(match[1] or 1) * 10.0 ** int(match[2]))
+        else:
+            values.append(float(label.plain))
+    return np.array(values)
+
+
+def _most_in_line(
+    pixels: npt.NDArray[np.float64], values: npt.NDArray[np.float64], tolerance: float
+) -> npt.NDArray[np.bool_]:
+    """Return which values lie on the line that the most of them lie close to.
+
+    Each pair of values sets a line, so a misread value cannot skew it. Values
+    that are not a number lie on no line.
+    """
+    best = np.zeros(len(values), dtype=np.bool_)
+    for first, second in itertools.combinations(np.flatnonzero(~np.isnan(values)), 2):
         if values[first] == values[second]:
             continue
         per_unit = (pixels[second] - pixels[first]) / (values[second] - values[first])
@@ -214,13 +291,7 @@ def _in_line(
         in_line = np.abs(pixels - expected) <= tolerance
         if np.count_nonzero(in_line) > np.count_nonzero(best):
             best = in_line
-    if np.count_nonzero(best) < MIN_TICKS:
-        msg = (
-            f"only {np.count_nonzero(best)} of the {len(labels)} {name}-axis tick "
-            "labels are in line; is the axis logarithmic?"
-        )
-        raise ValueError(msg)
-    return sorted(itertools.compress(labels, best), key=position)
+    return best
 
 
 def _cross_axes(

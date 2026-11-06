@@ -1,5 +1,6 @@
 """Tests for reading the axes of a plot from the text in its image."""
 
+import math
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -45,6 +46,26 @@ def test_calibrates_from_the_ticks(labelled: Axes) -> None:
     data = labelled.calibration.to_data(pixels)
 
     np.testing.assert_allclose(data, [(0, 0), (10, 0), (0, 1)], atol=0.03)
+    assert not labelled.calibration.x_log
+    assert not labelled.calibration.y_log
+
+
+def test_reads_logarithmic_axes() -> None:
+    found = read_axes(load_image(EXAMPLES / "logarithmic.png"))
+    # The pixel positions of (1, 0.1), (10^4, 0.1) and (1, 10^3) that
+    # examples/make_examples.py prints.
+    pixels = [(93, 66), (610, 66), (93, 380)]
+
+    data = found.calibration.to_data(pixels)
+
+    assert [value for _, value in found.x_ticks] == [1, 10, 100, 1000, 10000]
+    assert [value for _, value in found.y_ticks] == [0.1, 1, 10, 100, 1000]
+    assert found.calibration.x_log
+    assert found.calibration.y_log
+    expected = [(1, 0.1), (1e4, 0.1), (1, 1e3)]
+    np.testing.assert_allclose(np.log10(data), np.log10(expected), atol=0.01)
+    assert found.x_title == "Frequency (Hz)"
+    assert found.y_title == "Power (mW)"
 
 
 @pytest.mark.parametrize("name", ["labelled", "spectrum"])
@@ -143,10 +164,62 @@ def test_drops_misread_tick_labels(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_needs_tick_labels_in_line(monkeypatch: pytest.MonkeyPatch) -> None:
-    labels = [*x_labels(["1", "10", "100", "1000"]), *y_labels(["0", "1", "2"])]
+    labels = [*x_labels(["1", "3", "2", "4"]), *y_labels(["0", "1", "2"])]
 
-    with pytest.raises(ValueError, match="only 2 of the 4 x-axis tick labels"):
+    with pytest.raises(
+        ValueError, match="only 2 of the 4 x-axis tick labels are in line, on a"
+    ):
         read(monkeypatch, labels)
+
+
+def test_reads_powers_of_ten(monkeypatch: pytest.MonkeyPatch) -> None:
+    # As OCR reads 10 to the -1, 0, 1 and 2, missing some superscripts.
+    minus_one = "10\N{SUPERSCRIPT MINUS}\N{SUPERSCRIPT ONE}"
+    labels = [
+        *x_labels([minus_one, "100", "101", "10^{2"]),
+        *y_labels(["10-1", "10\N{DEGREE SIGN}", "10^\N{SUPERSCRIPT ONE}"]),
+    ]
+
+    found = read(monkeypatch, labels)
+
+    assert [value for _, value in found.x_ticks] == [0.1, 1, 10, 100]
+    assert [value for _, value in found.y_ticks] == [0.1, 1, 10]
+    assert found.calibration.x_log
+    assert found.calibration.y_log
+    np.testing.assert_allclose(
+        found.calibration.to_data([(120, 110)]), [(10**-0.5, 10**-0.5)]
+    )
+
+
+def test_reads_multiples_of_powers_of_ten(monkeypatch: pytest.MonkeyPatch) -> None:
+    # matplotlib labels minor ticks too on an axis spanning about a decade.
+    one = "10\N{DEGREE SIGN}"
+    values = {one: 1, f"2 \N{MULTIPLICATION SIGN} {one}": 2, "3x10^0": 3}
+    minor_labels = [
+        text(label, 40, 80 + 200 * math.log10(value)) for label, value in values.items()
+    ]
+
+    found = read(monkeypatch, [*x_labels(["0", "1", "10", "100"]), *minor_labels])
+
+    # 0 is not in line on the logarithmic x-axis.
+    assert [value for _, value in found.x_ticks] == [1, 10, 100]
+    assert [value for _, value in found.y_ticks] == [1, 2, 3]
+    assert found.calibration.x_log
+    assert found.calibration.y_log
+
+
+def test_reads_numbers_like_102_without_powers_of_ten(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    labels = [*x_labels(["100", "101", "102"]), *y_labels(["1", "10", "100"])]
+
+    found = read(monkeypatch, labels)
+
+    # 100, 101 and 102 fall in line on both scales, and the linear one wins.
+    assert [value for _, value in found.x_ticks] == [100, 101, 102]
+    assert [value for _, value in found.y_ticks] == [1, 10, 100]
+    assert not found.calibration.x_log
+    assert found.calibration.y_log
 
 
 def test_needs_y_axis_tick_labels(monkeypatch: pytest.MonkeyPatch) -> None:

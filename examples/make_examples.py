@@ -14,6 +14,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import numpy.typing as npt
+from matplotlib.axes import Axes
+from matplotlib.figure import Figure
 
 type Curve = Callable[[npt.NDArray[np.float64]], npt.NDArray[np.float64]]
 
@@ -55,6 +57,11 @@ def trend(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
     return 0.4 + 0.2 * x
 
 
+def lowpass(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return the power through a low-pass filter, falling a hundredfold a decade."""
+    return 1e3 / (1 + (x / 100) ** 2)
+
+
 def draw(
     name: str,
     curves: dict[str, Curve],
@@ -79,10 +86,32 @@ def draw(
         axes.grid(color="0.25", linewidth=0.8)
     else:
         axes.spines[["top", "right"]].set_visible(False)
+    save(name, figure, axes, [(0, 0), (10, 0), (0, 1)])
+
+
+def draw_log(name: str, curve: Curve, titles: tuple[str, str]) -> None:
+    """Draw a curve on logarithmic axes over x from 1 to 10^4, and print the points.
+
+    matplotlib labels the ticks with powers of ten, and leaves a margin around
+    the curve, so the axes do not start at a labelled tick. The layout makes
+    room for the taller tick labels.
+    """
+    figure, axes = plt.subplots(figsize=(6.4, 4), dpi=100, layout="constrained")
+    x = np.logspace(0, 4, 2000)
+    axes.loglog(x, curve(x), color="black", linewidth=1.5)
+    axes.set(xlabel=titles[0], ylabel=titles[1])
+    axes.spines[["top", "right"]].set_visible(False)
+    save(name, figure, axes, [(1, 0.1), (1e4, 0.1), (1, 1e3)])
+
+
+def save(
+    name: str, figure: Figure, axes: Axes, points: list[tuple[float, float]]
+) -> None:
+    """Save a plot, and print the pixel positions of reference points in it."""
     figure.savefig(HERE / f"{name}.png", facecolor="white")
 
     # Display coordinates are pixels from the bottom-left corner.
-    pixels = axes.transData.transform([(0, 0), (10, 0), (0, 1)]).round().astype(int)
+    pixels = axes.transData.transform(points).round().astype(int)
     print(name, " ".join(f"-l {x},{y}" for x, y in pixels))
     plt.close(figure)
 
@@ -93,3 +122,4 @@ series = {"tab:blue": decay, "tab:orange": growth, "tab:green": wave, "black": t
 draw("series", series, 3, grid=False)
 titles = ("Time (s)", "Voltage (mV)")
 draw("labelled", {"black": ringing}, None, grid=False, titles=titles)
+draw_log("logarithmic", lowpass, ("Frequency (Hz)", "Power (mW)"))
