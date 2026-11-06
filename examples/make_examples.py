@@ -16,6 +16,7 @@ import numpy as np
 import numpy.typing as npt
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
+from matplotlib.legend import Legend
 
 type Curve = Callable[[npt.NDArray[np.float64]], npt.NDArray[np.float64]]
 
@@ -104,15 +105,49 @@ def draw_log(name: str, curve: Curve, titles: tuple[str, str]) -> None:
     save(name, figure, axes, [(1, 0.1), (1e4, 0.1), (1, 1e3)])
 
 
+def draw_markers(name: str, curves: dict[str, Curve]) -> None:
+    """Draw black lines through markers, keyed by marker, and print the points.
+
+    The markers lie every half unit of x from 0.5 to 9.5, and the legend lies
+    below the axes, as spreadsheets draw it. The pixel positions of the
+    legend's markers are printed too, for figrecover's -m option.
+    """
+    figure, axes = plt.subplots(figsize=(6.4, 4), dpi=100, layout="constrained")
+    x = np.arange(0.5, 10, 0.5)
+    for marker, curve in curves.items():
+        style = {"marker": marker, "label": curve.__name__.capitalize()}
+        if marker == "o":
+            style["markerfacecolor"] = "white"
+        axes.plot(x, curve(x), color="black", linewidth=1, **style)
+    axes.set(xlabel="x", ylabel="y", xlim=(0, 10), ylim=(0, 3))
+    axes.spines[["top", "right"]].set_visible(False)
+    legend = axes.legend(
+        loc="upper center", bbox_to_anchor=(0.5, -0.15), ncols=len(curves)
+    )
+    save(name, figure, axes, [(0, 0), (10, 0), (0, 1)], legend)
+
+
 def save(
-    name: str, figure: Figure, axes: Axes, points: list[tuple[float, float]]
+    name: str,
+    figure: Figure,
+    axes: Axes,
+    points: list[tuple[float, float]],
+    legend: Legend | None = None,
 ) -> None:
-    """Save a plot, and print the pixel positions of reference points in it."""
+    """Save a plot, and print the pixel positions of reference points in it.
+
+    With a legend, also print the pixel positions of its markers.
+    """
     figure.savefig(HERE / f"{name}.png", facecolor="white")
 
     # Display coordinates are pixels from the bottom-left corner.
     pixels = axes.transData.transform(points).round().astype(int)
-    print(name, " ".join(f"-l {x},{y}" for x, y in pixels))
+    options = [f"-l {x},{y}" for x, y in pixels]
+    for handle in legend.get_lines() if legend else []:
+        # A legend line with one marker has three points, marked in the middle.
+        x, y = handle.get_transform().transform(handle.get_xydata()[1])
+        options.append(f"-m {x:.0f},{y:.0f}")
+    print(name, " ".join(options))
     plt.close(figure)
 
 
@@ -123,3 +158,4 @@ draw("series", series, 3, grid=False)
 titles = ("Time (s)", "Voltage (mV)")
 draw("labelled", {"black": ringing}, None, grid=False, titles=titles)
 draw_log("logarithmic", lowpass, ("Frequency (Hz)", "Power (mW)"))
+draw_markers("markers", {"D": decay, "s": growth, "o": wave, "x": trend})

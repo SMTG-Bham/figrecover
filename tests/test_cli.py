@@ -24,6 +24,11 @@ SPECTRUM = [str(EXAMPLES / "spectrum.png"), *POINTS]
 GRID = [str(EXAMPLES / "grid.png"), *POINTS]
 SERIES = [str(EXAMPLES / "series.png"), *POINTS, *LOCATIONS]
 LABELLED = str(EXAMPLES / "labelled.png")
+# The pixel positions of POINTS, and of the legend's markers, that
+# examples/make_examples.py prints.
+MARKER_LOCATIONS = ["-l", "55,83", "-l", "627,83", "-l", "55,185"]
+MARKER_KEYS = ["-m", "148,18", "-m", "260,18", "-m", "377,18", "-m", "483,18"]
+MARKERS = [str(EXAMPLES / "markers.png"), *POINTS, *MARKER_LOCATIONS]
 LOGARITHMIC = str(EXAMPLES / "logarithmic.png")
 
 
@@ -159,6 +164,33 @@ def test_traces_the_given_colours(
         assert np.any(np.all(image == (blue, green, red), axis=-1))
 
 
+def test_finds_series_by_their_markers(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    preview = tmp_path / "preview.png"
+
+    assert main([*MARKERS, *MARKER_KEYS, "--preview", str(preview)]) == 0
+
+    captured = capsys.readouterr()
+    data = read_csv(captured.out, header="series,x,y")
+    counts = [np.count_nonzero(data[:, 0] == series) for series in range(1, 5)]
+    found = ", ".join(map(str, counts))
+    assert captured.err == f"figrecover: markers found in each series: {found}\n"
+    for series, curve in enumerate([decay, growth, wave, trend], start=1):
+        points = data[data[:, 0] == series, 1:]
+        # The markers lie every half unit from 0.5 to 9.5. Some are hidden
+        # where the series cross.
+        assert len(points) >= 18
+        np.testing.assert_allclose(
+            points[:, 0], np.round(2 * points[:, 0]) / 2, atol=0.03
+        )
+        np.testing.assert_allclose(points[:, 1], curve(points[:, 0]), atol=0.03)
+    image = cv2.imread(str(preview))
+    assert image is not None
+    for red, green, blue in cli.SERIES_COLOURS[:4]:  # each series' colour
+        assert np.any(np.all(image == (blue, green, red), axis=-1))
+
+
 def test_writes_one_series_without_a_series_column(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -285,6 +317,11 @@ def test_can_be_cancelled(monkeypatch: pytest.MonkeyPatch) -> None:
             [*SPECTRUM, "-l", "80,44", "-l", "5760,44", "-l", "80,147"],
             "the -l location 5760,44 lies outside the 640x400 image",
         ),
+        (
+            [*MARKERS, "-m", "148,18", "-m", "148,-1"],
+            "the -m position 148,-1 lies outside the 640x400 image",
+        ),
+        ([*MARKERS, "-m", "148,18", "-m", "600,18"], "found no marker near 600,18"),
     ],
 )
 def test_reports_errors(
@@ -320,6 +357,7 @@ def test_accepts_points_with_spaces_and_exponents(
         ([*SERIES, "-c", "red"], "expected a colour written as RRGGBB, got 'red'"),
         ([*SERIES, "-c", "#12345"], "expected a colour written as RRGGBB"),
         ([*SERIES, "-n", "2", "-c", "000000"], "not allowed with argument"),
+        ([*SERIES, "-c", "000000", "-m", "1,1"], "not allowed with argument"),
         (["plot.png", "-l", "80,44"], "give the reference points of the -l"),
         (["plot.png", "--log", "x"], "--log needs -p"),
         ([*SPECTRUM, "--log", "z"], "invalid choice: 'z'"),
