@@ -37,18 +37,21 @@ uv tool install "figrecover[ocr] @ git+https://github.com/SMTG-Bham/figrecover"
 ### 1. Prepare the image
 
 Crop the image to the axes and the curves. figrecover ignores everything left
-of the y-axis and below the x-axis, then traces the most common colour that
-stands out from the background in what remains. Legends and the top and right
-frame lines are traced too if they are the same colour as a curve, so crop or
-paint them out. Dark backgrounds work as well as light ones. To have
-figrecover read the axes, keep their tick labels and titles in the image.
+of the y-axis and below the x-axis, and inside a frame around the axes, as
+matplotlib draws, everything beyond the frame too. It then traces the most
+common colour that stands out from the background in what remains, skipping
+filled areas and grid lines. Legends are traced too if they are the same
+colour as a curve, so crop or paint them out. Dark backgrounds work as well as
+light ones. To have figrecover read the axes, keep their tick labels and
+titles in the image.
 
 ### 2. Choose reference points
 
 figrecover maps pixels to data with at least three reference points: usually
 the origin, a labelled tick on the x-axis and one on the y-axis. Give their
 data coordinates with `-p` and their pixel positions with `-l`, in the same
-order. Pixel positions are measured from the bottom-left corner of the image.
+order. Pixel positions are measured from the bottom-left corner of the image,
+so the centre of the bottom-left pixel is at 0.5,0.5.
 With the `ocr` extra, you can leave out both and let figrecover read the tick
 labels instead; see [Reading the axes](#reading-the-axes). For logarithmic
 axes, see [Logarithmic axes](#logarithmic-axes).
@@ -58,7 +61,7 @@ reference point in turn (press q to cancel). It then prints the matching `-l`
 options, ready to reuse for the rest of a batch of similar plots:
 
 ```text
-figrecover: locations: -l 80,44 -l 576,44 -l 80,147
+figrecover: locations: -l 80.5,43.5 -l 576.5,43.5 -l 80.5,147.5
 ```
 
 ### 3. Digitize
@@ -70,12 +73,13 @@ figrecover examples/spectrum.png \
     -o spectrum.csv --preview spectrum.preview.png
 ```
 
-The CSV file has a header and one row per image column the curve crosses:
+The CSV file has a header and a row for each image column the curve crosses,
+or more than one where it crosses a column more than once, as a loop does:
 
 ```text
 x,y
-0.0604839,0.5
-0.0806452,0.5
+0.0705645,0.495146
+0.0907258,0.495146
 ...
 ```
 
@@ -118,8 +122,8 @@ The CSV gains a `series` column that numbers the curves in that order:
 
 ```text
 series,x,y
-1,0.0604839,1.28155
-1,0.0806452,1.29126
+1,0.0705645,1.2767
+1,0.0907258,1.28641
 ...
 ```
 
@@ -132,21 +136,27 @@ similar plots whose colours differ slightly, such as JPEG files. Give only the
 `-c` options of the curves you want. The colours of plotting libraries work
 too, such as `-c 1f77b4` for matplotlib's first colour.
 
-`-n` skips light curves, such as pale blue or light grey ones, so that it does
-not mistake grid lines for curves; trace them with `-c` instead.
+`-n` skips colours that fill areas, those drawn mostly as straight lines
+across the plot, such as grid lines, and very pale ones, less than 64 levels
+from the background; trace a pale curve with `-c` instead. Curves in
+neighbouring colours of a colour map, such as viridis, are told apart, and two
+`-c` colours that match the same curve are an error.
 
 ### Grids
 
-A light grid needs no special handling, because the curves stand out more
-from the background than the grid does. A dark grid has to be removed first:
+Grids need no special handling, light or dark, because grid lines run
+straight across the plot and curves do not:
 
 ```bash
 figrecover examples/grid.png \
     -p 0,0 -p 10,0 -p 0,1 -l 80,44 -l 576,44 -l 80,167 \
-    --remove-grid --preview grid.preview.png
+    --preview grid.preview.png
 ```
 
-![A damped oscillation recovered after removing its grid](examples/grid.preview.png)
+![A damped oscillation recovered from a plot with a dark grid](examples/grid.preview.png)
+
+A grid drawn in the same colour as a curve has to be removed first, with
+`--remove-grid`.
 
 ### Reading the axes
 
@@ -168,7 +178,7 @@ and names the CSV columns after the axis titles:
 
 ```text
 Time (s),Voltage (mV)
--0.00419701,0.999744
+0.00688239,0.996743
 ...
 ```
 
@@ -185,11 +195,21 @@ work as before.
   Labels whose values are out of line with the rest, such as misread ones, are
   dropped. An axis with fewer than three labels in line cannot be read.
   Logarithmic axes are read too; see [Logarithmic axes](#logarithmic-axes).
-- A scale factor printed beside an axis, such as `1e-5` or `×10³`, multiplies
-  its tick values. An axis offset, such as `+1e3`, cannot be read.
+- Numbers can have thousands separators (`2,000`), a percent sign (`50%`, read
+  in percent) or an exponent (`2.5e-3`). A tick mark that OCR reads as a dash
+  beside a label, as it can where no axis line joins them, is ignored.
+- A scale factor printed where plotting libraries put one, such as `1e-5` or
+  `×10³` above the y-axis or below the x-axis, multiplies that axis's tick
+  values. Text elsewhere that looks like one, such as a legend entry, does
+  not. An axis offset, such as `+1e3`, cannot be read.
+- Each tick lies at the middle of its label, or, for labels that end at their
+  tick marks rather than centring on them, as rotated labels do, at the mark.
 - figrecover traces the curves from the axis lines, not from the first ticks,
   so the margins that plotting libraries leave inside the axes are kept. If
-  there are no axis lines, it starts at the first ticks.
+  there are no axis lines, it starts just beyond the tick labels and their
+  tick marks.
+- A plot with a second y-axis on the right, with other values than the left
+  one, cannot be read: crop the right axis out, or give `-p`.
 - The titles are the nearest text below the x-axis tick labels and left of the
   y-axis ones. A column without a title is named `x` or `y`. Titles of a single
   letter are easily misread, such as `x` as `X`, or missed.
@@ -217,12 +237,13 @@ The tick labels can be decimals, such as `0.01` and `1000`, or powers of ten
 with superscript exponents, such as 10⁻² and 2×10³, as matplotlib draws them.
 OCR often misses a superscript, reading 10² as `102`, so figrecover checks
 how such a label is drawn: if its last digit sits raised above the others,
-it is an exponent. Once one label on an axis is a power of ten, figrecover
-reads all those that start with 10 as powers too, so an axis whose labels
-all read as `100`, `101`, `102` is still logarithmic when they are drawn as
-10⁰, 10¹, 10². Labels really drawn as 100, 101, 102 stay linear. As on a
-linear axis, three labelled ticks are needed, so an axis labelled only at 10⁰
-and 10¹ cannot be read.
+it is an exponent, and a raised minus sign before it makes the exponent
+negative. A label whose digits are not drawn that way is still a power of
+ten if most of the others on its axis are, so an axis whose labels all read
+as `100`, `101`, `102` is logarithmic when they are drawn as 10⁰, 10¹, 10²,
+while labels really drawn as 100, 101, 102 stay linear, even if one is
+misread as a power. As on a linear axis, three labelled ticks are needed, so
+an axis labelled only at 10⁰ and 10¹ cannot be read.
 
 With `-p`, name the logarithmic axes with `--log x`, `--log y` or `--log xy`.
 Reference points on a logarithmic axis must be positive, so take the lowest
@@ -264,7 +285,8 @@ For logarithmic axes, pass `x_log=True` or `y_log=True` to
 
 For several curves, `find_colours` returns the colours of the most common
 curves as `(red, green, blue)` tuples, and `trace_curves` traces one curve per
-colour:
+colour. Pixel positions are those of pixel centres, and a curve that crosses a
+column more than once gives a point for each crossing, sorted by x, then y:
 
 ```python
 from figrecover import find_colours, trace_curves
@@ -285,21 +307,36 @@ lines first, if needed.
    pixels to data for each axis, or to the logarithm of the data for a
    logarithmic axis. The leftmost and lowest reference points mark the axes.
 3. Pixels left of and below the axes are ignored, which drops the axes, their
-   ticks and labels.
+   ticks and labels. A frame closing the axes, a thin line along the top from
+   the y-axis that meets one down the right, is dropped with everything
+   beyond it.
 4. A coarse colour histogram gives the common colours: those with enough pixels
-   to span the plot, merging shades less than 48 levels apart. The most common
-   is the background. Antialiasing blends the edges of each curve with the
-   background, and a blend can be common too, so a colour whose pixels mostly
-   touch those of a colour further from the background is dropped.
+   to span the plot, merging shades less than 48 levels apart. Each is then
+   counted again in a finer histogram, and split if it holds two or more
+   colours with enough pixels, such as neighbouring colours of a colour map.
+   The most common is the background, unless the colour along the top of the
+   plot differs from it by 64 levels and has at least a third as many pixels:
+   then the most common colour is a filled area. Antialiasing blends the edges
+   of each curve with the background, and a blend can be common too, so a
+   colour whose pixels mostly touch those of a colour further from the
+   background is dropped.
 5. The curves are the common colours that differ from the background by at
-   least 128 levels in some channel, most pixels first. `-c` instead picks the
-   common colour nearest to each given colour, up to 96 levels away.
+   least 64 levels in some channel, most pixels first, except those whose
+   pixels lie mostly more than 4 pixels inside their shapes, which fill areas,
+   and those drawn mostly as straight lines across 60% of the plot, as grid
+   lines are. `-c` instead picks the common colour nearest to each given
+   colour, up to 96 levels away.
 6. Each pixel belongs to the common colour that it best matches when blended
    with the background, if it is at least half-way there, so a curve's
    antialiased edges count towards it. Specks of fewer than four pixels, such
    as where two other curves cross, are ignored.
-7. Each image column a curve crosses gives one point, at the median height of
-   the curve's pixels in that column.
+7. In each image column, a curve's pixels form runs, split by gaps of more
+   than 6 pixels, and runs that overlap one to one in neighbouring columns
+   form branches. Each run of a branch across at least 5% of the plot gives a
+   point at its median height, so both sides of a loop are traced, and shorter
+   pieces beside a longer branch, such as the caps of error bars, are ignored.
+   A column without such a run gives one point at the median height of all
+   its pixels.
 
 On the examples, the recovered values are within 0.03 of the true curves, about
 three pixels at the steepest point.
@@ -313,8 +350,10 @@ three pixels at the steepest point.
 - Where curves cross, the one drawn underneath loses a few pixels, and its
   points there can be a pixel or two out.
 - The axes must be horizontal and vertical, with linear or logarithmic scales.
-- Each column gives one point, so steep peaks come out slightly lower, and
-  vertical lines in the plot area become single points.
+- Each column gives one point per branch of a curve, so steep peaks come out
+  slightly lower, vertical lines in the plot area become single points, and
+  the two sides of a loop merge into one point where they come within 6
+  pixels of each other.
 - `--remove-grid` also removes straight horizontal or vertical stretches of
   curves that are 120 pixels or longer.
 
