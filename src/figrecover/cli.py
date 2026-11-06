@@ -1,6 +1,9 @@
 """Command-line interface."""
 
 import argparse
+import csv
+import io
+import math
 import os
 import re
 import sys
@@ -13,6 +16,7 @@ import numpy as np
 import numpy.typing as npt
 
 from . import __version__, interactive
+from .axes import read_axes
 from .calibration import MIN_POINTS, Calibration, Point
 from .digitize import (
     Colour,
@@ -36,12 +40,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     """
     parser = _build_parser()
     arguments = parser.parse_args(argv)
-    if len(arguments.points) < MIN_POINTS:
+    if arguments.locations and not arguments.points:
+        parser.error("give the reference points of the -l locations with -p")
+    if 0 < len(arguments.points) < MIN_POINTS:
         parser.error(f"give at least {MIN_POINTS} reference points with -p")
+    if arguments.log and not arguments.points:
+        parser.error(
+            "--log needs -p; figrecover finds logarithmic axes itself when reading them"
+        )
+    outputs = {"-o": arguments.output, "--preview": arguments.preview}
+    for option, path in outputs.items():
+        if path is not None and path.resolve() == arguments.image.resolve():
+            parser.error(f"{option} would overwrite the image")
+    if (
+        None not in outputs.values()
+        and len({p.resolve() for p in outputs.values()}) == 1
+    ):
+        parser.error("-o and --preview name the same file")
 
     try:
         _digitize(arguments)
-    except (OSError, ValueError, cv2.error) as error:
+    except (ImportError, OSError, ValueError, cv2.error) as error:
         print(f"figrecover: error: {error}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
@@ -54,7 +73,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="figrecover",
         description="Recover the curves in an image of a plot as CSV, with "
-        "columns x and y, and a series column if there are several curves.",
+        "columns for x and y, and a series column if there are several curves.",
     )
     parser.add_argument("--version", action="version", version=__version__)
     parser.add_argument("image", type=Path, help="image of the plot")
@@ -63,11 +82,13 @@ def _build_parser() -> argparse.ArgumentParser:
         "--point",
         dest="points",
         action="append",
-        required=True,
+        default=[],
         type=_point,
         metavar="X,Y",
         help="data coordinates of a reference point, such as the origin or a "
-        f"labelled tick; repeat for at least {MIN_POINTS} points",
+        f"labelled tick; repeat for at least {MIN_POINTS} points (default: read "
+        "the tick labels, and name the columns after the axis titles; this needs "
+        "the ocr extra)",
     )
     parser.add_argument(
         "-l",
@@ -80,6 +101,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="pixel position of each reference point, in the same order, measured "
         "from the bottom-left corner (default: click on them, then reuse the "
         "printed -l options)",
+    )
+    parser.add_argument(
+        "--log",
+        choices=["x", "y", "xy"],
+        default="",
+        help="the axes of the -p reference points that are logarithmic (default: "
+        "neither)",
     )
     curves = parser.add_mutually_exclusive_group()
     curves.add_argument(
@@ -124,8 +152,18 @@ def _build_parser() -> argparse.ArgumentParser:
 def _digitize(arguments: argparse.Namespace) -> None:
     """Write the curves in the image as CSV."""
     image = load_image(arguments.image)
-    pixels = arguments.locations or _click_locations(image, arguments.points)
-    calibration = Calibration.from_points(arguments.points, pixels)
+    if arguments.points:
+        _check_locations(arguments.locations, image)
+        pixels = arguments.locations or _click_locations(image, arguments.points)
+        calibration = Calibration.from_points(
+            arguments.points,
+            pixels,
+            x_log="x" in arguments.log,
+            y_log="y" in arguments.log,
+        )
+        names = ("x", "y")
+    else:
+        calibration, pixels, names = _read_axes(image)
     traced = remove_grid(image) if arguments.remove_grid else image
     colours = arguments.colours or _find_colours(
         traced, arguments.series, calibration.origin
@@ -134,7 +172,17 @@ def _digitize(arguments: argparse.Namespace) -> None:
 
     if arguments.preview:
         _save_preview(arguments.preview, image, curves, colours, pixels)
-    _write_csv(arguments.output or sys.stdout, [calibration.to_data(c) for c in curves])
+    data = [calibration.to_data(curve) for curve in curves]
+    _write_csv(arguments.output or sys.stdout, data, names)
+
+
+def _check_locations(locations: Sequence[Point], image: Image) -> None:
+    """Check that each -l location lies on the image."""
+    height, width = image.shape[:2]
+    for x, y in locations:
+        if not (0 <= x <= width and 0 <= y <= height):
+            msg = f"the -l location {x:g},{y:g} lies outside the {width}x{height} image"
+            raise ValueError(msg)
 
 
 def _click_locations(image: Image, points: Sequence[Point]) -> list[Point]:
@@ -143,6 +191,29 @@ def _click_locations(image: Image, points: Sequence[Point]) -> list[Point]:
     options = " ".join(f"-l {x:g},{y:g}" for x, y in pixels)
     print(f"figrecover: locations: {options}", file=sys.stderr)
     return pixels
+
+
+def _read_axes(image: Image) -> tuple[Calibration, list[Point], tuple[str, str]]:
+    """Read the axes, and print what was read so it can be checked.
+
+    Returns:
+        The calibration, the pixel position of each tick on its axis line, and
+        the names of the x and y columns: the axis titles, or x and y.
+    """
+    axes = read_axes(image)
+    x_origin, y_origin = axes.calibration.origin
+    for name, title, ticks, log in (
+        ("x", axes.x_title, axes.x_ticks, axes.calibration.x_log),
+        ("y", axes.y_title, axes.y_ticks, axes.calibration.y_log),
+    ):
+        values = ", ".join(f"{value:g}" for _, value in ticks)
+        scale = "logarithmic " if log else ""
+        titled = f' "{title}"' if title else ""
+        message = f"figrecover: {scale}{name}-axis{titled} with ticks at {values}"
+        print(message, file=sys.stderr)
+    pixels = [(x, y_origin) for x, _ in axes.x_ticks]
+    pixels += [(x_origin, y) for y, _ in axes.y_ticks]
+    return axes.calibration, pixels, (axes.x_title or "x", axes.y_title or "y")
 
 
 def _find_colours(image: Image, count: int | None, origin: Point) -> list[Colour]:
@@ -154,10 +225,14 @@ def _find_colours(image: Image, count: int | None, origin: Point) -> list[Colour
     return colours
 
 
-def _write_csv(file: Path | TextIO, curves: Sequence[npt.NDArray[np.float64]]) -> None:
+def _write_csv(
+    file: Path | TextIO,
+    curves: Sequence[npt.NDArray[np.float64]],
+    names: tuple[str, str],
+) -> None:
     """Write the curves as CSV, with a series column if there are several."""
     if len(curves) == 1:
-        table, header, fmt = curves[0], "x,y", ["%.6g"] * 2
+        table, columns, fmt = curves[0], [*names], ["%.6g"] * 2
     else:
         table = np.vstack(
             [
@@ -165,8 +240,12 @@ def _write_csv(file: Path | TextIO, curves: Sequence[npt.NDArray[np.float64]]) -
                 for series, curve in enumerate(curves, start=1)
             ]
         )
-        header, fmt = "series,x,y", ["%d", "%.6g", "%.6g"]
-    np.savetxt(file, table, fmt=fmt, delimiter=",", header=header, comments="")
+        columns, fmt = ["series", *names], ["%d", "%.6g", "%.6g"]
+    header = io.StringIO()
+    csv.writer(header, lineterminator="").writerow(columns)
+    np.savetxt(
+        file, table, fmt=fmt, delimiter=",", header=header.getvalue(), comments=""
+    )
 
 
 def _save_preview(
@@ -201,6 +280,9 @@ def _point(text: str) -> Point:
     except ValueError:
         msg = f"expected a point written as x,y, got {text!r}"
         raise argparse.ArgumentTypeError(msg) from None
+    if not (math.isfinite(x) and math.isfinite(y)):
+        msg = f"expected finite numbers in the point {text!r}"
+        raise argparse.ArgumentTypeError(msg)
     return x, y
 
 

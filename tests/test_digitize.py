@@ -25,7 +25,8 @@ HEIGHT, WIDTH = 200, 400
 ORIGIN = (40, 30)  # pixel position of the axes, from the bottom-left corner
 PIXELS_PER_UNIT = (35, 40)
 BLACK, BLUE, ORANGE = (0, 0, 0), (31, 119, 180), (255, 127, 14)
-LIGHT_BLUE = (166, 206, 227)
+PALE_BLUE = (200, 220, 240)  # 55 levels from white
+PINK, GREY = (218, 139, 195), (234, 234, 242)  # from seaborn's palette and style
 
 
 def curve(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
@@ -75,14 +76,17 @@ def synthetic_plot(
     columns = ORIGIN[0] + x * PIXELS_PER_UNIT[0]
     for colour, function in curves:
         heights = ORIGIN[1] + function(x) * PIXELS_PER_UNIT[1]
-        points = np.column_stack((columns, HEIGHT - heights)).round().astype(np.int32)
+        # OpenCV draws point (c, r) at the pixel centred on (c + 0.5, HEIGHT - r - 0.5),
+        # here to a sixteenth of a pixel.
+        points = np.column_stack((columns - 0.5, HEIGHT - heights - 0.5))
         cv2.polylines(
             image,
-            [points],
+            [(points * 16).round().astype(np.int32)],
             isClosed=False,
             color=colour,
             thickness=2,
             lineType=cv2.LINE_AA,
+            shift=4,
         )
 
     data = [(0.0, 0.0), (10.0, 0.0), (0.0, 1.0)]
@@ -123,6 +127,50 @@ def test_trace_curve_ignores_the_axes() -> None:
 
     assert pixels[:, 0].min() > ORIGIN[0] + 2
     assert pixels[:, 1].min() > ORIGIN[1] + 2
+
+
+def frame(image: Image, colour: Colour = BLACK) -> None:
+    """Close the axes of a synthetic plot with a frame, as matplotlib does."""
+    top, right = 10, WIDTH - 20
+    cv2.line(image, (ORIGIN[0], top), (right, top), colour, 2)
+    cv2.line(image, (right, top), (right, to_row(ORIGIN[1])), colour, 2)
+
+
+def test_trace_curve_ignores_a_frame() -> None:
+    image, calibration = synthetic_plot()
+    frame(image)
+
+    pixels = trace_curve(image, calibration.origin)
+
+    assert pixels[:, 0].max() < WIDTH - 20
+    assert_follows(pixels, calibration, curve)
+
+
+def test_find_colours_ignores_a_frame() -> None:
+    image, calibration = synthetic_plot(curves=[(BLUE, curve)], x_range=(0.5, 3))
+    frame(image)
+
+    assert find_colours(image, 1, calibration.origin) == [BLUE]
+
+
+def test_a_band_around_the_plot_is_not_a_frame() -> None:
+    image, calibration = synthetic_plot()
+    cv2.rectangle(image, (ORIGIN[0], 0), (WIDTH, 25), (110, 110, 110), -1)
+    cv2.line(image, (WIDTH - 5, 0), (WIDTH - 5, HEIGHT), (110, 110, 110), 2)
+    cv2.line(image, (ORIGIN[0], 12), (WIDTH - 10, 12), BLUE, 2)  # on the band
+
+    (pixels,) = trace_curves(image, [BLUE], calibration.origin)
+
+    assert np.all(pixels[:, 1] > HEIGHT - 15)
+
+
+def test_a_line_along_the_top_is_not_a_frame() -> None:
+    image, calibration = synthetic_plot()
+    cv2.line(image, (ORIGIN[0], 10), (WIDTH - 20, 10), BLUE, 2)  # no right side
+
+    (pixels,) = trace_curves(image, [BLUE], calibration.origin)
+
+    assert np.all(pixels[:, 1] > HEIGHT - 12)
 
 
 def test_trace_curve_ignores_a_light_grid() -> None:
@@ -183,7 +231,28 @@ def test_trace_curves_matches_similar_colours() -> None:
 
     (pixels,) = trace_curves(image, [(60, 130, 160)], calibration.origin)
 
-    assert_follows(pixels, calibration, curve)
+    # The orange line is drawn over the curve where they cross.
+    assert_follows(pixels, calibration, curve, atol=0.075)
+
+
+def test_find_colours_tells_close_colours_apart() -> None:
+    # Neighbouring colours of eight from viridis, 36 levels apart.
+    teal, green = (39, 127, 142), (31, 161, 135)
+    image, calibration = synthetic_plot(curves=[(teal, rising), (green, falling)])
+
+    colours = find_colours(image, 2, calibration.origin)
+    traced = trace_curves(image, [teal, green], calibration.origin)
+
+    np.testing.assert_allclose(sorted(colours), sorted([teal, green]), atol=8)
+    for pixels, function in zip(traced, [rising, falling], strict=True):
+        assert_follows(pixels, calibration, function, atol=0.075)
+
+
+def test_trace_curves_needs_a_curve_for_each_colour_given() -> None:
+    image, calibration = synthetic_plot(curves=[(BLUE, curve), (ORANGE, rising)])
+
+    with pytest.raises(ValueError, match="colours #1f77b4 and #3c82a0 both match"):
+        trace_curves(image, [BLUE, (60, 130, 160)], calibration.origin)
 
 
 def test_trace_curves_needs_a_curve_of_each_colour() -> None:
@@ -192,13 +261,88 @@ def test_trace_curves_needs_a_curve_of_each_colour() -> None:
         trace_curves(image, [BLUE, (0, 255, 0)], calibration.origin)
 
 
-def test_light_curves_can_be_traced_but_are_not_found() -> None:
-    image, calibration = synthetic_plot(curves=[(LIGHT_BLUE, curve), (BLACK, rising)])
+def test_pale_curves_can_be_traced_but_are_not_found() -> None:
+    image, calibration = synthetic_plot(curves=[(PALE_BLUE, curve), (BLACK, rising)])
 
     with pytest.raises(ValueError, match="found only 1 of 2 curves"):
         find_colours(image, 2, calibration.origin)
-    (pixels,) = trace_curves(image, [LIGHT_BLUE], calibration.origin)
-    assert_follows(pixels, calibration, curve)
+    (pixels,) = trace_curves(image, [PALE_BLUE], calibration.origin)
+    # The black line is drawn over the curve where they cross.
+    assert_follows(pixels, calibration, curve, atol=0.075)
+
+
+def test_find_colours_finds_mid_tones_on_a_grey_background() -> None:
+    image, calibration = synthetic_plot(grid=254, curves=[(PINK, curve)])
+    image[np.all(image == 255, axis=-1)] = GREY
+    image[np.all(image == 254, axis=-1)] = 255  # a white grid, as seaborn draws
+
+    assert find_colours(image, 1, calibration.origin) == [PINK]
+
+
+def test_find_colours_skips_grid_lines_of_any_shade() -> None:
+    image, calibration = synthetic_plot(grid=100, curves=[(BLUE, curve)])
+
+    assert find_colours(image, 1, calibration.origin) == [BLUE]
+
+
+def filled(image: Image) -> None:
+    """Fill a synthetic plot blue below a line high in the plot, over most of it."""
+    corners = [
+        (ORIGIN[0], 40),
+        (WIDTH, 60),
+        (WIDTH, to_row(ORIGIN[1])),
+        (ORIGIN[0], 199),
+    ]
+    cv2.fillPoly(image, [np.array(corners, dtype=np.int32)], BLUE)
+
+
+def test_find_colours_skips_filled_areas() -> None:
+    image, calibration = synthetic_plot(curves=[])
+    filled(image)
+    curves = synthetic_plot(curves=[(BLACK, curve)])[0]
+    image[np.all(curves == 0, axis=-1)] = BLACK
+
+    assert find_colours(image, 1, calibration.origin) == [BLACK]
+    assert_traces_curve(image, calibration)
+
+
+def test_trace_curves_refuses_filled_areas() -> None:
+    image, calibration = synthetic_plot()
+    filled(image)
+
+    with pytest.raises(ValueError, match="colour #1f77b4 fills areas"):
+        trace_curves(image, [BLUE], calibration.origin)
+
+
+def test_trace_curve_follows_both_sides_of_a_loop() -> None:
+    image, calibration = synthetic_plot(curves=[])
+    # An ellipse centred on (5, 2), 3 wide and 1 tall in data units.
+    centre = (
+        ORIGIN[0] + 5 * PIXELS_PER_UNIT[0],
+        to_row(ORIGIN[1] + 2 * PIXELS_PER_UNIT[1]),
+    )
+    axes = (3 * PIXELS_PER_UNIT[0], 1 * PIXELS_PER_UNIT[1])
+    cv2.ellipse(image, centre, axes, 0, 0, 360, BLACK, 2, cv2.LINE_AA)
+
+    data = calibration.to_data(trace_curve(image, calibration.origin))
+
+    middle = data[np.abs(data[:, 0] - 5) < 2]
+    np.testing.assert_allclose(
+        np.abs(middle[:, 1] - 2), np.sqrt(1 - ((middle[:, 0] - 5) / 3) ** 2), atol=0.05
+    )
+    assert np.count_nonzero(middle[:, 1] > 2) == np.count_nonzero(middle[:, 1] < 2)
+
+
+def test_trace_curve_ignores_short_marks_beside_a_curve() -> None:
+    image, calibration = synthetic_plot()
+    xs = np.arange(1.0, 10.0)
+    heights = ORIGIN[1] + (curve(xs) + 0.6) * PIXELS_PER_UNIT[1]
+    for x, height in zip(xs, heights, strict=True):  # like caps of error bars
+        column = round(ORIGIN[0] + x * PIXELS_PER_UNIT[0])
+        row = to_row(float(height))
+        cv2.line(image, (column - 4, row), (column + 4, row), BLACK, 2)
+
+    assert_traces_curve(image, calibration)
 
 
 def test_trace_curves_ignores_specks() -> None:

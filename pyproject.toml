@@ -29,6 +29,14 @@ dependencies = [
   "opencv-python>=4.10.0.84",
 ]
 
+[project.optional-dependencies]
+ocr = [
+  "onnxruntime>=1.24.1",
+  # rapidocr 3.10 depends on opencv-python-headless instead, whose cv2 module
+  # overwrites opencv-python's and so can break the window for clicking.
+  "rapidocr>=3.9.0,<3.10",
+]
+
 [project.scripts]
 figrecover = "figrecover.cli:main"
 
@@ -38,8 +46,10 @@ Issues = "https://github.com/SMTG-Bham/figrecover/issues"
 Repository = "https://github.com/SMTG-Bham/figrecover"
 
 [tool.uv]
-# figrecover supports Linux only, so lock dependencies for Linux alone.
-environments = ["sys_platform == 'linux'"]
+# figrecover supports Linux only, so lock dependencies for Linux alone. The
+# lock also stops before Python 3.15, for which onnxruntime (needed by the ocr
+# extra) has no wheels yet.
+environments = ["sys_platform == 'linux' and python_full_version < '3.15'"]
 
 [dependency-groups]
 dev = [
@@ -49,6 +59,7 @@ dev = [
   "ruff>=0.16.10",
 ]
 test = [
+  "figrecover[ocr]",
   "pytest>=9.1.1",
   "pytest-cov>=7.1.0",
 ]
@@ -149,3 +160,7 @@ enable_error_code = [
   "unused-awaitable",
 ]
 pretty = true
+
+[[tool.mypy.overrides]]
+module = ["rapidocr"]  # untyped, and optional
+ignore_missing_imports = true

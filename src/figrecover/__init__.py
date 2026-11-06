@@ -2,7 +2,8 @@
 
 from importlib.metadata import version
 
-from .calibration import Calibration, Point
+from .axes import Axes, read_axes
+from .calibration import Calibration, Point, Tick
 from .digitize import (
     Colour,
     Image,
@@ -16,13 +17,16 @@ from .digitize import (
 __version__ = version("figrecover")
 
 __all__ = [
+    "Axes",
     "Calibration",
     "Colour",
     "Image",
     "Point",
+    "Tick",
     "__version__",
     "find_colours",
     "load_image",
+    "read_axes",
     "remove_grid",
     "trace_curve",
     "trace_curves",

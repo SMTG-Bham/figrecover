@@ -10,7 +10,7 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 
-from figrecover import Image, Point, __version__, interactive
+from figrecover import Axes, Calibration, Image, Point, __version__, cli, interactive
 from figrecover.cli import main
 
 type Curve = Callable[[npt.NDArray[np.float64]], npt.NDArray[np.float64]]
@@ -23,6 +23,8 @@ GRID_LOCATIONS = ["-l", "80,44", "-l", "576,44", "-l", "80,167"]
 SPECTRUM = [str(EXAMPLES / "spectrum.png"), *POINTS]
 GRID = [str(EXAMPLES / "grid.png"), *POINTS]
 SERIES = [str(EXAMPLES / "series.png"), *POINTS, *LOCATIONS]
+LABELLED = str(EXAMPLES / "labelled.png")
+LOGARITHMIC = str(EXAMPLES / "logarithmic.png")
 
 
 def spectrum(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
@@ -50,6 +52,16 @@ def wave(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
     return 1.25 + np.sin(x) / 2
 
 
+def ringing(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return the curve that examples/make_examples.py draws in labelled.png."""
+    return np.exp(-x / 4) * np.cos(2 * x)
+
+
+def lowpass(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return the curve that examples/make_examples.py draws in logarithmic.png."""
+    return 1e3 / (1 + (x / 100) ** 2)
+
+
 def trend(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
     """Return the black line that examples/make_examples.py draws in series.png."""
     return 0.4 + 0.2 * x
@@ -69,9 +81,21 @@ def assert_follows(data: npt.NDArray[np.float64], curve: Curve) -> None:
     np.testing.assert_allclose(data[:, 1], curve(data[:, 0]), atol=0.04)
 
 
-def assert_recovers(text: str, curve: Curve) -> None:
+def assert_recovers(text: str, curve: Curve, header: str = "x,y") -> None:
     """Check that CSV output follows the true curve."""
-    assert_follows(read_csv(text), curve)
+    assert_follows(read_csv(text, header), curve)
+
+
+def assert_follows_lowpass(data: npt.NDArray[np.float64]) -> None:
+    """Check that x and y columns follow lowpass on logarithmic axes, x from 1 to 10^4.
+
+    The y values must be within 0.03 decades, or 7 percent, of the true ones.
+    """
+    assert data[:, 0].min() < 1.1
+    assert data[:, 0].max() > 9000
+    np.testing.assert_allclose(
+        np.log10(data[:, 1]), np.log10(lowpass(data[:, 0])), atol=0.03
+    )
 
 
 def assert_recovers_series(text: str, curves: Sequence[Curve]) -> None:
@@ -172,6 +196,74 @@ def test_asks_for_missing_locations_and_prints_them(
     assert_recovers(captured.out, spectrum)
 
 
+def test_reads_the_axes_without_reference_points(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    preview = tmp_path / "preview.png"
+
+    assert main([LABELLED, "--preview", str(preview)]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.err == (
+        'figrecover: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10\n'
+        'figrecover: y-axis "Voltage (mV)" with ticks at '
+        "-0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1\n"
+    )
+    assert_recovers(captured.out, ringing, header="Time (s),Voltage (mV)")
+    image = cv2.imread(str(preview))
+    assert image is not None
+    assert np.any(np.all(image == (255, 0, 0), axis=-1))  # the ticks, in blue
+
+
+def test_reads_logarithmic_axes(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main([LOGARITHMIC]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.err == (
+        'figrecover: logarithmic x-axis "Frequency (Hz)" with ticks at '
+        "1, 10, 100, 1000, 10000\n"
+        'figrecover: logarithmic y-axis "Power (mW)" with ticks at '
+        "0.1, 1, 10, 100, 1000\n"
+    )
+    assert_follows_lowpass(read_csv(captured.out, "Frequency (Hz),Power (mW)"))
+
+
+def test_calibrates_logarithmic_axes_from_reference_points(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    points = ["-p", "1,0.1", "-p", "1e4,0.1", "-p", "1,1e3"]
+    # The pixel positions of the points that examples/make_examples.py prints.
+    locations = ["-l", "93,66", "-l", "610,66", "-l", "93,380"]
+
+    assert main([LOGARITHMIC, *points, *locations, "--log", "xy"]) == 0
+    assert_follows_lowpass(read_csv(capsys.readouterr().out))
+
+
+def test_quotes_titles_in_the_csv_header(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    calibration = Calibration.from_points(
+        [(0, 0), (10, 0), (0, 1)], [(80, 44), (576, 44), (80, 147)]
+    )
+    axes = Axes(calibration, ((80, 0), (576, 10)), ((44, 0), (147, 1)), "E, eV", None)
+    monkeypatch.setattr(cli, "read_axes", lambda _image: axes)
+
+    assert main([str(EXAMPLES / "spectrum.png")]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.err == (
+        'figrecover: x-axis "E, eV" with ticks at 0, 10\n'
+        "figrecover: y-axis with ticks at 0, 1\n"
+    )
+    assert_recovers(captured.out, spectrum, header='"E, eV",y')
+
+
+@pytest.mark.usefixtures("without_ocr")
+def test_reports_a_missing_ocr_extra(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main([LABELLED]) == 1
+    assert "needs the ocr extra" in capsys.readouterr().err
+
+
 def test_can_be_cancelled(monkeypatch: pytest.MonkeyPatch) -> None:
     def pick_points(_image: Image, _labels: Sequence[str]) -> list[Point]:
         raise KeyboardInterrupt
@@ -189,6 +281,10 @@ def test_can_be_cancelled(monkeypatch: pytest.MonkeyPatch) -> None:
         ([*SPECTRUM, *LOCATIONS, "--preview", "no/such/dir.png"], "cannot write"),
         ([*SERIES, "-n", "5"], "found only 4 of 5 curves"),
         ([*SERIES, "-c", "00ffff"], "no curve of colour #00ffff found"),
+        (
+            [*SPECTRUM, "-l", "80,44", "-l", "5760,44", "-l", "80,147"],
+            "the -l location 5760,44 lies outside the 640x400 image",
+        ),
     ],
 )
 def test_reports_errors(
@@ -214,12 +310,19 @@ def test_accepts_points_with_spaces_and_exponents(
         (["plot.png", "-p", "0"], "expected a point written as x,y, got '0'"),
         (["plot.png", "-p", "1,2,3"], "expected a point written as x,y"),
         (["plot.png", "-p", "a,b"], "expected a point written as x,y"),
+        (["plot.png", "-p", "nan,0"], "expected finite numbers in the point 'nan,0'"),
+        (["plot.png", "-p", "0,-inf"], "expected finite numbers in the point"),
+        (["plot.png", "-o", "plot.png"], "-o would overwrite the image"),
+        (["plot.png", "--preview", "./plot.png"], "--preview would overwrite the"),
+        (["plot.png", "-o", "a.png", "--preview", "./a.png"], "name the same file"),
         ([*SERIES, "-n", "0"], "expected a positive whole number, got '0'"),
         ([*SERIES, "-n", "two"], "expected a positive whole number"),
         ([*SERIES, "-c", "red"], "expected a colour written as RRGGBB, got 'red'"),
         ([*SERIES, "-c", "#12345"], "expected a colour written as RRGGBB"),
         ([*SERIES, "-n", "2", "-c", "000000"], "not allowed with argument"),
-        (["plot.png"], "required: -p/--point"),
+        (["plot.png", "-l", "80,44"], "give the reference points of the -l"),
+        (["plot.png", "--log", "x"], "--log needs -p"),
+        ([*SPECTRUM, "--log", "z"], "invalid choice: 'z'"),
         ([], "required: image"),
     ],
 )
