@@ -127,6 +127,19 @@ def test_reads_powers_of_two() -> None:
     assert found.y_title == "Time (ms)"
 
 
+def test_reads_titles_of_two_lines() -> None:
+    found = read_axes(load_image(EXAMPLES / "titled.png"))
+    # The pixel positions of (0, 0), (10, 0) and (0, 1) that
+    # examples/make_examples.py prints.
+    pixels = [(76, 68), (627, 68), (76, 175)]
+
+    data = found.calibration.to_data(pixels)
+
+    np.testing.assert_allclose(data, [(0, 0), (10, 0), (0, 1)], atol=0.03)
+    assert found.x_title == "Photon energy (eV)"
+    assert found.y_title == "Absorbance (arb. units)"
+
+
 @pytest.mark.parametrize("name", ["labelled", "spectrum"])
 def test_finds_where_the_axis_lines_cross(name: str) -> None:
     # The axes of labelled.png start before the first ticks, and those of
