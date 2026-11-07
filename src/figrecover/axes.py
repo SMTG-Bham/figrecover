@@ -47,10 +47,14 @@ _OFFSET = re.compile(r"[+-].*\d(?:e|[x\u00d7]10).*")  # +1e3, added to the ticks
 _SUPERSCRIPT = re.compile(
     r"\^?([\u207a\u207b\u2070\u00b9\u00b2\u00b3\u2074-\u2079\u00b0\u00ba]+)"
 )
-_PLAIN = str.maketrans(  # minus signs, en dashes and superscripts
-    "\u2212\u2013\u207b\u207a\u2070\u00b9\u00b2\u00b3\u2074\u2075\u2076\u2077\u2078\u2079\u00b0\u00ba",
-    "---+012345678900",
+_PLAIN = str.maketrans(  # minus signs, dashes and superscripts
+    "\u2212\u2010\u2011\u2012\u2013\u2014\u2015\ufe63\uff0d"
+    "\u207b\u207a\u2070\u00b9\u00b2\u00b3\u2074\u2075\u2076\u2077\u2078\u2079\u00b0\u00ba",
+    "----------+012345678900",
 )
+_DIGIT = re.compile(r"\d")
+_ZERO = re.compile(r"[Oo]")  # a 0 misread, in a label with a digit
+_ONE = re.compile(r"[lI|](?=[\dOo.,])")  # a 1 misread, before a digit or point
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,7 +106,7 @@ class _Text:
 
     @property
     def plain(self) -> str:
-        """Return the text without spaces or typographic minus signs.
+        """Return the text without spaces, and with dashes as minus signs.
 
         Superscripts become plain characters after a caret, so 10 to the
         power of -2 reads as 10^-2.
@@ -448,13 +452,19 @@ def _base(reading: str, length: int) -> str | None:
 
 
 def _reading(label: _Text, height: float = math.inf) -> str:
-    """Return a label's plain text without dashes that are tick marks.
+    """Return a label's plain text, with misread digits, without tick marks.
+
+    OCR can read 0 as O or o, and 1 as l, I or |. In a label with a digit,
+    these letters are read as digits, but l, I and | only before a digit or
+    a point, as after one they may be a unit, such as l for litres.
 
     Where no axis line joins them, OCR can read a tick mark as a dash: after
     a y-axis label, or before an x-axis label, whose box the tick then makes
     ``_RAISED_TICK`` times taller than the usual ``height`` or more.
     """
     text = label.plain
+    if _DIGIT.search(text):
+        text = _ZERO.sub("0", _ONE.sub("1", text))
     if match := _TRAILING_DASH.fullmatch(text):
         text = match[1]
     if text.startswith("-") and label.top - label.bottom >= _RAISED_TICK * height:

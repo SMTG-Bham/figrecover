@@ -245,14 +245,42 @@ def test_finds_axis_lines_past_stretched_label_boxes(
     assert found.calibration.origin == (60.5, 59.5)
 
 
-def test_reads_minus_signs(monkeypatch: pytest.MonkeyPatch) -> None:
-    minus = "\N{MINUS SIGN}"
+@pytest.mark.parametrize(
+    "minus",
+    [
+        "\N{MINUS SIGN}",
+        # The dashes that OCR can read for a minus sign.
+        "\N{HYPHEN}",
+        "\N{NON-BREAKING HYPHEN}",
+        "\N{FIGURE DASH}",
+        "\N{EN DASH}",
+        "\N{EM DASH}",
+        "\N{HORIZONTAL BAR}",
+        "\N{SMALL HYPHEN-MINUS}",
+        "\N{FULLWIDTH HYPHEN-MINUS}",
+    ],
+)
+def test_reads_minus_signs(monkeypatch: pytest.MonkeyPatch, minus: str) -> None:
     labels = [*x_labels(["-1", "0", "1"]), *y_labels([f"{minus}1", "0", "1"])]
 
     found = read(monkeypatch, labels)
 
     assert [value for _, value in found.x_ticks] == [-1, 0, 1]
     assert [value for _, value in found.y_ticks] == [-1, 0, 1]
+
+
+def test_reads_letters_misread_for_digits(monkeypatch: pytest.MonkeyPatch) -> None:
+    # OCR read 0 as O or o, and 1 as l, I or |. A lone O has no digit to show
+    # that it is one, and l after a digit may be a unit, so both are dropped.
+    labels = [
+        *x_labels(["O", "l0", "2O", "3o", "4l"]),
+        *y_labels(["0", "0.5", "I.0", "|.5"]),
+    ]
+
+    found = read(monkeypatch, labels)
+
+    assert [value for _, value in found.x_ticks] == [10, 20, 30]
+    assert [value for _, value in found.y_ticks] == [0, 0.5, 1, 1.5]
 
 
 def test_reads_separators_percentages_and_exponents(
