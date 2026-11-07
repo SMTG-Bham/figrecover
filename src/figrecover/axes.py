@@ -5,7 +5,7 @@ import itertools
 import math
 import re
 from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -28,6 +28,8 @@ _SNAP_REACH = 0.25  # a label lies within this fraction of the tick spacing of i
 _SNAP_SLACK = 2  # labels centred within this many pixels of the tick marks stay put
 _RAISED = 0.25  # a superscript sits this fraction of its label's height up or more
 _RAISED_TICK = 1.4  # a label this many times taller than usual has a tick on top
+_WRITTEN = 1.5  # words this much wider than tall run across
+_LINE_SPACING = 1  # a title's lines lie this many line heights apart or less
 _NUMBER = re.compile(  # 1, -2.5, 1,000, 2.5e-3 or 10%
     r"([+-]?(?:\d{1,3}(?:,\d{3})+(?:\.\d*)?|\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)%?",
     re.IGNORECASE,
@@ -134,7 +136,14 @@ def read_axes(image: Image) -> Axes:
     axis, so a curve along that tick is kept. Where the labels are not
     centred on tick marks drawn outside an axis line, but end at them, as
     rotated labels do, each tick lies at the mark nearest the end of its
-    label. The titles are the nearest text beyond the tick labels.
+    label.
+
+    The titles are the nearest lines of text beyond the tick labels, centred
+    along their axes, from where the axes cross to the far end of the axis
+    line or labels, so a title may be aligned with either end. A title runs
+    on over the lines that follow, each within a line's height of the one
+    before and aligned with it. A y-axis title is read as written upwards, as
+    most are, unless its words are much wider than tall.
 
     The text is read with RapidOCR, which the ``ocr`` extra installs.
 
@@ -201,14 +210,20 @@ def read_axes(image: Image) -> Axes:
     if y_line is None:
         end = max(label.right for label in x_labels)
     else:
-        end = _line_end(ink > 0, y_line, origin[0])
+        row = round(ink.shape[0] - y_line - 0.5)
+        end = _line_end(ink[row] > 0, origin[0])
     _check_one_y_axis(numbers, end, calibration, ink, height)
+    top = max(label.top for label in y_labels)
+    if x_line is not None:
+        top = max(top, _line_end(ink[::-1, round(x_line - 0.5)] > 0, origin[1]))
+    x_span = (origin[0], max(end, x_labels[-1].right))
+    y_span = (origin[1], top)
     return Axes(
         calibration,
         x_ticks,
         y_ticks,
-        _x_title(words, x_labels),
-        _y_title(words, y_labels),
+        _x_title(words, x_labels, x_span),
+        _y_title(words, y_labels, y_span),
     )
 
 
@@ -240,6 +255,15 @@ def _read_text(image: Image) -> list[_Text]:
         )
         for box, text in zip(found.boxes, found.txts, strict=True)
     ]
+
+
+def _transposed(text: _Text) -> _Text:
+    """Return a text with x and y swapped, as though the image were transposed.
+
+    Transposed, text written upwards runs across from left to right, and the
+    text nearest the y-axis tick labels on their left lies nearest them below.
+    """
+    return _Text(text.text, text.bottom, text.left, text.top, text.right)
 
 
 def _lowest_row(numbers: Sequence[_Text]) -> list[_Text]:
@@ -514,9 +538,12 @@ def _first_line(
     return float(start + long[0]) if len(long) else None
 
 
-def _line_end(ink: npt.NDArray[np.bool_], line: float, start: float) -> float:
-    """Return where the x-axis line at ``line`` ends, running right from ``start``."""
-    run = ink[round(ink.shape[0] - line - 0.5), math.ceil(start) :]
+def _line_end(pixels: npt.NDArray[np.bool_], start: float) -> float:
+    """Return where a line ends, running on from ``start``.
+
+    ``pixels`` marks which pixels along the line, from position 0, have ink.
+    """
+    run = pixels[math.ceil(start) :]
     return math.ceil(start) + (len(run) if run.all() else int(np.argmin(run)))
 
 
@@ -648,27 +675,84 @@ def _scales(
     return scales[0], scales[1]
 
 
-def _x_title(words: Sequence[_Text], x_labels: Sequence[_Text]) -> str | None:
-    """Return the line of text nearest below the x-axis tick labels."""
+def _x_title(
+    words: Sequence[_Text], x_labels: Sequence[_Text], span: tuple[float, float]
+) -> str | None:
+    """Return the lines of text nearest below the x-axis tick labels.
+
+    The title is centred within ``span``, along the axis.
+    """
     bottom = min(label.bottom for label in x_labels)
-    first, last = x_labels[0].x, x_labels[-1].x
-    below = [word for word in words if word.y < bottom and first <= word.x <= last]
-    if not below:
-        return None
-    nearest = max(below, key=lambda word: word.top)
-    line = [word for word in below if abs(word.y - nearest.y) < nearest.top - nearest.y]
-    return " ".join(word.text for word in sorted(line, key=lambda word: word.x))
+    below = [word for word in words if word.y < bottom and span[0] <= word.x <= span[1]]
+    return _title(_lines(below))
 
 
-def _y_title(words: Sequence[_Text], y_labels: Sequence[_Text]) -> str | None:
-    """Return the column of text nearest left of the y-axis tick labels."""
+def _y_title(
+    words: Sequence[_Text],
+    y_labels: Sequence[_Text],
+    span: tuple[float, float],
+) -> str | None:
+    """Return the lines of text nearest left of the y-axis tick labels.
+
+    The title is centred within ``span``, along the axis. It is written
+    upwards unless the words nearest the labels are ``_WRITTEN`` times wider
+    than tall, and so run across.
+    """
     left = min(label.left for label in y_labels)
-    first, last = y_labels[0].y, y_labels[-1].y
-    beside = [word for word in words if word.x < left and first <= word.y <= last]
+    beside = [word for word in words if word.x < left and span[0] <= word.y <= span[1]]
     if not beside:
         return None
     nearest = max(beside, key=lambda word: word.right)
     column = [
         word for word in beside if abs(word.x - nearest.x) < nearest.right - nearest.x
     ]
-    return " ".join(word.text for word in sorted(column, key=lambda word: word.y))
+    width = sum(word.right - word.left for word in column)
+    height = sum(word.top - word.bottom for word in column)
+    if width >= _WRITTEN * height:
+        return _title(_lines(column))
+    # Transposed, the lines of a title written upwards run from the last up.
+    return _title(_lines(map(_transposed, beside))[::-1])
+
+
+def _lines(texts: Iterable[_Text]) -> list[_Text]:
+    """Return the lines of a title, the topmost first, each as one text.
+
+    The first line is the topmost text and the text level with it. Each line
+    after it lies below the one before, within ``_LINE_SPACING`` of its height,
+    centre to centre, and aligned with it, the middle of one lying within the
+    other, so text further on, such as a caption, is left out.
+    """
+    remaining = list(texts)
+    lines: list[_Text] = []
+    while remaining:
+        nearest = max(remaining, key=lambda text: text.top)
+        half = nearest.top - nearest.y
+        line = _line([text for text in remaining if abs(text.y - nearest.y) < half])
+        if lines and not _follows(line, lines[-1]):
+            break
+        lines.append(line)
+        remaining = [text for text in remaining if text.y <= nearest.y - half]
+    return lines
+
+
+def _line(texts: Sequence[_Text]) -> _Text:
+    """Return the texts of a line, read from left to right, as one text."""
+    return _Text(
+        " ".join(text.text for text in sorted(texts, key=lambda text: text.x)),
+        min(text.left for text in texts),
+        min(text.bottom for text in texts),
+        max(text.right for text in texts),
+        max(text.top for text in texts),
+    )
+
+
+def _follows(line: _Text, before: _Text) -> bool:
+    """Return whether a line carries on a title from the line before it."""
+    return before.y - line.y <= _LINE_SPACING * (before.top - before.bottom) and (
+        before.left <= line.x <= before.right or line.left <= before.x <= line.right
+    )
+
+
+def _title(lines: Sequence[_Text]) -> str | None:
+    """Return the lines of a title as one line, or None if there are none."""
+    return " ".join(line.text for line in lines) or None

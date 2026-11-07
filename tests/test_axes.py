@@ -639,8 +639,66 @@ def test_reads_the_nearest_titles(monkeypatch: pytest.MonkeyPatch) -> None:
         text("(a)", 10, 290),  # a panel label above the y-axis
         text("Legend", 300, 250),  # in the plot
     ]
+    monkeypatch.setattr(
+        axes, "_read_text", lambda _image: [*labels, *x_title, *y_title, *others]
+    )
+    image = plot()
+    image[:30, AXIS_LINES[0]] = 255  # the y-axis line ends at y = 270
 
-    found = read(monkeypatch, [*labels, *x_title, *y_title, *others])
+    found = read_axes(image)
 
     assert found.x_title == "Time (s)"
+    assert found.y_title == "Voltage (mV)"
+
+
+def tall(content: str, x: float, y: float, height: float) -> _Text:
+    """Return a line of text written upwards, 14 pixels wide, centred on a pixel."""
+    return _Text(content, x - 7, y - height / 2, x + 7, y + height / 2)
+
+
+def test_reads_titles_over_several_lines(monkeypatch: pytest.MonkeyPatch) -> None:
+    labels = [*x_labels(["0", "1", "2"]), *y_labels(["0", "1", "2"])]
+    # Each line lies within a line's height of the one before, aligned with
+    # it; the first line of a title written upwards is the leftmost.
+    x_title = [text("Temperature", 160, 28, width=80), text("(K)", 160, 15)]
+    y_title = [tall("Resistance", 8, 140, 80), tall("(Ohm)", 22, 140, 40)]
+
+    found = read(monkeypatch, [*labels, *x_title, *y_title])
+
+    assert found.x_title == "Temperature (K)"
+    assert found.y_title == "Resistance (Ohm)"
+
+
+def test_leaves_out_lines_not_aligned_with_a_title(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    labels = [*x_labels(["0", "1", "2"]), *y_labels(["0", "1", "2"])]
+    x_title = text("Time (s)", 140, 28, width=60)
+    note = text("Source: lab", 320, 15, width=60)  # under the plot's right end
+
+    found = read(monkeypatch, [*labels, x_title, note])
+
+    assert found.x_title == "Time (s)"
+
+
+def test_reads_titles_aligned_with_an_end_of_their_axis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    labels = [*x_labels(["0", "1", "2"]), *y_labels(["0", "1", "2"])]
+    # Beyond the last tick labels, but alongside the axis lines.
+    x_title = text("Distance (km)", 340, 25, width=100)
+    y_title = tall("Height (m)", 10, 250, 70)
+
+    found = read(monkeypatch, [*labels, x_title, y_title])
+
+    assert found.x_title == "Distance (km)"
+    assert found.y_title == "Height (m)"
+
+
+def test_reads_titles_written_across(monkeypatch: pytest.MonkeyPatch) -> None:
+    labels = [*x_labels(["0", "1", "2"]), *y_labels(["0", "1", "2"])]
+    y_title = [text("Voltage", 14, 150, width=24), text("(mV)", 14, 137, width=24)]
+
+    found = read(monkeypatch, [*labels, *y_title])
+
     assert found.y_title == "Voltage (mV)"
