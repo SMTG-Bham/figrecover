@@ -55,7 +55,13 @@ The first release.
   axis, labelled only on the outer panels, as matplotlib's `sharex` and
   `sharey` draw them, take the axis and its title from the panel beside them
   that lines up with them. Panels that cannot be read, such as colour bars,
-  are left out with a warning. Scale factors are read only where plotting
+  are left out with a warning. An inset inside a frame in a panel's axes is
+  read as a panel of its own, with its own axes, from the text around it,
+  while the panel is traced with it painted out: `-o out.csv` writes a plot
+  with an inset to `out.csv` and `out_inset.csv`, and an inset of panel (b)
+  to `out_b_inset.csv`. Frames whose axes cannot be read, such as legends,
+  stay painted out, without a warning. `read_panels` gives each inset after
+  its panel, as its `inset_of`. Scale factors are read only where plotting
   libraries print them, so that of a panel below is not taken for one of the
   x-axis above.
 - Logarithmic axes work too. figrecover finds them itself when it reads the
