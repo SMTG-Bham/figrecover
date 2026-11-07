@@ -23,7 +23,7 @@ from figrecover import (
     interactive,
     load_image,
 )
-from figrecover.cli import main
+from figrecover.cli import _names, main
 
 type Curve = Callable[[npt.NDArray[np.float64]], npt.NDArray[np.float64]]
 
@@ -44,6 +44,7 @@ MARKERS = [str(EXAMPLES / "markers.png"), *POINTS, *MARKER_LOCATIONS]
 LOGARITHMIC = str(EXAMPLES / "logarithmic.png")
 BINARY = str(EXAMPLES / "binary.png")
 PANELS = str(EXAMPLES / "panels.png")
+INSET = str(EXAMPLES / "inset.png")
 LABELLED_PDF = str(EXAMPLES / "labelled.pdf")
 # The positions of POINTS in series.pdf, in points, that
 # examples/make_examples.py prints.
@@ -486,6 +487,121 @@ def test_finds_markers_in_one_panel_only(
         "figrecover: error: -m finds the markers of one plot, but the image has 2 "
         "panels; crop it to one\n"
     )
+
+
+def test_reads_an_inset_as_a_plot_of_its_own(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    output = tmp_path / "decay.csv"
+
+    assert main([INSET, "-o", str(output)]) == 0
+
+    paths = [output, tmp_path / "decay_inset.csv"]
+    assert capsys.readouterr().err == (
+        'figrecover: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10\n'
+        'figrecover: y-axis "Voltage (mV)" with ticks at 0, 0.5, 1, 1.5, 2, 2.5, 3\n'
+        "figrecover: panel inset: x-axis with ticks at 6, 7, 8, 9, 10\n"
+        "figrecover: panel inset: y-axis with ticks at 0.1, 0.2, 0.3\n"
+        f"figrecover: wrote {', '.join(map(str, paths))}\n"
+    )
+    # The plot's curve is traced without the inset's, and the inset's in
+    # its own units, over x from 6 to 10.
+    assert_recovers(output.read_text(), decay, header="Time (s),Voltage (mV)")
+    data = read_csv(paths[1].read_text())
+    assert data[:, 0].min() < 6.1
+    assert data[:, 0].max() > 9.9
+    np.testing.assert_allclose(data[:, 1], decay(data[:, 0]), atol=0.005)
+
+
+def inset_of(panel: Panel) -> Panel:
+    """Return the spectrum example as an inset of a panel."""
+    return dataclasses.replace(spectrum_panel(None), inset_of=panel)
+
+
+def test_writes_insets_to_files_of_their_own(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    plot = spectrum_panel(None)
+    monkeypatch.setattr(cli, "read_panels", lambda _image: [plot, inset_of(plot)])
+    output = tmp_path / "out.csv"
+
+    assert main([str(EXAMPLES / "spectrum.png"), "-o", str(output)]) == 0
+
+    # The plot holding the inset has no name, so is written to out.csv.
+    paths = [output, tmp_path / "out_inset.csv"]
+    assert capsys.readouterr().err.splitlines() == [
+        'figrecover: x-axis "E" with ticks at 0, 10',
+        'figrecover: y-axis "I" with ticks at 0, 1',
+        'figrecover: panel inset: x-axis "E" with ticks at 0, 10',
+        'figrecover: panel inset: y-axis "I" with ticks at 0, 1',
+        f"figrecover: wrote {', '.join(map(str, paths))}",
+    ]
+    for path in paths:
+        assert_recovers(path.read_text(), spectrum, header="E,I")
+
+
+def test_writes_insets_to_standard_output_with_a_panel_column(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    plot = spectrum_panel(None)
+    monkeypatch.setattr(cli, "read_panels", lambda _image: [plot, inset_of(plot)])
+
+    assert main([str(EXAMPLES / "spectrum.png")]) == 0
+
+    # The plot holding the inset has no name, so its panel is empty.
+    data = read_panel_csv(capsys.readouterr().out, "panel,E,I")
+    assert list(data) == ["", "inset"]
+    for panel in data.values():
+        assert_follows(panel, spectrum)
+
+
+def test_reports_a_plot_with_insets_left_out(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    plot = blank(spectrum_panel(None))
+    monkeypatch.setattr(cli, "read_panels", lambda _image: [plot, inset_of(plot)])
+
+    assert main([str(EXAMPLES / "spectrum.png")]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.err.splitlines()[-1].startswith(
+        "figrecover: left out the plot, as its curves cannot be traced: "
+    )
+    assert list(read_panel_csv(captured.out, "panel,E,I")) == ["inset"]
+
+
+def test_names_insets_after_their_panels() -> None:
+    a, b = spectrum_panel("a"), spectrum_panel(None)
+    plot = spectrum_panel(None)
+
+    assert _names([a, inset_of(a), b, inset_of(b), inset_of(b)]) == [
+        "a",
+        "a_inset",
+        "2",
+        "2_inset1",
+        "2_inset2",
+    ]
+    assert _names([plot, inset_of(plot), inset_of(plot)]) == [None, "inset1", "inset2"]
+
+
+def test_finds_markers_in_a_plot_with_insets(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    calibration = Calibration.from_points(
+        [(0, 0), (10, 0), (0, 1)], [(55, 83), (627, 83), (55, 185)]
+    )
+    axes = Axes(calibration, ((55, 0), (627, 10)), ((83, 0), (185, 1)), None, None)
+    plot = Panel(None, load_image(EXAMPLES / "markers.png"), (0, 0), axes)
+    inset = dataclasses.replace(plot, inset_of=plot)
+    monkeypatch.setattr(cli, "read_panels", lambda _image: [plot, inset])
+
+    assert main([str(EXAMPLES / "markers.png"), *MARKER_KEYS]) == 0
+
+    # The inset is left out, as the markers are those of one plot.
+    captured = capsys.readouterr()
+    assert "inset" not in captured.err
+    data = read_csv(captured.out, header="series,x,y")
+    assert set(data[:, 0]) == {1, 2, 3, 4}
 
 
 @pytest.mark.usefixtures("without_ocr")

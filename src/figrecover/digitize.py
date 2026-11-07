@@ -82,6 +82,15 @@ class _Box:
             self.right - other.left,
         )
 
+    def placed(self, other: _Box) -> _Box:
+        """Return this box, measured in another, measured as the other one is."""
+        return _Box(
+            self.top + other.top,
+            self.bottom + other.top,
+            self.left + other.left,
+            self.right + other.left,
+        )
+
     def turned(self) -> _Box:
         """Return this box in the image turned over its diagonal, rows for columns."""
         return _Box(self.left, self.right, self.top, self.bottom)
@@ -359,10 +368,25 @@ def find_markers(
 def _plot_area(image: Image, origin: Point) -> tuple[Image, int, int]:
     """Return the part of the image inside the axes, and its left and top edges.
 
+    That is the part that ``_framed_area`` finds, with the frames inside it,
+    such as those of insets and legends, painted out, as ``_unframed``
+    paints them.
+    """
+    area, frames = _framed_area(image, origin)
+    plot = _unframed(image[area.top : area.bottom, area.left : area.right], frames)
+    return plot, area.left, area.top
+
+
+def _framed_area(image: Image, origin: Point) -> tuple[_Box, list[_Box]]:
+    """Return the part of the image inside the axes, and the frames inside it.
+
     That is the part above and right of the axes, or if a frame closes them,
-    as matplotlib draws by default, the part inside the frame too. Frames
-    inside it, such as those of insets and legends, are painted out, as
-    ``_unframed`` paints them.
+    as matplotlib draws by default, the part inside the frame too. The frames
+    inside it, such as those of insets and legends, are those that
+    ``_frames`` finds, measured in it.
+
+    Raises:
+        ValueError: If the axes leave no plot area.
     """
     height = image.shape[0]
     left = max(0, int(origin[0]) + AXIS_MARGIN)
@@ -372,8 +396,10 @@ def _plot_area(image: Image, origin: Point) -> tuple[Image, int, int]:
         raise ValueError(msg)
     ink = ink_mask(image)[:bottom, left:] > 0
     top, right = _inside_frame(ink)
-    plot = _unframed(image[top:bottom, left : left + right], ink[top:, :right])
-    return plot, left, top
+    plot = image[top:bottom, left : left + right]
+    background = np.median(plot.reshape(-1, 3), axis=0)
+    frames = _frames(plot, ink[top:, :right], background)
+    return _Box(top, bottom, left, left + right), frames
 
 
 def _inside_frame(ink: npt.NDArray[np.bool_]) -> tuple[int, int]:
@@ -405,21 +431,21 @@ def _inside_frame(ink: npt.NDArray[np.bool_]) -> tuple[int, int]:
         below = ink[first:, column]
         run = len(below) if below.all() else int(np.argmin(below))
         if run >= (height - first) * FRAME_REACH:
-            return last + 1 + AXIS_MARGIN, max(column - AXIS_MARGIN, 0)
+            return int(last) + 1 + AXIS_MARGIN, max(column - AXIS_MARGIN, 0)
     return 0, width
 
 
-def _unframed(plot: Image, ink: npt.NDArray[np.bool_]) -> Image:
-    """Return a plot area with the frames inside it painted in its background colour.
+def _unframed(plot: Image, frames: Sequence[_Box]) -> Image:
+    """Return a plot area with frames inside it painted in its background colour.
 
-    Each frame, as ``_frames`` finds it, is painted with all it holds, and
+    Each frame, such as ``_frames`` finds, is painted with all it holds, and
     ``AXIS_MARGIN`` around it, so that an inset's curve or a legend's key is
     not traced as part of a curve of its colour. The background colour is
     the median.
     """
     background = np.median(plot.reshape(-1, 3), axis=0)
     painted = plot.copy()
-    for frame in _frames(plot, ink, background):
+    for frame in frames:
         painted[
             max(frame.top - AXIS_MARGIN, 0) : frame.bottom + AXIS_MARGIN,
             max(frame.left - AXIS_MARGIN, 0) : frame.right + AXIS_MARGIN,

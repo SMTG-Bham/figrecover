@@ -29,7 +29,7 @@ from .digitize import (
     remove_grid,
     trace_curves,
 )
-from .panels import read_panels
+from .panels import Panel, read_panels
 from .pdf import (
     PREVIEW_SCALE,
     Box,
@@ -66,7 +66,8 @@ class _Plot:
 
     Attributes:
         name: The name of the panel, the letter of its label or its number,
-            or None if the image is one plot.
+            or None if the image is one plot; an inset's is named after its
+            panel, such as a_inset, or inset in an image of one plot.
         image: The plot's image, in which to trace its curves.
         offset: The pixel position, in the whole image, of the bottom-left
             corner of ``image``.
@@ -227,8 +228,9 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         metavar="FILE",
         help="CSV file to write (default: standard output); for an image of "
-        "several panels, one for each, named after the panel, such as out_a.csv "
-        "for -o out.csv (default: standard output, with a panel column)",
+        "several panels, or with insets, one for each, named after the panel, "
+        "such as out_a.csv or out_inset.csv for -o out.csv (default: standard "
+        "output, with a panel column)",
     )
     parser.add_argument(
         "--preview",
@@ -246,7 +248,8 @@ def _build_parser() -> argparse.ArgumentParser:
 def _digitize(arguments: argparse.Namespace) -> None:
     """Write the curves in the image, each of its panels or the PDF file, as CSV.
 
-    A panel whose curves cannot be traced is left out, with a warning.
+    A panel whose curves cannot be traced is left out, with a warning. With
+    ``-m``, insets are left out, as the markers are those of one plot.
     """
     if _is_pdf(arguments.image):
         _digitize_pdf(arguments)
@@ -264,7 +267,7 @@ def _digitize(arguments: argparse.Namespace) -> None:
         )
         plots = [_Plot(None, image, (0, 0), calibration, pixels, ("x", "y"))]
     else:
-        plots = _read_panels(image)
+        plots = _read_panels(image, insets=not arguments.markers)
     if arguments.markers and len(plots) > 1:
         msg = (
             f"-m finds the markers of one plot, but the image has {len(plots)} "
@@ -280,9 +283,10 @@ def _digitize(arguments: argparse.Namespace) -> None:
         try:
             traced, traced_colours, marked = _trace(plot, arguments)
         except ValueError as error:
-            if plot.name is None:
+            if len(plots) == 1:
                 raise
-            message = f"left out panel {plot.name}, as its curves cannot be traced"
+            called = f"panel {plot.name}" if plot.name else "the plot"
+            message = f"left out {called}, as its curves cannot be traced"
             print(f"figrecover: {message}: {error}", file=sys.stderr)
             continue
         tables.append((plot, [plot.calibration.to_data(curve) for curve in traced]))
@@ -428,11 +432,12 @@ def _click_locations(image: Image, points: Sequence[Point]) -> list[Point]:
     return pixels
 
 
-def _read_panels(image: Image) -> list[_Plot]:
+def _read_panels(image: Image, *, insets: bool) -> list[_Plot]:
     """Read the axes of the image's panels, and print them so they can be checked.
 
     Panels left out, as their axes cannot be read, are reported too. An
-    image of one plot is one panel, without a name. Each panel's pixel
+    image of one plot is one panel, without a name, as ``_names`` names
+    them. Insets are left out unless ``insets`` is true. Each panel's pixel
     positions to ring in the preview are those of its ticks, on their axis
     lines, and its columns are named after its axis titles.
     """
@@ -443,14 +448,36 @@ def _read_panels(image: Image) -> list[_Plot]:
         finally:
             for warning in caught:
                 print(f"figrecover: {warning.message}", file=sys.stderr)
+    if not insets:
+        panels = [panel for panel in panels if panel.inset_of is None]
     plots = []
-    for number, panel in enumerate(panels, start=1):
-        name = (panel.label or str(number)) if len(panels) > 1 else None
+    for panel, name in zip(panels, _names(panels), strict=True):
         calibration, pixels, columns = _read_axes(panel.axes, name)
         plots.append(
             _Plot(name, panel.image, panel.offset, calibration, pixels, columns)
         )
     return plots
+
+
+def _names(panels: Sequence[Panel]) -> list[str | None]:
+    """Return the name of each panel: the letter of its label or its number.
+
+    Panels are numbered in reading order, and the only one has no name. An
+    inset is named after its panel, such as a_inset, or inset for the only
+    panel's, and its number, such as a_inset2, if the panel has several.
+    """
+    plots = [panel for panel in panels if panel.inset_of is None]
+    names: dict[Panel, str | None] = {
+        panel: (panel.label or str(number)) if len(plots) > 1 else None
+        for number, panel in enumerate(plots, start=1)
+    }
+    for panel in panels:
+        if panel.inset_of is not None:
+            insets = [other for other in panels if other.inset_of is panel.inset_of]
+            number = str(insets.index(panel) + 1) if len(insets) > 1 else ""
+            plot = names[panel.inset_of]
+            names[panel] = f"{plot}_inset{number}" if plot else f"inset{number}"
+    return [names[panel] for panel in panels]
 
 
 def _read_axes(
@@ -527,23 +554,30 @@ def _write(
 ) -> None:
     """Write the curves of each plot as CSV, to the output file or standard output.
 
-    The curves of an image of several panels go to a file for each panel,
-    named after it, such as out_a.csv for out.csv, or to standard output
-    with a panel column, whose x and y columns are named after the axis
-    titles if every panel's are the same, or x and y.
+    The curves of an image of several panels, or with insets, go to a file
+    for each panel, named after it, such as out_a.csv for out.csv, or
+    out.csv itself for a panel without a name, as the plot that holds the
+    insets in an image of one plot is; or to standard output with a panel
+    column, empty for a panel without a name, whose x and y columns are
+    named after the axis titles if every panel's are the same, or x and y.
     """
-    if tables[0][0].name is None:
+    if len(tables) == 1 and tables[0][0].name is None:
         plot, curves = tables[0]
         _write_csv(output or sys.stdout, [(None, curves)], plot.columns)
     elif output is not None:
-        paths = [output.with_stem(f"{output.stem}_{plot.name}") for plot, _ in tables]
+        paths = [
+            output.with_stem(f"{output.stem}_{plot.name}") if plot.name else output
+            for plot, _ in tables
+        ]
         for path, (plot, curves) in zip(paths, tables, strict=True):
             _write_csv(path, [(None, curves)], plot.columns)
         print(f"figrecover: wrote {', '.join(map(str, paths))}", file=sys.stderr)
     else:
         columns = {plot.columns for plot, _ in tables}
         names = columns.pop() if len(columns) == 1 else ("x", "y")
-        _write_csv(sys.stdout, [(plot.name, curves) for plot, curves in tables], names)
+        _write_csv(
+            sys.stdout, [(plot.name or "", curves) for plot, curves in tables], names
+        )
 
 
 def _write_csv(

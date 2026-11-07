@@ -15,7 +15,7 @@ import numpy.typing as npt
 
 from .axes import Axes, _NoTicksError, _read_axes, _read_text, _Text
 from .calibration import Point
-from .digitize import AXIS_MARGIN, Image, _Box, ink_mask
+from .digitize import AXIS_MARGIN, Image, _Box, _framed_area, ink_mask
 
 _LINE_LENGTH = 0.1  # axis lines span this fraction of the image's shorter side or more
 _LABEL_REACH = 0.25  # a label lies this fraction of its axes' size from their corner
@@ -36,22 +36,27 @@ class Panel:
 
     Attributes:
         label: The letter of the panel's label, such as ``a`` for (a), or
-            None if it has none that could be read.
+            None if it has none that could be read, or is an inset.
         image: The panel's part of the whole image, in which to trace its
             curves: the whole image if it is the only panel, or else a part
             that runs up to the top and right of the panel's axes, as the
             image beyond them belongs to other panels. Its label is painted
             over in the background colour, inside its axes, as it is usually
-            drawn in a curve's colour.
+            drawn in a curve's colour. An inset's part lies inside the axes
+            of the panel it is an inset of, and runs up to the top and right
+            of its own.
         offset: The pixel position, in the whole image, of the bottom-left
             corner of ``image``.
         axes: The panel's axes, in pixels of ``image``.
+        inset_of: The panel inside whose axes this one is drawn, as an inset,
+            or None if it is not an inset.
     """
 
     label: str | None
     image: Image
     offset: Point
     axes: Axes
+    inset_of: Panel | None = None
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -59,8 +64,9 @@ class _Piece:
     """A plot's part of an image of several, and the text read in it.
 
     Attributes:
-        box: The box around the plot's axes, in the whole image.
-        part: The plot's part of the whole image, as ``_parts`` finds it.
+        box: The box around the plot's axes, in the whole image, or an
+            inset's in the image of its plot.
+        part: The plot's part of that image, as ``_parts`` finds it.
         image: The image of the part.
         texts: The lines of text in the part, less the labels of other plots.
         label: The plot's label, or None if it has none.
@@ -110,6 +116,12 @@ def read_panels(image: Image) -> list[Panel]:
     axes, in the image of the plot in which its curves are traced, so it is
     not traced as part of a curve of the same colour.
 
+    A plot drawn inside another's axes, in a frame, as an inset is, is a
+    plot of its own, read from its part of the other's plot area, as
+    ``_insets`` finds it, while it is painted out of the other's when its
+    curves are traced. A frame whose axes cannot be read, such as a
+    legend's, is no plot, and is left out without a warning.
+
     The text is read with RapidOCR, which the ``ocr`` extra installs.
 
     Args:
@@ -117,7 +129,7 @@ def read_panels(image: Image) -> list[Panel]:
 
     Returns:
         The plots, in reading order: in rows from the top, each from the
-        left.
+        left, and each followed by its insets, in reading order too.
 
     Raises:
         ModuleNotFoundError: If the ``ocr`` extra is not installed.
@@ -129,10 +141,10 @@ def read_panels(image: Image) -> list[Panel]:
     if len(boxes) <= 1:
         texts = _read_text(image)
         axes = _read_axes(image, texts)
-        if not boxes:
-            return [Panel(None, image, (0, 0), axes)]
-        label = _label(texts, boxes[0], image.shape[0])
-        return [Panel(_letter(label), _painted(image, label, boxes[0]), (0, 0), axes)]
+        label = _label(texts, boxes[0], image.shape[0]) if boxes else None
+        painted = _painted(image, label, boxes[0]) if boxes else image
+        panel = Panel(_letter(label), painted, (0, 0), axes)
+        return [panel, *_insets(panel, [text for text in texts if text != label])]
 
     pieces = [
         _piece(image, box, part, boxes)
@@ -167,15 +179,14 @@ def read_panels(image: Image) -> list[Panel]:
         raise ValueError(msg)
     found = sorted(read)
     letters = _in_sequence([_letter(pieces[index].label) for index in found])
-    return [
-        Panel(
-            letter,
-            pieces[index].traced,
-            (pieces[index].part.left, height - pieces[index].part.bottom),
-            read[index],
-        )
-        for letter, index in zip(letters, found, strict=True)
-    ]
+    plots = []
+    for letter, index in zip(letters, found, strict=True):
+        piece = pieces[index]
+        offset = (piece.part.left, height - piece.part.bottom)
+        panel = Panel(letter, piece.traced, offset, read[index])
+        texts = [text for text in piece.texts if text != piece.label]
+        plots += [panel, *_insets(panel, texts)]
+    return plots
 
 
 def _piece(image: Image, box: _Box, part: _Box, boxes: Sequence[_Box]) -> _Piece:
@@ -194,6 +205,72 @@ def _piece(image: Image, box: _Box, part: _Box, boxes: Sequence[_Box]) -> _Piece
     }
     texts = [text for text in texts if text not in others]
     return _Piece(box, part, piece, texts, _label(texts, box.within(part), height))
+
+
+def _insets(panel: Panel, texts: Sequence[_Text]) -> list[Panel]:
+    """Return the insets of a plot, each read as a plot of its own.
+
+    An inset is a frame in the plot area whose axes can be read. The frames
+    are those that ``_framed_area`` finds, which are painted out when the
+    plot's curves are traced. A frame whose axes cannot be read, such as a
+    legend's, or an inset's without tick labels, just stays painted out,
+    without a warning, and frames inside another, such as an inset's
+    legend, belong to that one.
+
+    Each inset is read from its part of the plot area, found as ``_parts``
+    finds the part of each plot in an image of several, so it holds the
+    inset's tick labels and titles but no other inset's axes, and its image,
+    in which to trace its curves, runs up to the top and right of its frame.
+    Its text is that of ``texts``, read in the plot's image and measured in
+    it, that lies in the part, as reading the part again would take about as
+    long as reading the plot.
+
+    Returns:
+        The insets, in reading order.
+    """
+    try:
+        area, frames = _framed_area(panel.image, panel.axes.calibration.origin)
+    except ValueError:
+        return []  # the axes leave no plot area
+    frames = _in_order(_outermost(frames))
+    ink = ink_mask(panel.image)[area.top : area.bottom, area.left : area.right] > 0
+    height = panel.image.shape[0]
+    insets = []
+    for frame, inside in zip(frames, _parts(ink, frames), strict=True):
+        part = inside.placed(area)
+        piece = _Piece(
+            frame.placed(area),
+            part,
+            panel.image[part.top : part.bottom, part.left : part.right],
+            _in_part(texts, part, height),
+            None,
+        )
+        try:
+            axes = _read_axes(piece.image, piece.texts)
+        except ValueError:
+            continue  # a legend, say
+        offset = (panel.offset[0] + part.left, panel.offset[1] + height - part.bottom)
+        insets.append(Panel(None, piece.traced, offset, axes, panel))
+    return insets
+
+
+def _in_part(texts: Sequence[_Text], part: _Box, height: int) -> list[_Text]:
+    """Return the texts whose middles lie in a part of an image, measured in it.
+
+    ``height`` is that of the image, to measure the part from the bottom.
+    """
+    bottom = height - part.bottom
+    return [
+        replace(
+            text,
+            left=text.left - part.left,
+            bottom=text.bottom - bottom,
+            right=text.right - part.left,
+            top=text.top - bottom,
+        )
+        for text in texts
+        if part.left <= text.x < part.right and bottom <= text.y < height - part.top
+    ]
 
 
 def _read_sharing(
@@ -329,8 +406,8 @@ def _boxes(ink: npt.NDArray[np.uint8]) -> list[_Box]:
     other lines that meet them, such as the rest of a frame, or grid lines.
     The box around them takes in the tick marks that run on from the lines
     at the corners. Boxes within another's, such as an inset's, or a
-    legend's with square corners, are left out, and are painted over when
-    the plot's curves are traced.
+    legend's with square corners, are left out, as ``_insets`` finds the
+    insets of each plot among the frames painted out of its plot area.
     """
     # An odd length, as OpenCV shifts what an even one keeps by a pixel.
     length = round(_LINE_LENGTH * min(ink.shape)) | 1
@@ -344,10 +421,16 @@ def _boxes(ink: npt.NDArray[np.uint8]) -> list[_Box]:
         cv2.bitwise_or(horizontal, vertical)
     )
     both = set(np.unique(pieces[horizontal > 0])) & set(np.unique(pieces[vertical > 0]))
-    boxes = [
-        _Box(int(top), int(top + rows), int(left), int(left + columns))
-        for left, top, columns, rows, _ in stats[sorted(both)]
-    ]
+    return _outermost(
+        [
+            _Box(int(top), int(top + rows), int(left), int(left + columns))
+            for left, top, columns, rows, _ in stats[sorted(both)]
+        ]
+    )
+
+
+def _outermost(boxes: Sequence[_Box]) -> list[_Box]:
+    """Return the boxes that lie within no other."""
     return [
         box
         for box in boxes
