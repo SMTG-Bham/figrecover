@@ -165,6 +165,38 @@ def draw_markers(name: str, curves: dict[str, Curve]) -> None:
     save(name, figure, axes, [(0, 0), (10, 0), (0, 1)], legend)
 
 
+def draw_panels(name: str) -> None:
+    """Draw four plots in a figure, labelled (a) to (d), and print their points.
+
+    Each plot has axes of its own, framed as matplotlib draws them by
+    default, over x from 0 to 10, but the last has logarithmic axes, over x
+    from 1 to 10^4, with a margin around the curve. The labels are titles
+    aligned with the left of the axes, and the layout makes room for them.
+    """
+    figure, grid = plt.subplots(2, 2, figsize=(8, 6), dpi=100, layout="constrained")
+    linear = [
+        (spectrum, ("Energy (eV)", "Intensity"), (0, 3)),
+        (ringing, ("Time (s)", "Voltage (mV)"), (-1, 1)),
+        (growth, ("Depth (m)", "Temperature (K)"), (0, 3)),
+    ]
+    x = np.linspace(0, 10, 2000)
+    for axes, (curve, titles, ylim) in zip(grid.flat, linear, strict=False):
+        axes.plot(x, curve(x), color="black", linewidth=1.5)
+        axes.set(xlabel=titles[0], ylabel=titles[1], xlim=(0, 10), ylim=ylim)
+    x = np.logspace(0, 4, 2000)
+    grid[1, 1].loglog(x, lowpass(x), color="black", linewidth=1.5)
+    grid[1, 1].set(xlabel="Frequency (Hz)", ylabel="Power (mW)")
+    for label, axes in zip("abcd", grid.flat, strict=True):
+        axes.set_title(f"({label})", loc="left")
+    figure.savefig(HERE / f"{name}.png", facecolor="white")
+
+    points = [[(0, 0), (10, 0), (0, 1)]] * 3 + [[(1, 0.1), (1e4, 0.1), (1, 1e3)]]
+    for label, axes, plot_points in zip("abcd", grid.flat, points, strict=True):
+        pixels = axes.transData.transform(plot_points).round().astype(int)
+        print(f"{name} ({label})", " ".join(f"-l {x},{y}" for x, y in pixels))
+    plt.close(figure)
+
+
 def save(
     name: str,
     figure: Figure,
@@ -202,3 +234,4 @@ draw_log("binary", quadratic, titles, [(1, 0.25), (16, 0.25), (1, 64)], base=2)
 draw_titled("titled", spectrum, ("Photon energy\n(eV)", "Absorbance\n(arb. units)"))
 draw_markers("markers", {"D": decay, "s": growth, "o": wave, "x": trend})
 draw_slanted("slanted", damped, ("Time (s)", "Voltage (mV)"))
+draw_panels("panels")

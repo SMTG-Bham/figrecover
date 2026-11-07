@@ -1,7 +1,9 @@
 """Tests for the command-line interface, using the example plots."""
 
+import dataclasses
 import runpy
 import sys
+import warnings
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
@@ -10,7 +12,17 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 
-from figrecover import Axes, Calibration, Image, Point, __version__, cli, interactive
+from figrecover import (
+    Axes,
+    Calibration,
+    Image,
+    Panel,
+    Point,
+    __version__,
+    cli,
+    interactive,
+    load_image,
+)
 from figrecover.cli import main
 
 type Curve = Callable[[npt.NDArray[np.float64]], npt.NDArray[np.float64]]
@@ -31,6 +43,7 @@ MARKER_KEYS = ["-m", "148,18", "-m", "260,18", "-m", "377,18", "-m", "483,18"]
 MARKERS = [str(EXAMPLES / "markers.png"), *POINTS, *MARKER_LOCATIONS]
 LOGARITHMIC = str(EXAMPLES / "logarithmic.png")
 BINARY = str(EXAMPLES / "binary.png")
+PANELS = str(EXAMPLES / "panels.png")
 
 
 def spectrum(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
@@ -295,14 +308,22 @@ def test_calibrates_logarithmic_axes_from_reference_points(
     assert_follows_lowpass(read_csv(capsys.readouterr().out))
 
 
-def test_quotes_titles_in_the_csv_header(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
+def spectrum_panel(
+    label: str | None, titles: tuple[str | None, str | None] = ("E", "I")
+) -> Panel:
+    """Return the spectrum example as a panel, with its axes as though read."""
     calibration = Calibration.from_points(
         [(0, 0), (10, 0), (0, 1)], [(80, 44), (576, 44), (80, 147)]
     )
-    axes = Axes(calibration, ((80, 0), (576, 10)), ((44, 0), (147, 1)), "E, eV", None)
-    monkeypatch.setattr(cli, "read_axes", lambda _image: axes)
+    axes = Axes(calibration, ((80, 0), (576, 10)), ((44, 0), (147, 1)), *titles)
+    return Panel(label, load_image(EXAMPLES / "spectrum.png"), (0, 0), axes)
+
+
+def test_quotes_titles_in_the_csv_header(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    panel = spectrum_panel(None, ("E, eV", None))
+    monkeypatch.setattr(cli, "read_panels", lambda _image: [panel])
 
     assert main([str(EXAMPLES / "spectrum.png")]) == 0
 
@@ -312,6 +333,146 @@ def test_quotes_titles_in_the_csv_header(
         "figrecover: y-axis with ticks at 0, 1\n"
     )
     assert_recovers(captured.out, spectrum, header='"E, eV",y')
+
+
+def test_reads_each_panel_of_a_figure(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    output, preview = tmp_path / "panels.csv", tmp_path / "preview.png"
+
+    assert main([PANELS, "-o", str(output), "--preview", str(preview)]) == 0
+
+    paths = [tmp_path / f"panels_{letter}.csv" for letter in "abcd"]
+    assert capsys.readouterr().err == (
+        'figrecover: panel a: x-axis "Energy (eV)" with ticks at 0, 2, 4, 6, 8, 10\n'
+        'figrecover: panel a: y-axis "Intensity" with ticks at '
+        "0, 0.5, 1, 1.5, 2, 2.5, 3\n"
+        'figrecover: panel b: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10\n'
+        'figrecover: panel b: y-axis "Voltage (mV)" with ticks at '
+        "-1, -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1\n"
+        'figrecover: panel c: x-axis "Depth (m)" with ticks at 0, 2, 4, 6, 8, 10\n'
+        'figrecover: panel c: y-axis "Temperature (K)" with ticks at '
+        "0, 0.5, 1, 1.5, 2, 2.5, 3\n"
+        'figrecover: panel d: logarithmic x-axis "Frequency (Hz)" with ticks at '
+        "1, 10, 100, 1000, 10000\n"
+        'figrecover: panel d: logarithmic y-axis "Power (mW)" with ticks at '
+        "0.1, 1, 10, 100, 1000\n"
+        f"figrecover: wrote {', '.join(map(str, paths))}\n"
+    )
+    assert not output.exists()
+    for path, curve, header in zip(
+        paths[:3],
+        [spectrum, ringing, growth],
+        ["Energy (eV),Intensity", "Time (s),Voltage (mV)", "Depth (m),Temperature (K)"],
+        strict=True,
+    ):
+        data = read_csv(path.read_text(), header)
+        # The panels are narrower than the other examples, so the curves
+        # start and end further from the axes, three pixels in.
+        assert data[:, 0].min() < 0.15
+        assert data[:, 0].max() > 9.85
+        np.testing.assert_allclose(data[:, 1], curve(data[:, 0]), atol=0.04)
+    assert_follows_lowpass(read_csv(paths[3].read_text(), "Frequency (Hz),Power (mW)"))
+    image = cv2.imread(str(preview))
+    assert image is not None
+    assert image.shape == (600, 800, 3)
+
+
+def read_panel_csv(text: str, header: str) -> dict[str, npt.NDArray[np.float64]]:
+    """Parse CSV output with a panel column, checking its header."""
+    first, *rows = text.splitlines()
+    assert first == header
+    panels = dict.fromkeys(row.partition(",")[0] for row in rows)
+    return {
+        panel: np.loadtxt(
+            [row.partition(",")[2] for row in rows if row.startswith(f"{panel},")],
+            delimiter=",",
+            ndmin=2,
+        )
+        for panel in panels
+    }
+
+
+@pytest.mark.parametrize(
+    ("titles", "header"), [(("E", "I"), "panel,E,I"), (("t", None), "panel,x,y")]
+)
+def test_writes_panels_to_standard_output_with_a_panel_column(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    titles: tuple[str | None, str | None],
+    header: str,
+) -> None:
+    # The second panel has no label, so takes its number.
+    found = [spectrum_panel("a"), spectrum_panel(None, titles)]
+    monkeypatch.setattr(cli, "read_panels", lambda _image: found)
+
+    assert main([str(EXAMPLES / "spectrum.png"), "-n", "1"]) == 0
+
+    captured = capsys.readouterr()
+    y_title = f' "{titles[1]}"' if titles[1] else ""
+    assert captured.err.splitlines() == [
+        'figrecover: panel a: x-axis "E" with ticks at 0, 10',
+        'figrecover: panel a: y-axis "I" with ticks at 0, 1',
+        f'figrecover: panel 2: x-axis "{titles[0]}" with ticks at 0, 10',
+        f"figrecover: panel 2: y-axis{y_title} with ticks at 0, 1",
+        "figrecover: panel a: colours: -c 040404",
+        "figrecover: panel 2: colours: -c 040404",
+    ]
+    data = read_panel_csv(captured.out, header)
+    assert list(data) == ["a", "2"]
+    for panel in data.values():
+        assert_follows(panel, spectrum)
+
+
+def blank(panel: Panel) -> Panel:
+    """Return a panel whose image is blank, so it has no curve to trace."""
+    return dataclasses.replace(panel, image=np.full_like(panel.image, 255))
+
+
+def test_reports_panels_left_out(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def read_panels(_image: Image) -> list[Panel]:
+        warnings.warn("left out the panel at 1,2, as ...", stacklevel=1)
+        return [spectrum_panel("a"), blank(spectrum_panel("b"))]
+
+    monkeypatch.setattr(cli, "read_panels", read_panels)
+
+    assert main([str(EXAMPLES / "spectrum.png")]) == 0
+
+    captured = capsys.readouterr()
+    lines = captured.err.splitlines()
+    assert lines[0] == "figrecover: left out the panel at 1,2, as ..."
+    assert lines[-1].startswith(
+        "figrecover: left out panel b, as its curves cannot be traced: "
+    )
+    data = read_panel_csv(captured.out, "panel,E,I")
+    assert list(data) == ["a"]
+
+
+def test_needs_a_panel_whose_curves_can_be_traced(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    found = [blank(spectrum_panel("a")), blank(spectrum_panel("b"))]
+    monkeypatch.setattr(cli, "read_panels", lambda _image: found)
+
+    assert main([str(EXAMPLES / "spectrum.png")]) == 1
+    assert capsys.readouterr().err.endswith(
+        "figrecover: error: cannot trace the curves of any of the 2 panels\n"
+    )
+
+
+def test_finds_markers_in_one_panel_only(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    found = [spectrum_panel("a"), spectrum_panel("b")]
+    monkeypatch.setattr(cli, "read_panels", lambda _image: found)
+
+    assert main([str(EXAMPLES / "spectrum.png"), "-m", "148,18"]) == 1
+    assert capsys.readouterr().err.endswith(
+        "figrecover: error: -m finds the markers of one plot, but the image has 2 "
+        "panels; crop it to one\n"
+    )
 
 
 @pytest.mark.usefixtures("without_ocr")

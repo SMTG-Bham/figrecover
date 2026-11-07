@@ -32,6 +32,7 @@ _RAISED = 0.25  # a superscript sits this fraction of its label's height up or m
 _RAISED_TICK = 1.4  # a label this many times taller than usual has a tick on top
 _WRITTEN = 1.5  # words this much wider than tall run across, or taller, upwards
 _LINE_SPACING = 1.25  # a title's lines lie this many line heights apart or less
+_WORD_SPACING = 1  # the words of a line lie this many line heights apart or less
 _TILT = 15  # labels in boxes tilted this many degrees or more may be slanted
 _SLANT = 30  # text tilted this many degrees or more is slanted, not raised
 _TURN = 45  # slanted labels are read again turned this many degrees each way
@@ -151,7 +152,7 @@ def read_axes(image: Image) -> Axes:
     the others take.
     Each tick lies at the middle of its label. A scale factor printed where
     plotting libraries put one, such as ``1e-5`` above the y-axis or below
-    the x-axis, multiplies the values of its axis's ticks.
+    the right end of the x-axis, multiplies the values of its axis's ticks.
 
     Numbers may have decimal points and thousands separators of commas or
     spaces, or decimal commas and thousands separators of points or spaces.
@@ -188,9 +189,11 @@ def read_axes(image: Image) -> Axes:
     along their axes, from where the axes cross to the far end of the axis
     line or labels, so a title may be aligned with either end. A title runs
     on over the lines that follow, each within ``_LINE_SPACING`` line heights
-    of the one before and aligned with it. Texts below the x-axis tick labels
-    that are their second lines, such as units under each, are not the
-    title. A y-axis title written upwards, as most are,
+    of the one before and aligned with it, and the words of each line lie
+    within ``_WORD_SPACING`` line heights of each other, so text further
+    along, such as another plot's label, is left out. Texts below the x-axis
+    tick labels that are their second lines, such as units under each, are
+    not the title. A y-axis title written upwards, as most are,
     is read again turned upright, as OCR reads text written across more
     surely; one whose words are about as wide as tall, such as a single
     letter, is read whichever way OCR is surer of. A power of ten after a
@@ -212,7 +215,15 @@ def read_axes(image: Image) -> Axes:
             add to its tick values, or the plot has a second y-axis, on the
             right, with other values.
     """
-    texts = _with_slanted_labels(image, _read_text(image))
+    return _read_axes(image, _read_text(image))
+
+
+def _read_axes(image: Image, texts: list[_Text]) -> Axes:
+    """Read the axes of a plot from the lines of text that OCR found in its image.
+
+    See ``read_axes``.
+    """
+    texts = _with_slanted_labels(image, texts)
     if _decimal_comma(texts):
         texts = [_with_decimal_points(text) for text in texts]
     ink = ink_mask(image)
@@ -247,7 +258,7 @@ def read_axes(image: Image) -> Axes:
     words = _without_second_lines(
         [text for text in texts if text not in {*x_labels, *y_labels}], x_labels
     )
-    x_scale, y_scale = _scales(words, origin, y_labels)
+    x_scale, y_scale = _scales(words, origin, x_labels, y_labels)
     words = [word for word in words if not _SCALE.fullmatch(word.plain)]
     x_ticks = tuple(
         (float(pixel), value * x_scale)
@@ -942,21 +953,28 @@ def _snap(
 
 
 def _scales(
-    words: Sequence[_Text], origin: Point, y_labels: Sequence[_Text]
+    words: Sequence[_Text],
+    origin: Point,
+    x_labels: Sequence[_Text],
+    y_labels: Sequence[_Text],
 ) -> tuple[float, float]:
     """Return the scale factors printed beside the x and y axes, or 1.
 
     Plotting libraries print the y-axis's scale factor or offset above its
-    tick labels, starting at the axis, and the x-axis's below the axis. Text
-    elsewhere that looks like one, such as a legend entry of 1e-3, is not one.
+    tick labels, starting at the axis, and the x-axis's below the axis,
+    towards its right end. The y-axis's lies above the middle of the topmost
+    label, but beside its top half if that label's tick is at the top of the
+    axis. Text elsewhere that looks like one, such as a legend entry of
+    1e-3, or the y-axis's scale factor of a plot below, is not one.
     """
-    top = max(label.top for label in y_labels)
+    top = max(label.y for label in y_labels)
+    middle = (x_labels[0].x + x_labels[-1].x) / 2
     reach = origin[0] + np.median([label.top - label.bottom for label in y_labels])
     scales = [1.0, 1.0]
     for word in words:
-        if word.y < origin[1]:
+        if word.y < origin[1] and word.x > middle:
             axis = 0
-        elif word.bottom > top and word.left <= reach:
+        elif word.y > top and word.left <= reach:
             axis = 1
         else:
             continue
@@ -1083,24 +1101,43 @@ def _factor(title: str | None) -> tuple[str | None, float]:
 def _lines(texts: Iterable[_Text]) -> list[_Text]:
     """Return the lines of a title, the topmost first, each as one text.
 
-    The first line is the topmost text and the text level with it. Each line
-    after it lies below the one before, within ``_LINE_SPACING`` times the
-    height of the taller of the two, centre to centre, as a line of short
-    letters, such as T, has a short box; and aligned with it, the middle of
-    one lying within the other, so text further on, such as a caption, is
-    left out.
+    The first line is the topmost text and the words level with it, as
+    ``_words`` finds them. Each line after it lies below the one before,
+    within ``_LINE_SPACING`` times the height of the taller of the two,
+    centre to centre, as a line of short letters, such as T, has a short
+    box; and aligned with it, the middle of one lying within the other, so
+    text further on, such as a caption, is left out.
     """
     remaining = list(texts)
     lines: list[_Text] = []
     while remaining:
         nearest = max(remaining, key=lambda text: text.top)
         half = nearest.top - nearest.y
-        line = _line([text for text in remaining if abs(text.y - nearest.y) < half])
+        level = [text for text in remaining if abs(text.y - nearest.y) < half]
+        line = _line(_words(level, nearest))
         if lines and not _follows(line, lines[-1]):
             break
         lines.append(line)
         remaining = [text for text in remaining if text.y <= nearest.y - half]
     return lines
+
+
+def _words(level: Sequence[_Text], first: _Text) -> list[_Text]:
+    """Return the words of the line of a text, among the texts level with it.
+
+    The words run on from the text, each within ``_WORD_SPACING`` times its
+    height of the next, so texts further along the same level, such as the
+    labels of other plots below a wide one's title, are not words of it.
+    """
+    gap = _WORD_SPACING * (first.top - first.bottom)
+    runs: list[list[_Text]] = []
+    end = -math.inf
+    for text in sorted(level, key=lambda text: text.left):
+        if text.left - end > gap:
+            runs.append([])
+        runs[-1].append(text)
+        end = max(end, text.right)
+    return next(run for run in runs if first in run)
 
 
 def _line(texts: Sequence[_Text]) -> _Text:

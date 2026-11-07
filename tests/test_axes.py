@@ -937,6 +937,31 @@ def test_applies_scale_factors(monkeypatch: pytest.MonkeyPatch) -> None:
     assert found.x_title is None
 
 
+def test_applies_scale_factors_beside_the_top_tick_label(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The topmost tick is at the top of the axis, and its label reaches
+    # above it, beside the scale factor.
+    labels = [*x_labels(["0", "1", "2"]), *y_labels(["0", "1", "2", "3"])]
+    above_y_axis = text("1e6", 75, 270)
+
+    found = read(monkeypatch, [*labels, above_y_axis])
+
+    assert [value for _, value in found.y_ticks] == [0, 1e6, 2e6, 3e6]
+
+
+def test_ignores_scale_factors_below_the_start_of_the_x_axis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # As the y-axis's scale factor of a plot below would lie.
+    labels = [*x_labels(["0", "1", "2"]), *y_labels(["0", "1", "2"])]
+    below_x_axis = text("1e5", 75, 10)
+
+    found = read(monkeypatch, [*labels, below_x_axis])
+
+    assert [value for _, value in found.x_ticks] == [0, 1, 2]
+
+
 def test_ignores_text_like_scale_factors_in_the_plot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -960,7 +985,7 @@ def test_refuses_offsets(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_reads_the_nearest_titles(monkeypatch: pytest.MonkeyPatch) -> None:
     labels = [*x_labels(["0", "1", "2"]), *y_labels(["0", "1", "2"])]
     x_title = [text("(s)", 175, 25), text("Time", 140, 25, width=40)]
-    y_title = [text("(mV)", 10, 170, width=14), text("Voltage", 10, 110, width=14)]
+    y_title = [tall("(mV)", 10, 175, 30), tall("Voltage", 10, 130, 50)]
     others = [
         text("Figure 1", 200, 8, width=60),  # a caption below the x title
         text("(a)", 10, 290),  # a panel label above the y-axis
@@ -1068,6 +1093,20 @@ def test_leaves_out_lines_not_aligned_with_a_title(
     note = text("Source: lab", 320, 15, width=60)  # under the plot's right end
 
     found = read(monkeypatch, [*labels, x_title, note])
+
+    assert found.x_title == "Time (s)"
+
+
+def test_leaves_out_text_level_with_a_line_but_far_along(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The labels of two plots below a wide one, level with each other, would
+    # make a line across the title's middle.
+    labels = [*x_labels(["0", "1", "2"]), *y_labels(["0", "1", "2"])]
+    x_title = text("Time (s)", 200, 26, width=60)
+    others = [text("(b)", 70, 10), text("(c)", 330, 10)]
+
+    found = read(monkeypatch, [*labels, x_title, *others])
 
     assert found.x_title == "Time (s)"
 
