@@ -347,6 +347,17 @@ def test_trace_curve_ignores_short_marks_beside_a_curve() -> None:
     assert_traces_curve(image, calibration)
 
 
+def test_trace_curves_ignores_ink_of_other_colours() -> None:
+    # An annotation's arrow, in black, too short to be a curve of its own,
+    # but as long as a branch of the blue curve.
+    image, calibration = synthetic_plot(curves=[(BLUE, curve)])
+    cv2.arrowedLine(image, (200, 20), (260, 50), BLACK, 2, cv2.LINE_AA)
+
+    (pixels,) = trace_curves(image, [BLUE], calibration.origin)
+
+    assert_follows(pixels, calibration, curve)
+
+
 def test_trace_curves_ignores_specks() -> None:
     image, calibration = synthetic_plot(curves=[(BLUE, curve)], x_range=(0.5, 6))
     for column in range(300, WIDTH, 10):  # beyond the curve
