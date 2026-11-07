@@ -47,9 +47,13 @@ The first release.
   letters in reading order where OCR misreads or misses some, such as (b) as
   (p). `-o` writes a CSV for each panel, such as `out_a.csv`, and standard
   output gets one with a panel column. Each label is painted over before
-  tracing, and panels that cannot be read, such as colour bars, are left out
-  with a warning. Scale factors are read only where plotting libraries print
-  them, so that of a panel below is not taken for one of the x-axis above.
+  tracing, and is not read as another panel's title. Panels that share an
+  axis, labelled only on the outer panels, as matplotlib's `sharex` and
+  `sharey` draw them, take the axis and its title from the panel beside them
+  that lines up with them. Panels that cannot be read, such as colour bars,
+  are left out with a warning. Scale factors are read only where plotting
+  libraries print them, so that of a panel below is not taken for one of the
+  x-axis above.
 - Logarithmic axes work too. figrecover finds them itself when it reads the
   axes, including tick labels written as powers, such as 10⁻² or 2⁵, even
   where OCR misses the superscripts; and `--log` names them for `-p`.
