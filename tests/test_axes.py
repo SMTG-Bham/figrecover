@@ -141,6 +141,20 @@ def test_reads_titles_of_two_lines() -> None:
     assert found.y_title == "Absorbance (arb. units)"
 
 
+def test_reads_slanted_tick_labels() -> None:
+    found = read_axes(load_image(EXAMPLES / "slanted.png"))
+    # The pixel positions of (0, 0), (10, 0) and (0, 1) that
+    # examples/make_examples.py prints.
+    pixels = [(56, 56), (625, 56), (56, 190)]
+
+    data = found.calibration.to_data(pixels)
+
+    # As drawn, OCR reads the x-axis labels 2 as a Chinese character and 6 as
+    # 9, and the 0 of 10 lies higher than the 1, like an exponent.
+    assert [value for _, value in found.x_ticks] == [0, 2, 4, 6, 8, 10]
+    np.testing.assert_allclose(data, [(0, 0), (10, 0), (0, 1)], atol=0.03)
+
+
 @pytest.mark.parametrize("name", ["labelled", "spectrum"])
 def test_finds_where_the_axis_lines_cross(name: str) -> None:
     # The axes of labelled.png start before the first ticks, and those of
@@ -701,6 +715,74 @@ def test_reads_labels_written_upwards(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert [value for _, value in found.x_ticks] == [20, 40, 60]
     assert not found.calibration.x_log
+
+
+def write_slanted(image: Image, x: float, y: float, content: str) -> _Text:
+    """Write text rising at 45 degrees, centred on a pixel position.
+
+    Returns:
+        The text as OCR reads it, and its box, tilted as the text is.
+    """
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    (width, height), _ = cv2.getTextSize(content, font, 0.5, 1)
+    side = width + 8
+    across = np.full((side, side, 3), 255, dtype=np.uint8)
+    cv2.putText(across, content, (4, (side + height) // 2), font, 0.5, (0, 0, 0), 1)
+    turn = cv2.getRotationMatrix2D((side / 2, side / 2), 45, 1)
+    slanted = cv2.warpAffine(across, turn, (side, side), borderValue=(255, 255, 255))
+    top, left = HEIGHT - round(y + side / 2), round(x - side / 2)
+    image[top : top + side, left : left + side] = slanted
+    return _Text(content, left, HEIGHT - top - side, left + side, HEIGHT - top, 1, 45)
+
+
+def test_reads_slanted_labels_without_exponents(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Rising to the right, each label's last digit lies above the others.
+    image = plot()
+    labels = [write_slanted(image, 80 + 80 * i, 40, f"{2 * i + 2}0") for i in range(3)]
+    monkeypatch.setattr(
+        axes, "_read_text", lambda _image: [*labels, *y_labels(["0", "1", "2"])]
+    )
+
+    found = read_axes(image)
+
+    assert [value for _, value in found.x_ticks] == [20, 40, 60]
+
+
+def slanted_labels(values: Sequence[str]) -> list[_Text]:
+    """Return x-axis tick labels as OCR reads them written at a slant."""
+    return [dataclasses.replace(label, slant=45) for label in x_labels(values)]
+
+
+def test_reads_slanted_labels_again_turned(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Only the box of 8 shows the slant. Turned one way, OCR reads every
+    # label; the other way, fewer.
+    labels = x_labels(["0", "\N{CJK UNIFIED IDEOGRAPH-4E59}", "4", "9", "8"])
+    labels[-1] = dataclasses.replace(labels[-1], slant=45)
+    turned = {
+        -45: [
+            text(value, 80 + 80 * i, 44, width=24) for i, value in enumerate("02468")
+        ],
+        45: [text("2", 160, 46)],
+    }
+    monkeypatch.setattr(axes, "_read_turned", lambda _image, _top, angle: turned[angle])
+
+    found = read(monkeypatch, [*labels, *y_labels(["0", "1", "2"])])
+
+    assert [value for _, value in found.x_ticks] == [0, 2, 4, 6, 8]
+    assert [pixel for pixel, _ in found.x_ticks] == [80, 160, 240, 320, 400]
+
+
+def test_keeps_slanted_labels_read_no_better_turned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    labels = slanted_labels(["0", "\N{CJK UNIFIED IDEOGRAPH-4E59}", "4", "6"])
+    monkeypatch.setattr(axes, "_read_turned", lambda _image, _top, _angle: [])
+
+    found = read(monkeypatch, [*labels, *y_labels(["0", "1", "2"])])
+
+    assert [value for _, value in found.x_ticks] == [0, 4, 6]
 
 
 def right_labels(values: Sequence[str]) -> list[_Text]:

@@ -32,6 +32,9 @@ _RAISED = 0.25  # a superscript sits this fraction of its label's height up or m
 _RAISED_TICK = 1.4  # a label this many times taller than usual has a tick on top
 _WRITTEN = 1.5  # words this much wider than tall run across, or taller, upwards
 _LINE_SPACING = 1  # a title's lines lie this many line heights apart or less
+_TILT = 15  # labels in boxes tilted this many degrees or more may be slanted
+_SLANT = 30  # text tilted this many degrees or more is slanted, not raised
+_TURN = 45  # slanted labels are read again turned this many degrees each way
 _NUMBER = re.compile(  # 1, -2.5, 1,000, 2.5e-3 or 10%
     r"([+-]?(?:[1-9]\d{0,2}(?:,\d{3})+(?:\.\d*)?|\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)%?",
     re.IGNORECASE,
@@ -97,7 +100,10 @@ class Axes:
 class _Text:
     """A line of text and its box, in pixels from the bottom-left corner.
 
-    ``score`` is how sure OCR is of the text, from 0 to 1.
+    ``score`` is how sure OCR is of the text, from 0 to 1, and ``slant`` the
+    angle in degrees, anticlockwise from across, at which the top of the box
+    that OCR found around it runs. OCR tilts the box of a slanted text, but
+    of a short one with a raised exponent too.
     """
 
     text: str
@@ -106,6 +112,7 @@ class _Text:
     right: float
     top: float
     score: float = 1
+    slant: float = 0
 
     @property
     def x(self) -> float:
@@ -160,6 +167,10 @@ def read_axes(image: Image) -> Axes:
     An axis is logarithmic if more of its labels fall in line on a logarithmic
     scale than on a linear one.
 
+    OCR misreads x-axis tick labels written at a slant, as rotated labels
+    are, so if it has, they are read again turned level, as by
+    ``_with_slanted_labels``, and their digits are not taken for exponents.
+
     The axes cross where the axis lines run beside the tick labels. Without
     an axis line, its place is taken to be just beyond the tick labels and
     their tick marks, but no more than halfway to the first tick of the other
@@ -191,7 +202,7 @@ def read_axes(image: Image) -> Axes:
             add to its tick values, or the plot has a second y-axis, on the
             right, with other values.
     """
-    texts = _read_text(image)
+    texts = _with_slanted_labels(image, _read_text(image))
     if _decimal_comma(texts):
         texts = [_with_decimal_points(text) for text in texts]
     ink = ink_mask(image)
@@ -270,7 +281,11 @@ def _engine() -> Any:
 
 
 def _read_text(image: Image) -> list[_Text]:
-    """Find the lines of text in an image, with symbols as ``_normal`` writes them."""
+    """Find the lines of text in an image, with symbols as ``_normal`` writes them.
+
+    OCR gives the corners of each text's box clockwise from the top left, in
+    pixels from the top-left corner of the image.
+    """
     found = _engine()(cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
     if found.boxes is None:
         return []
@@ -283,6 +298,7 @@ def _read_text(image: Image) -> list[_Text]:
             float(box[:, 0].max()),
             height - float(box[:, 1].min()),
             float(score),
+            math.degrees(math.atan2(box[0, 1] - box[1, 1], box[1, 0] - box[0, 0])),
         )
         for box, text, score in zip(found.boxes, found.txts, found.scores, strict=True)
     ]
@@ -300,6 +316,111 @@ def _normal(text: str) -> str:
     """
     text = unicodedata.normalize("NFC", text.strip()).translate(_SYMBOLS)
     return _RAISED_SIGN.sub(lambda sign: "\u207a" if sign[0] == "+" else "\u207b", text)
+
+
+def _with_slanted_labels(image: Image, texts: list[_Text]) -> list[_Text]:
+    """Return texts with the x-axis tick labels read again turned, if slanted.
+
+    OCR misreads tick labels written at a slant, as rotated labels are, such
+    as 2 as a Chinese character and 6 as 9, but reads them well turned level.
+    The labels are the texts level with the lowest row of numbers, and along
+    it, and they are taken to be slanted if one is no number and the box of
+    one tilts ``_TILT`` degrees or more. The image below a label's height
+    above the row, so that the tops of the labels are kept, is then read
+    again, turned ``_TURN`` degrees each way. Each label takes the text of
+    the number read turned whose middle lies in its box, as slanted, keeping
+    its box, which fits the label better than one turned back. If more
+    labels are then numbers, those of the turn that makes the most replace
+    the labels.
+    """
+    try:
+        row = _lowest_row([text for text in texts if _number(_reading(text))])
+    except ValueError:
+        return texts  # no x-axis to read
+    bottom, top = min(t.bottom for t in row), max(t.top for t in row)
+    left, right = min(t.left for t in row), max(t.right for t in row)
+    labels = [
+        text for text in texts if bottom <= text.y <= top and left <= text.x <= right
+    ]
+    if all(_number(_reading(label)) for label in labels) or all(
+        abs(label.slant) < _TILT for label in labels
+    ):
+        return texts
+    height = float(np.median([text.top - text.bottom for text in row]))
+    best = row
+    for angle in (-_TURN, _TURN):
+        turned = [
+            text
+            for text in _read_turned(image, top + height, angle)
+            if _number(_reading(text))
+        ]
+        read = [
+            next(
+                (
+                    replace(label, text=text.text, slant=text.slant)
+                    for text in turned
+                    if label.left <= text.x <= label.right
+                    and label.bottom <= text.y <= label.top
+                ),
+                label,
+            )
+            for label in labels
+        ]
+        numbers = [label for label in read if _number(_reading(label))]
+        if len(numbers) > len(best):
+            best = numbers
+    if best is row:
+        return texts
+    return [text for text in texts if text not in labels] + best
+
+
+def _read_turned(image: Image, top: float, angle: float) -> list[_Text]:
+    """Find the lines of text below ``top``, read turned ``angle`` degrees.
+
+    The strip of the image below ``top`` is turned anticlockwise about its
+    middle on a square of its background, wide enough to hold it at any
+    angle. Each text read is placed where it lies in the image, in the box
+    around the corners of its box turned back, slanted at minus ``angle``.
+    """
+    height = image.shape[0]
+    first = max(height - math.ceil(top), 0)
+    strip = image[first:]
+    rows, columns = strip.shape[:2]
+    side = math.ceil(math.hypot(rows, columns))
+    background = np.median(strip.reshape(-1, 3), axis=0)
+    square = np.full((side, side, 3), background, dtype=np.uint8)
+    down, across = (side - rows) // 2, (side - columns) // 2
+    square[down : down + rows, across : across + columns] = strip
+    turn = cv2.getRotationMatrix2D((side / 2, side / 2), angle, 1)
+    level = np.asarray(
+        cv2.warpAffine(square, turn, (side, side), borderValue=background.tolist()),
+        dtype=np.uint8,
+    )
+    back = cv2.invertAffineTransform(turn)
+    texts = []
+    for text in _read_text(level):
+        # The box's corners, from the square's top-left corner, turned back.
+        corners = np.array(
+            [
+                (x, side - y)
+                for x in (text.left, text.right)
+                for y in (text.bottom, text.top)
+            ]
+        )
+        x, y = (corners @ back[:, :2].T + back[:, 2]).T
+        x, y = x - across, y - down + first
+        texts.append(
+            _Text(
+                text.text,
+                float(x.min()),
+                height - float(y.max()),
+                float(x.max()),
+                height - float(y.min()),
+                text.score,
+                -angle,
+            )
+        )
+    return texts
 
 
 def _read_upwards(image: Image, ink: npt.NDArray[np.uint8], right: int) -> list[_Text]:
@@ -457,19 +578,23 @@ def _values(
     """Return the values of tick labels, which are numbers or powers.
 
     OCR often misses superscripts, reading 2^5 as 25. A label that reads as
-    digits shows that it is a power if its last digit is drawn raised, and
-    its digits drawn full size are then its base. The base of the axis is the
-    one most labels shown as powers have, by their text or raised digits, or
-    10 if none are. A label that reads as that base followed by digits is a
+    digits shows that it is a power if its last digit is drawn raised, and its
+    digits drawn full size are then its base; but not if it is slanted
+    ``_SLANT`` degrees or more, as rotated labels are, whose last digit lies
+    higher than the others if they rise to the right. The base of the axis is
+    the one most labels shown as powers have, by their text or raised digits,
+    or 10 if none are. A label that reads as that base followed by digits is a
     power of it if its last digit is raised, or if most of the other labels
-    that read as powers of the base or as it followed by digits show that
-    they are powers. One misread label, such as 100 read with a degree sign
-    for its last 0, so does not make an axis of 100, 101 and 102 logarithmic.
+    that read as powers of the base or as it followed by digits show that they
+    are powers. One misread label, such as 100 read with a degree sign for its
+    last 0, so does not make an axis of 100, 101 and 102 logarithmic.
     """
     readings = [_reading(label, height) for label in labels]
     written = [_POWER.fullmatch(reading) for reading in readings]
     raised = [
-        _exponent(ink, label) if _DIGITS.fullmatch(reading) else None
+        _exponent(ink, label)
+        if _DIGITS.fullmatch(reading) and abs(label.slant) < _SLANT
+        else None
         for label, reading in zip(labels, readings, strict=True)
     ]
     bases = Counter(
