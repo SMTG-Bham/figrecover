@@ -266,8 +266,12 @@ work as before.
 - Each tick lies at the middle of its label, or, for labels that end at their
   tick marks rather than centring on them, as rotated labels do, at the mark.
   Labels written upwards, turned a quarter turn, are read as well as those
-  written across, but OCR often misreads labels at a slant, such as 45°, and
-  those it misreads are dropped.
+  written across. OCR often misreads x-axis labels at a slant, such as 45°,
+  so if it misreads one and finds another's box tilted, figrecover reads the
+  labels again with the image turned 45° each way, which takes about a
+  second more, and takes their texts from the turn that reads the most of
+  them as numbers. Labels at 60° can still be missed, and those misread are
+  dropped.
 - figrecover traces the curves from the axis lines, not from the first ticks,
   so the margins that plotting libraries leave inside the axes are kept. If
   there are no axis lines, it starts just beyond the tick labels and their
@@ -302,6 +306,19 @@ figrecover examples/titled.png
 ```text
 figrecover: x-axis "Photon energy (eV)" with ticks at 0, 2, 4, 6, 8, 10
 figrecover: y-axis "Absorbance (arb. units)" with ticks at 0, 0.5, 1, 1.5, 2, 2.5, 3
+```
+
+The x-axis tick labels of `examples/slanted.png` are written at 45°, which
+OCR misreads as drawn, reading 2 as a Chinese character and 6 as 9, but reads
+turned level:
+
+```bash
+figrecover examples/slanted.png
+```
+
+```text
+figrecover: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10
+figrecover: y-axis "Voltage (mV)" with ticks at 0, 0.5, 1, 1.5, 2, 2.5
 ```
 
 When a plot's labels cannot be read, give `-p` as before.

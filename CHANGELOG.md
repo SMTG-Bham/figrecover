@@ -28,9 +28,10 @@ The first release.
   names the CSV columns after the axis titles. Titles can run over several
   lines and be aligned with either end of their axes, and y-axis titles
   written upwards are read turned upright, so OCR no longer splits or misreads
-  them. It reads tick labels written upwards, places the ticks of rotated
-  labels at their tick marks, reads plots without axis lines, and refuses a
-  second y-axis on the right. Tick labels in which OCR mistook letters for
+  them. It reads tick labels written upwards, reads those written at a slant
+  again turned level if OCR misread them, places the ticks of rotated labels
+  at their tick marks, reads plots without axis lines, and refuses a second
+  y-axis on the right. Tick labels in which OCR mistook letters for
   digits, such as `1O` or `l.5`, or dashes for minus signs, are read as they
   were written, and those misread as other digits, off the even steps of a
   linear axis, such as 758 among 250 and 500, are dropped. Titles keep their Greek letters, symbols, superscripts and
