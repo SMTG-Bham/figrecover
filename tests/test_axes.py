@@ -163,34 +163,6 @@ def test_needs_the_ocr_extra() -> None:
         read_axes(load_image(EXAMPLES / "labelled.png"))
 
 
-def test_writes_symbols_read_in_several_ways_one_way(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # OCR read delta as the increment sign, where it reads Greek capital delta
-    # too, mu as the micro sign, and the brackets and percent sign full width.
-    misread = (
-        "\N{INCREMENT}E \N{FULLWIDTH LEFT PARENTHESIS}\N{MICRO SIGN}m, "
-        "\N{OHM SIGN}, \N{ANGSTROM SIGN}, 5\N{FULLWIDTH PERCENT SIGN}"
-        "\N{FULLWIDTH RIGHT PARENTHESIS} "
-    )
-    found = SimpleNamespace(
-        boxes=np.array([[[0, 2], [60, 2], [60, 12], [0, 12]]], dtype=np.float32),
-        txts=[misread],
-        scores=[0.9],
-    )
-    monkeypatch.setattr(axes, "_engine", lambda: lambda _image: found)
-
-    [line] = _read_text(np.full((20, 80, 3), 255, dtype=np.uint8))
-
-    delta, mu = "\N{GREEK CAPITAL LETTER DELTA}", "\N{GREEK SMALL LETTER MU}"
-    omega, ring = (
-        "\N{GREEK CAPITAL LETTER OMEGA}",
-        "\N{LATIN CAPITAL LETTER A WITH RING ABOVE}",
-    )
-    assert line.text == f"{delta}E ({mu}m, {omega}, {ring}, 5%)"
-    assert (line.left, line.bottom, line.right, line.top) == (0, 8, 60, 18)
-
-
 def text(content: str, x: float, y: float, width: float = 20) -> _Text:
     """Return a line of text 14 pixels high, centred on a pixel position."""
     return _Text(content, x - width / 2, y - 7, x + width / 2, y + 7)
@@ -222,6 +194,74 @@ def read(
     """Read the axes of a blank plot as though OCR had found the texts."""
     monkeypatch.setattr(axes, "_read_text", lambda _image: list(texts))
     return read_axes(plot(lines=lines))
+
+
+def ocr(monkeypatch: pytest.MonkeyPatch, texts: Sequence[_Text]) -> None:
+    """Make OCR find the texts in a plot, as RapidOCR gives them.
+
+    RapidOCR gives the corners of each text's box clockwise from the top left,
+    in pixels from the top-left corner of the image.
+    """
+    boxes = [
+        [
+            (t.left, HEIGHT - t.top),
+            (t.right, HEIGHT - t.top),
+            (t.right, HEIGHT - t.bottom),
+            (t.left, HEIGHT - t.bottom),
+        ]
+        for t in texts
+    ]
+    found = SimpleNamespace(
+        boxes=np.array(boxes, dtype=np.float32),
+        txts=[t.text for t in texts],
+        scores=[t.score for t in texts],
+    )
+    monkeypatch.setattr(axes, "_engine", lambda: lambda _image: found)
+
+
+@pytest.mark.parametrize(
+    ("misread", "written"),
+    [
+        # Symbols that OCR reads as either of two that look alike.
+        ("\N{INCREMENT}E", "\N{GREEK CAPITAL LETTER DELTA}E"),
+        ("\N{MICRO SIGN}m", "\N{GREEK SMALL LETTER MU}m"),
+        ("\N{OHM SIGN}", "\N{GREEK CAPITAL LETTER OMEGA}"),
+        ("\N{ANGSTROM SIGN}", "\N{LATIN CAPITAL LETTER A WITH RING ABOVE}"),
+        ("\N{FULLWIDTH LEFT PARENTHESIS}5\N{FULLWIDTH PERCENT SIGN} ", "(5%"),
+        # The raised signs of superscripts, read full size.
+        (
+            "10\N{MINUS SIGN}\N{SUPERSCRIPT THREE}",
+            "10\N{SUPERSCRIPT MINUS}\N{SUPERSCRIPT THREE}",
+        ),
+        ("m-\N{SUPERSCRIPT THREE}", "m\N{SUPERSCRIPT MINUS}\N{SUPERSCRIPT THREE}"),
+        ("10+\N{SUPERSCRIPT TWO}", "10\N{SUPERSCRIPT PLUS SIGN}\N{SUPERSCRIPT TWO}"),
+        # Subscripts, and signs before full-size digits, stay as they are.
+        ("CO\N{SUBSCRIPT TWO} -2", "CO\N{SUBSCRIPT TWO} -2"),
+    ],
+)
+def test_writes_symbols_read_in_several_ways_one_way(
+    monkeypatch: pytest.MonkeyPatch, misread: str, written: str
+) -> None:
+    ocr(monkeypatch, [_Text(misread, 20, 8, 380, 22, 0.9)])
+
+    assert _read_text(plot()) == [_Text(written, 20, 8, 380, 22, 0.9)]
+
+
+def test_reads_powers_whose_minus_ocr_read_full_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    minus = "\N{MINUS SIGN}"
+    powers = ["\N{SUPERSCRIPT THREE}", "\N{SUPERSCRIPT TWO}", "\N{SUPERSCRIPT ONE}"]
+    labels = [
+        *x_labels([f"10{minus}{power}" for power in powers]),
+        *y_labels(["0", "1", "2"]),
+    ]
+    ocr(monkeypatch, labels)
+
+    found = read_axes(plot())
+
+    assert [value for _, value in found.x_ticks] == [0.001, 0.01, 0.1]
+    assert found.calibration.x_log
 
 
 def test_fits_the_ticks(monkeypatch: pytest.MonkeyPatch) -> None:

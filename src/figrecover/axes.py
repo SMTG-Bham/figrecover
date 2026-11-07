@@ -61,6 +61,9 @@ _SYMBOLS = str.maketrans(
     {"\u2206": "\u0394", "\u00b5": "\u03bc"}
     | {chr(code): chr(code - 0xFEE0) for code in range(0xFF01, 0xFF5F)}
 )
+_RAISED_SIGN = re.compile(  # a sign before a superscript digit, read full size
+    r"[-+\u2212\u2010-\u2015\ufe63](?=[\u2070\u00b9\u00b2\u00b3\u2074-\u2079])"
+)
 _DIGIT = re.compile(r"\d")
 _ZERO = re.compile(r"[Oo]")  # a 0 misread, in a label with a digit
 _ONE = re.compile(r"[lI|](?=[\dOo.,])")  # a 1 misread, before a digit or point
@@ -264,20 +267,14 @@ def _engine() -> Any:
 
 
 def _read_text(image: Image) -> list[_Text]:
-    """Find the lines of text in an image.
-
-    Symbols that OCR reads in more than one way are written one way, so that
-    a title reads alike each time: the increment, micro, ohm and angstrom
-    signs as Greek capital delta, small mu, capital omega and A with a ring,
-    and full-width letters, digits and signs as plain ones.
-    """
+    """Find the lines of text in an image, with symbols as ``_normal`` writes them."""
     found = _engine()(cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
     if found.boxes is None:
         return []
     height = image.shape[0]
     return [
         _Text(
-            unicodedata.normalize("NFC", text.strip()).translate(_SYMBOLS),
+            _normal(text),
             float(box[:, 0].min()),
             height - float(box[:, 1].max()),
             float(box[:, 0].max()),
@@ -286,6 +283,20 @@ def _read_text(image: Image) -> list[_Text]:
         )
         for box, text, score in zip(found.boxes, found.txts, found.scores, strict=True)
     ]
+
+
+def _normal(text: str) -> str:
+    """Return text read by OCR with each symbol written one way.
+
+    Symbols that OCR reads in more than one way are written one way, so that
+    a title reads alike each time: the increment, micro, ohm and angstrom
+    signs as Greek capital delta, small mu, capital omega and A with a ring,
+    and full-width letters, digits and signs as plain ones. OCR can read the
+    raised minus or plus sign of a superscript full size, as in 10 to the -3,
+    so a sign or dash before a superscript digit is written raised too.
+    """
+    text = unicodedata.normalize("NFC", text.strip()).translate(_SYMBOLS)
+    return _RAISED_SIGN.sub(lambda sign: "\u207a" if sign[0] == "+" else "\u207b", text)
 
 
 def _read_upwards(image: Image, ink: npt.NDArray[np.uint8], right: int) -> list[_Text]:
