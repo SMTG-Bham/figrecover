@@ -31,11 +31,13 @@ _SNAP_SLACK = 2  # labels centred within this many pixels of the tick marks stay
 _RAISED = 0.25  # a superscript sits this fraction of its label's height up or more
 _RAISED_TICK = 1.4  # a label this many times taller than usual has a tick on top
 _WRITTEN = 1.5  # words this much wider than tall run across, or taller, upwards
+_TALL = 1.2  # labels of 2 characters or more this much taller than wide run up or down
 _LINE_SPACING = 1.25  # a title's lines lie this many line heights apart or less
 _WORD_SPACING = 1  # the words of a line lie this many line heights apart or less
 _TILT = 15  # labels in boxes tilted this many degrees or more may be slanted
 _SLANT = 30  # text tilted this many degrees or more is slanted, not raised
 _TURN = 45  # slanted labels are read again turned this many degrees each way
+_SIDEWAYS = 90  # text written upwards is slanted this many degrees, downwards minus
 _NUMBER = re.compile(  # 1, -2.5, 1,000, 2.5e-3 or 10%
     r"([+-]?(?:[1-9]\d{0,2}(?:,\d{3})+(?:\.\d*)?|\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)%?",
     re.IGNORECASE,
@@ -162,10 +164,10 @@ def read_axes(image: Image) -> Axes:
 
     The x-axis tick labels are the lowest row of at least ``MIN_TICKS``
     numbers, and the y-axis tick labels the leftmost column of at least
-    ``MIN_TICKS`` numbers above them, aligned on the right. Labels whose values
-    do not fall in line with the others, such as misread ones, are dropped,
-    as are those on a linear axis whose values are off the even steps that
-    the others take.
+    ``MIN_TICKS`` numbers reaching above them, as ``_above`` finds them,
+    aligned on the right. Labels whose values do not fall in line with the
+    others, such as misread ones, are dropped, as are those on a linear axis
+    whose values are off the even steps that the others take.
     Each tick lies at the middle of its label. A scale factor printed where
     plotting libraries put one, such as ``1e-5`` above the y-axis or below
     the right end of the x-axis, multiplies the values of its axis's ticks.
@@ -192,6 +194,10 @@ def read_axes(image: Image) -> Axes:
     OCR misreads x-axis tick labels written at a slant, as rotated labels
     are, so if it has, they are read again turned level, as by
     ``_with_slanted_labels``, and their digits are not taken for exponents.
+    OCR runs y-axis tick labels written upwards or downwards together, and
+    misreads some, so if most are tall, they are read again turned a quarter
+    turn, the way that OCR reads them more surely, as by
+    ``_with_vertical_labels``.
 
     The axes cross where the axis lines run beside the tick labels. Without
     an axis line, its place is taken to be just beyond the tick labels and
@@ -239,14 +245,13 @@ def _read_axes(image: Image, texts: list[_Text]) -> Axes:
 
     See ``read_axes``.
     """
-    texts = _with_slanted_labels(image, texts)
+    texts = _with_vertical_labels(image, _with_slanted_labels(image, texts))
     if _decimal_comma(texts):
         texts = [_with_decimal_points(text) for text in texts]
     ink = ink_mask(image)
     numbers = [text for text in texts if _number(_reading(text))]
     x_row = _lowest_row(numbers)
-    above = [text for text in numbers if text.y > max(t.top for t in x_row)]
-    y_column = _leftmost_column(above)
+    y_column = _leftmost_column(_above(numbers, x_row))
     # Tick marks run beside the y-axis labels, so they keep the usual height.
     height = float(np.median([text.top - text.bottom for text in y_column]))
     x_labels, x_values, x_log = _in_line(x_row, lambda t: t.x, "x", ink, height)
@@ -255,11 +260,11 @@ def _read_axes(image: Image, texts: list[_Text]) -> Axes:
     x_pixels = np.array([label.x for label in x_labels])
     y_pixels = np.array([label.y for label in y_labels])
     if y_line is not None:  # the x-axis line, with the x-axis ticks
-        marks = _x_marks(ink > 0, y_line)
+        marks = _x_marks(ink > 0, y_line, float(np.median([t.right for t in y_labels])))
         ends = [[label.left for label in x_labels], [label.right for label in x_labels]]
         x_pixels = _snap([x_pixels, *map(np.array, ends)], marks)
     if x_line is not None:
-        marks = _y_marks(ink > 0, x_line)
+        marks = _y_marks(ink > 0, x_line, float(np.median([t.top for t in x_labels])))
         ends = [[label.bottom for label in y_labels], [label.top for label in y_labels]]
         y_pixels = _snap([y_pixels, *map(np.array, ends)], marks)
     origin = (
@@ -324,27 +329,61 @@ def _engine() -> Any:
 
 
 def _read_text(image: Image) -> list[_Text]:
-    """Find the lines of text in an image, with symbols as ``_normal`` writes them.
+    """Find the lines of text in an image, as ``_boxed`` gives them.
 
-    OCR gives the corners of each text's box clockwise from the top left, in
-    pixels from the top-left corner of the image.
+    OCR turns a line that it takes for upside down before reading it.
     """
-    found = _engine()(cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+    # The engine keeps the options of its last call, so each call gives them.
+    found = _engine()(
+        cv2.cvtColor(image, cv2.COLOR_RGB2BGR), use_cls=True, return_word_box=False
+    )
     if found.boxes is None:
         return []
     height = image.shape[0]
     return [
-        _Text(
-            _normal(text),
-            float(box[:, 0].min()),
-            height - float(box[:, 1].max()),
-            float(box[:, 0].max()),
-            height - float(box[:, 1].min()),
-            float(score),
-            math.degrees(math.atan2(box[0, 1] - box[1, 1], box[1, 0] - box[0, 0])),
-        )
+        _boxed(text, box, float(score), height)
         for box, text, score in zip(found.boxes, found.txts, found.scores, strict=True)
     ]
+
+
+def _read_words(image: Image) -> list[_Text]:
+    """Find the words of the lines of text in an image, each as its line lies.
+
+    OCR splits a line into words at its spaces, and gives each word's box as
+    it does a line's, as ``_boxed`` takes it. Each word has its line's score.
+    OCR would turn a line that it takes for upside down before reading it,
+    but then give its words where they would lie turned, the first last; so
+    here it reads each line as it lies, and one upside down less surely.
+    """
+    found = _engine()(
+        cv2.cvtColor(image, cv2.COLOR_RGB2BGR), use_cls=False, return_word_box=True
+    )
+    if found.boxes is None:
+        return []
+    height = image.shape[0]
+    return [
+        _boxed(word, box, float(score), height)
+        for words, score in zip(found.word_results, found.scores, strict=True)
+        for word, _, box in words
+    ]
+
+
+def _boxed(text: str, corners: npt.ArrayLike, score: float, height: int) -> _Text:
+    """Return a text read by OCR in its box, with symbols as ``_normal`` writes them.
+
+    OCR gives the corners of a box clockwise from the top left, in pixels
+    from the top-left corner of an image ``height`` pixels high.
+    """
+    box = np.asarray(corners, dtype=np.float64)
+    return _Text(
+        _normal(text),
+        float(box[:, 0].min()),
+        height - float(box[:, 1].max()),
+        float(box[:, 0].max()),
+        height - float(box[:, 1].min()),
+        score,
+        math.degrees(math.atan2(box[0, 1] - box[1, 1], box[1, 0] - box[0, 0])),
+    )
 
 
 def _normal(text: str) -> str:
@@ -417,6 +456,75 @@ def _with_slanted_labels(image: Image, texts: list[_Text]) -> list[_Text]:
     return [text for text in texts if text not in labels] + best
 
 
+def _with_vertical_labels(image: Image, texts: list[_Text]) -> list[_Text]:
+    """Return texts with y-axis tick labels written up or down read again turned.
+
+    OCR reads tick labels written upwards or downwards, as labels rotated a
+    quarter turn are, as it does a column of text: it runs labels one above
+    another together, as in 1.25 1.50 1.75, and misreads some, as 2.5 as 25.
+    The labels are the texts reaching above the lowest row of numbers, as
+    ``_above`` finds them, whose words are all numbers. They are written up
+    or down if most of those above the row, counting the numbers that each
+    holds, are ``_TALL`` times taller than wide; only those of more than one
+    character count, as a digit written across is that tall too. The strip
+    of the image left of the tall labels' right edge is then read again, as
+    by ``_read_sideways``, turned each way. Turned the way they are written,
+    the labels run across and OCR reads them surely, but turned the other
+    way they are upside down, and OCR reads them less surely. So the numbers
+    read the way OCR is surer of, by their lines' scores on average, each
+    word a label, replace the texts in the column of the tall labels reaching
+    above the row. Only numbers in that column count, as the title beside the
+    labels may hold one; but all of them, as OCR may have missed a label at
+    either end, or read one as no number.
+    """
+    try:
+        row = _lowest_row([text for text in texts if _number(_reading(text))])
+    except ValueError:
+        return texts  # no x-axis to read
+    above = _above(texts, row)
+    labels = [
+        text
+        for text in above
+        if text not in row and len(_reading(text)) > 1 and _numbers(text)
+    ]
+    tall = [
+        label
+        for label in labels
+        if label.top - label.bottom >= _TALL * (label.right - label.left)
+    ]
+    if 2 * _count(tall) <= _count(labels):
+        return texts
+    left, right = min(t.left for t in tall), max(t.right for t in tall)
+    best: list[_Text] = []
+    for upwards in (True, False):
+        words = [
+            word
+            for word in _above(
+                _read_sideways(image, math.ceil(right), upwards=upwards), row
+            )
+            if left <= word.x <= right and _numbers(word)
+        ]
+        if words and (not best or _score(words) > _score(best)):
+            best = words
+    if not best:
+        return texts
+    column = [text for text in above if left <= text.x <= right]
+    return [text for text in texts if text not in column] + best
+
+
+def _count(texts: Iterable[_Text]) -> int:
+    """Return how many words texts hold."""
+    return sum(len(text.text.split()) for text in texts)
+
+
+def _numbers(text: _Text) -> bool:
+    """Return whether each word of a text reads as a number, with points or commas."""
+    return all(
+        _number(_reading(_with_decimal_points(replace(text, text=word))))
+        for word in text.text.split()
+    )
+
+
 def _read_turned(image: Image, top: float, angle: float) -> list[_Text]:
     """Find the lines of text below ``top``, read turned ``angle`` degrees.
 
@@ -477,14 +585,8 @@ def _read_upwards(image: Image, ink: npt.NDArray[np.uint8], right: int) -> list[
     """
     if not ink[:, :right].any():
         return []
-    upright = cv2.rotate(image[:, :right], cv2.ROTATE_90_CLOCKWISE)
-    # OCR enlarges an image until its shorter side is 736 pixels, so a long,
-    # thin strip is read faster on a square of its background.
-    side = max(upright.shape[:2])
-    square = np.full(
-        (side, side, 3), np.median(upright.reshape(-1, 3), axis=0), dtype=np.uint8
-    )
-    square[:right] = upright
+    square = _turned_square(image[:, :right], cv2.ROTATE_90_CLOCKWISE)
+    side = square.shape[0]
     # The square's x is the image's y, and its y, from the top, the image's x.
     return [
         _Text(
@@ -497,6 +599,56 @@ def _read_upwards(image: Image, ink: npt.NDArray[np.uint8], right: int) -> list[
         )
         for text in _read_text(square)
     ]
+
+
+def _read_sideways(image: Image, right: int, *, upwards: bool) -> list[_Text]:
+    """Find the words written upwards or downwards left of ``right``, where they lie.
+
+    The strip left of ``right`` is turned a quarter turn, clockwise if the
+    words are written upwards, anticlockwise if downwards, so that they run
+    across, and read as by ``_read_words``. Each word keeps its place in the
+    image, in the box around it turned back, slanted ``_SIDEWAYS`` degrees if
+    written upwards and minus that if downwards.
+    """
+    rows = image.shape[0]
+    turn = cv2.ROTATE_90_CLOCKWISE if upwards else cv2.ROTATE_90_COUNTERCLOCKWISE
+    square = _turned_square(image[:, :right], turn)
+    side = square.shape[0]
+    texts = []
+    for word in _read_words(square):
+        # The square's x is the image's y, and its y, from the top, the image's
+        # x; each counted from the other end, top and right, if turned the
+        # other way.
+        if upwards:
+            box = (side - word.top, word.left, side - word.bottom, word.right)
+        else:
+            across = side - right
+            box = (
+                word.bottom - across,
+                rows - word.right,
+                word.top - across,
+                rows - word.left,
+            )
+        slant = _SIDEWAYS if upwards else -_SIDEWAYS
+        texts.append(_Text(word.text, *box, word.score, slant))
+    return texts
+
+
+def _turned_square(strip: Image, turn: int) -> Image:
+    """Return a strip of an image turned, at the top left of a square of its background.
+
+    ``turn`` is an OpenCV rotation code, such as ``cv2.ROTATE_90_CLOCKWISE``.
+    OCR enlarges an image until its shorter side is 736 pixels, so a long,
+    thin strip is read faster on a square.
+    """
+    turned = cv2.rotate(strip, turn)
+    rows, columns = turned.shape[:2]
+    side = max(rows, columns)
+    square = np.full(
+        (side, side, 3), np.median(strip.reshape(-1, 3), axis=0), dtype=np.uint8
+    )
+    square[:rows, :columns] = turned
+    return square
 
 
 def _transposed(text: _Text) -> _Text:
@@ -537,13 +689,32 @@ def _with_decimal_points(text: _Text) -> _Text:
 
 
 def _lowest_row(numbers: Sequence[_Text]) -> list[_Text]:
-    """Return the lowest row of at least ``MIN_TICKS`` numbers."""
+    """Return the lowest row of at least ``MIN_TICKS`` numbers.
+
+    Numbers written up or down, as ``_read_sideways`` reads them, are left
+    out: they are y-axis tick labels, though the lowest may lie level with
+    the row, and be in line with it, as 0 at the corner where both axes
+    start at 0 is.
+    """
+    across = [text for text in numbers if abs(text.slant) != _SIDEWAYS]
     rows = [
-        row for row in _groups(numbers, lambda text: text.y) if len(row) >= MIN_TICKS
+        row for row in _groups(across, lambda text: text.y) if len(row) >= MIN_TICKS
     ]
     if not rows:
         raise _NoTicksError("x")
     return rows[0]
+
+
+def _above(texts: Iterable[_Text], row: Sequence[_Text]) -> list[_Text]:
+    """Return the texts reaching above a row of x-axis tick labels.
+
+    They are those whose tops lie above the tops of most of the row's labels.
+    So the lowest y-axis tick label is among them, though its box, written at
+    a slant or upwards beside its tick, may reach down level with the row,
+    even into it, where its value is not in line with the x-axis labels'.
+    """
+    floor = np.median([text.top for text in row])
+    return [text for text in texts if text.top > floor]
 
 
 def _leftmost_column(numbers: Sequence[_Text]) -> list[_Text]:
@@ -817,12 +988,15 @@ def _axis_lines(
     of the span of the y-axis ticks, as a flat stretch of a curve on the first
     tick seldom has. The labels end where most of them do, as OCR can stretch
     the box of one over the axis line, such as the label at the corner beside
-    a wide x-axis label. The x-axis line is found the same way. An axis
-    without such a line gives None.
+    a wide x-axis label. The x-axis line is found the same way, but further
+    past the first y-axis tick label, by ``_SNAP_REACH`` of the tick spacing,
+    as rotated y-axis tick labels lie beside their ticks, as ``_snap`` finds.
+    An axis without such a line gives None.
     """
     height = ink.shape[0]
     first_x, last_x = x_labels[0].x, x_labels[-1].x
     first_y, last_y = y_labels[0].y, y_labels[-1].y
+    spacing = float(np.median(np.diff([label.y for label in y_labels])))
 
     # Columns run from the labels to the plot; so do rows, read bottom to top.
     start = math.ceil(np.median([label.right for label in y_labels]))
@@ -831,7 +1005,8 @@ def _axis_lines(
     x = _first_line(columns.sum(axis=0), last_y - first_y, start + 0.5)
 
     start = math.ceil(np.median([label.top for label in x_labels]))
-    rows = slice(height - math.floor(first_y) - _AXIS_REACH, height - start + 1)
+    reach = _AXIS_REACH + _SNAP_REACH * spacing
+    rows = slice(height - math.floor(first_y + reach), height - start + 1)
     lines = ink[rows, math.ceil(first_x) : math.floor(last_x) + 1][::-1]
     y = _first_line(lines.sum(axis=1), last_x - first_x, start - 0.5)
     return x, y
@@ -906,25 +1081,35 @@ def _check_one_y_axis(
         raise ValueError(msg)
 
 
-def _x_marks(ink: npt.NDArray[np.bool_], line: float) -> npt.NDArray[np.float64]:
+def _x_marks(
+    ink: npt.NDArray[np.bool_], line: float, start: float
+) -> npt.NDArray[np.float64]:
     """Return the x-coordinates of the tick marks below the x-axis line.
 
     ``line`` is the line's lowest row, as ``_axis_lines`` finds it, and a tick
-    mark has ink in the ``_MARK_LENGTH`` rows below it.
+    mark has ink in the ``_MARK_LENGTH`` rows below it. The marks lie right
+    of ``start``, where the y-axis tick labels end, as the ink of a label
+    there, such as the lowest written at a slant, is no mark.
     """
     row = round(ink.shape[0] - line - 0.5)
-    return _middles(ink[row + 1 : row + 1 + _MARK_LENGTH].all(axis=0))
+    marks = _middles(ink[row + 1 : row + 1 + _MARK_LENGTH].all(axis=0))
+    return marks[marks > start]
 
 
-def _y_marks(ink: npt.NDArray[np.bool_], line: float) -> npt.NDArray[np.float64]:
+def _y_marks(
+    ink: npt.NDArray[np.bool_], line: float, start: float
+) -> npt.NDArray[np.float64]:
     """Return the y-coordinates of the tick marks left of the y-axis line.
 
     ``line`` is the line's leftmost column, as ``_axis_lines`` finds it, and a
-    tick mark has ink in the ``_MARK_LENGTH`` columns left of it.
+    tick mark has ink in the ``_MARK_LENGTH`` columns left of it. The marks
+    lie above ``start``, where the x-axis tick labels end, as the ink of a
+    label there, such as the first, is no mark.
     """
     column = round(line - 0.5)
     marked = ink[:, max(column - _MARK_LENGTH, 0) : column].all(axis=1)
-    return np.asarray(ink.shape[0] - _middles(marked), dtype=np.float64)
+    marks = np.asarray(ink.shape[0] - _middles(marked), dtype=np.float64)
+    return marks[marks > start]
 
 
 def _middles(marked: npt.NDArray[np.bool_]) -> npt.NDArray[np.float64]:
@@ -1194,9 +1379,9 @@ def _follows(line: _Text, before: _Text) -> bool:
     )
 
 
-def _score(lines: Sequence[_Text]) -> float:
-    """Return how sure OCR is of the lines of a title, on average."""
-    return float(np.mean([line.score for line in lines]))
+def _score(texts: Sequence[_Text]) -> float:
+    """Return how sure OCR is of texts, such as the lines of a title, on average."""
+    return float(np.mean([text.score for text in texts]))
 
 
 def _title(lines: Sequence[_Text]) -> str | None:

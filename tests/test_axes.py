@@ -11,7 +11,14 @@ import numpy as np
 import pytest
 
 from figrecover import Axes, Image, axes, load_image, read_axes
-from figrecover.axes import _PLAIN, _factor, _read_text, _Text
+from figrecover.axes import (
+    _PLAIN,
+    _factor,
+    _read_sideways,
+    _read_text,
+    _read_words,
+    _Text,
+)
 
 EXAMPLES = Path(__file__).parents[1] / "examples"
 HEIGHT, WIDTH = 300, 400
@@ -192,6 +199,11 @@ def y_labels(values: Sequence[str]) -> list[_Text]:
     return [text(value, 40, 80 + 60 * i) for i, value in enumerate(values)]
 
 
+def tall(content: str, x: float, y: float, height: float) -> _Text:
+    """Return a line of text written upwards, 14 pixels wide, centred on a pixel."""
+    return _Text(content, x - 7, y - height / 2, x + 7, y + height / 2)
+
+
 def plot(*, lines: bool = True) -> Image:
     """Draw a blank plot, with or without axis lines through ``AXIS_LINES``."""
     image = np.full((HEIGHT, WIDTH, 3), 255, dtype=np.uint8)
@@ -230,7 +242,7 @@ def ocr(monkeypatch: pytest.MonkeyPatch, texts: Sequence[_Text]) -> None:
         txts=[t.text for t in texts],
         scores=[t.score for t in texts],
     )
-    monkeypatch.setattr(axes, "_engine", lambda: lambda _image: found)
+    monkeypatch.setattr(axes, "_engine", lambda: lambda _image, **_options: found)
 
 
 @pytest.mark.parametrize(
@@ -785,6 +797,199 @@ def test_keeps_slanted_labels_read_no_better_turned(
     assert [value for _, value in found.x_ticks] == [0, 4, 6]
 
 
+def sideways(
+    values: Sequence[str], y: float, *, upwards: bool, score: float = 1
+) -> list[_Text]:
+    """Return y-axis tick labels written up or down, as read turned to run across.
+
+    The labels are 14 pixels wide and 24 tall, 60 pixels apart from y up.
+    """
+    slant = 90 if upwards else -90
+    return [
+        dataclasses.replace(tall(value, 40, y + 60 * i, 24), score=score, slant=slant)
+        for i, value in enumerate(values)
+    ]
+
+
+@pytest.mark.parametrize("upwards", [True, False])
+def test_reads_labels_written_up_or_down_again_turned(
+    monkeypatch: pytest.MonkeyPatch, upwards: bool
+) -> None:
+    # OCR runs the labels above 0.5 together, reading them from the bottom
+    # if written upwards and from the top if downwards. Turned the other way,
+    # it reads the labels less surely, misread without their points. Turned
+    # either way, it reads the number in the title as a word of its own.
+    merged = "1.0 1.5 2.0" if upwards else "2.0 1.5 1.0"
+    labels = [tall("0.5", 40, 80, 30), tall(merged, 40, 200, 150)]
+    title = tall("Run 2 (V)", 10, 170, 90)
+    turned = {
+        upwards: sideways(["0.5", "1.0", "1.5", "2.0"], 80, upwards=upwards),
+        not upwards: sideways(
+            ["05", "10", "15", "20"], 80, upwards=not upwards, score=0.7
+        ),
+    }
+    for way, words in turned.items():
+        words.append(
+            dataclasses.replace(tall("2", 10, 170, 10), slant=90 if way else -90)
+        )
+    monkeypatch.setattr(
+        axes, "_read_sideways", lambda _image, _right, *, upwards: turned[upwards]
+    )
+
+    found = read(monkeypatch, [*x_labels(["0", "1", "2"]), *labels, title])
+
+    assert found.y_ticks == ((80.0, 0.5), (140.0, 1.0), (200.0, 1.5), (260.0, 2.0))
+    assert found.y_title == "Run 2 (V)"
+
+
+def test_keeps_labels_read_as_no_numbers_turned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    labels = [tall(value, 40, 80 + 60 * i, 30) for i, value in enumerate("012")]
+    labels = [dataclasses.replace(label, text=f"{label.text}.0") for label in labels]
+    turned = {True: [], False: [tall("ll", 40, 80, 30)]}
+    monkeypatch.setattr(
+        axes, "_read_sideways", lambda _image, _right, *, upwards: turned[upwards]
+    )
+
+    found = read(monkeypatch, [*x_labels(["0", "1", "2"]), *labels])
+
+    assert found.y_ticks == ((80.0, 0.0), (140.0, 1.0), (200.0, 2.0))
+
+
+@pytest.mark.parametrize(
+    "y_axis",
+    [
+        # Digits written across are taller than wide, as labels written up
+        # or down are.
+        [
+            _Text(value, 35, 73 + 60 * i, 45, 87 + 60 * i)
+            for i, value in enumerate("246")
+        ],
+        # A number misread from text written across can be tall too, but
+        # most numbers above the x-axis tick labels are not.
+        [*y_labels(["0.5", "1.0", "1.5"]), tall("08", 200, 150, 30)],
+    ],
+)
+def test_reads_labels_written_across_as_they_are(
+    monkeypatch: pytest.MonkeyPatch, y_axis: list[_Text]
+) -> None:
+    def read_sideways(_image: Image, _right: int, *, upwards: bool) -> list[_Text]:
+        raise AssertionError(upwards)
+
+    monkeypatch.setattr(axes, "_read_sideways", read_sideways)
+
+    found = read(monkeypatch, [*x_labels(["0", "1", "2"]), *y_axis])
+
+    assert [pixel for pixel, _ in found.y_ticks] == [80, 140, 200]
+
+
+def test_reads_the_lowest_label_written_up_or_down_level_with_the_x_axis_labels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The lowest y-axis label lies level with the x-axis labels, beside its
+    # tick at the corner, where its value, 0, is in line with theirs.
+    corner = text("0", 60, 45)
+    labels = [corner, text("1", 220, 45), text("2", 380, 45)]
+    labels += [tall("0.0", 40, 45, 24), tall("0.5 1.0 1.5", 40, 165, 144)]
+    turned = {
+        True: sideways(["0.0", "0.5", "1.0", "1.5"], 45, upwards=True),
+        False: [],
+    }
+    monkeypatch.setattr(
+        axes, "_read_sideways", lambda _image, _right, *, upwards: turned[upwards]
+    )
+
+    found = read(monkeypatch, labels)
+
+    assert found.x_ticks == ((60.0, 0.0), (220.0, 1.0), (380.0, 2.0))
+    assert found.y_ticks == ((45.0, 0.0), (105.0, 0.5), (165.0, 1.0), (225.0, 1.5))
+
+
+def test_reads_the_lowest_label_reaching_down_beside_the_x_axis_labels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Written at a slant, the y-axis labels' boxes are 30 pixels square, and
+    # the lowest's middle lies below the tops of the x-axis labels.
+    slanted = [
+        _Text(value, 25, 33 + 60 * i, 55, 63 + 60 * i, slant=45)
+        for i, value in enumerate(["0.0", "0.5", "1.0"])
+    ]
+
+    found = read(monkeypatch, [*x_labels(["0", "1", "2"]), *slanted])
+
+    assert found.y_ticks == ((48.0, 0.0), (108.0, 0.5), (168.0, 1.0))
+
+
+@pytest.mark.parametrize("upwards", [True, False])
+def test_reads_words_sideways_where_they_lie(
+    monkeypatch: pytest.MonkeyPatch, upwards: bool
+) -> None:
+    def read_words(image: Image) -> list[_Text]:
+        """Read each piece of ink in an image as a word in its box, as OCR would."""
+        ink = (image.min(axis=2) < 128).astype(np.uint8)
+        stats = cv2.connectedComponentsWithStats(ink)[2][1:]
+        height = image.shape[0]
+        return [
+            _Text("1", left, height - top - tall, left + wide, height - top, 0.9)
+            for left, top, wide, tall, _ in stats.tolist()
+        ]
+
+    image = plot(lines=False)
+    image[HEIGHT - 120 : HEIGHT - 90, 25:35] = 0  # x from 25 to 35, y from 90 to 120
+    monkeypatch.setattr(axes, "_read_words", read_words)
+
+    words = _read_sideways(image, 50, upwards=upwards)
+
+    assert words == [_Text("1", 25, 90, 35, 120, 0.9, 90 if upwards else -90)]
+
+
+def test_reads_words_as_lines_lie_and_lines_turned_upright(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # RapidOCR keeps the options of its last call.
+    found = SimpleNamespace(
+        boxes=np.zeros((1, 4, 2), dtype=np.float32),
+        txts=["1.25 1.50"],
+        scores=[0.9],
+        word_results=[
+            [
+                ("1.25", 1.0, [[10, 5], [40, 5], [40, 20], [10, 20]]),
+                ("1.50", 0.8, [[50, 5], [80, 5], [80, 20], [50, 20]]),
+            ]
+        ],
+    )
+    options: list[dict[str, bool]] = []
+
+    def engine(_image: Image, **given: bool) -> SimpleNamespace:
+        options.append(given)
+        return found
+
+    monkeypatch.setattr(axes, "_engine", lambda: engine)
+    image = np.full((30, 100, 3), 255, dtype=np.uint8)
+
+    words = _read_words(image)
+    _read_text(image)
+
+    assert words == [
+        _Text("1.25", 10, 10, 40, 25, 0.9),
+        _Text("1.50", 50, 10, 80, 25, 0.9),
+    ]
+    assert options == [
+        {"use_cls": False, "return_word_box": True},
+        {"use_cls": True, "return_word_box": False},
+    ]
+
+
+def test_reads_no_words_where_ocr_finds_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    ocr(monkeypatch, [])
+    monkeypatch.setattr(
+        axes, "_engine", lambda: lambda _image, **_options: SimpleNamespace(boxes=None)
+    )
+
+    assert _read_words(plot()) == []
+
+
 def right_labels(values: Sequence[str]) -> list[_Text]:
     """Return labels of a second y-axis, beyond the x-axis line, aligned left."""
     return [
@@ -958,6 +1163,50 @@ def test_keeps_ticks_at_labels_far_from_the_marks(
     assert [pixel for pixel, _ in found.y_ticks] == [80, 140, 200]
 
 
+def test_moves_ticks_to_marks_beside_the_labels_past_ink_at_the_corner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The labels of each axis lie alike beside their marks, 9.5 pixels below
+    # or right of them. Beyond each axis line, the ink of the other axis's
+    # first label, as of a 0, runs over the columns or rows of the marks.
+    labels = [
+        *(text(value, 90 + 80 * i, 45, width=40) for i, value in enumerate("012")),
+        *(
+            _Text(value, 10, 60 + 60 * i, 50, 100 + 60 * i)
+            for i, value in enumerate("012")
+        ),
+    ]
+    monkeypatch.setattr(axes, "_read_text", lambda _image: labels)
+    image = marked_plot([80, 160, 240], [90, 150, 210])
+    for y in (35, 45):  # rows of a 0 below the x-axis line
+        image[HEIGHT - y, 54:60] = 0
+    for x in (40, 48):  # columns of a 0 left of the y-axis line
+        image[HEIGHT - 59 : HEIGHT - 50, x] = 0
+
+    found = read_axes(image)
+
+    assert [pixel for pixel, _ in found.x_ticks] == [80.5, 160.5, 240.5]
+    assert [pixel for pixel, _ in found.y_ticks] == [89.5, 149.5, 209.5]
+
+
+def test_finds_the_x_axis_line_at_a_tick_beside_its_label(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The y labels lie 9.5 pixels below their ticks, the first of which is
+    # at the corner, as rotated labels do; so the x-axis line lies further
+    # than usual past the first label.
+    rotated = [
+        _Text(value, 10, 30 + 60 * i, 50, 70 + 60 * i) for i, value in enumerate("012")
+    ]
+    labels = [*x_labels(["0", "1", "2"]), *rotated]
+    monkeypatch.setattr(axes, "_read_text", lambda _image: labels)
+
+    found = read_axes(marked_plot([80, 160, 240], [60, 120, 180]))
+
+    assert found.calibration.origin == (60.5, 59.5)
+    assert [pixel for pixel, _ in found.y_ticks] == [59.5, 119.5, 179.5]
+
+
 def test_applies_scale_factors(monkeypatch: pytest.MonkeyPatch) -> None:
     labels = [*x_labels(["0", "1", "2"]), *y_labels(["0", "1", "2"])]
     above_y_axis = text("1e-5", 60, 290)
@@ -1034,11 +1283,6 @@ def test_reads_the_nearest_titles(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert found.x_title == "Time (s)"
     assert found.y_title == "Voltage (mV)"
-
-
-def tall(content: str, x: float, y: float, height: float) -> _Text:
-    """Return a line of text written upwards, 14 pixels wide, centred on a pixel."""
-    return _Text(content, x - 7, y - height / 2, x + 7, y + height / 2)
 
 
 def upright(content: str, x: float, y: float, height: float, score: float = 1) -> _Text:
