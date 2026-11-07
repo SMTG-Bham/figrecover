@@ -14,22 +14,38 @@ from .digitize import (
     trace_curve,
     trace_curves,
 )
+from .pdf import (
+    Box,
+    Drawing,
+    find_pdf_colours,
+    load_pdf,
+    read_pdf_axes,
+    render_pdf,
+    trace_pdf_curves,
+)
 
 __version__ = version("figrecover")
 
 __all__ = [
     "Axes",
+    "Box",
     "Calibration",
     "Colour",
+    "Drawing",
     "Image",
     "Point",
     "Tick",
     "__version__",
     "find_colours",
     "find_markers",
+    "find_pdf_colours",
     "load_image",
+    "load_pdf",
     "read_axes",
+    "read_pdf_axes",
     "remove_grid",
+    "render_pdf",
     "trace_curve",
     "trace_curves",
+    "trace_pdf_curves",
 ]
