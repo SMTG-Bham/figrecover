@@ -4,6 +4,7 @@ import itertools
 import math
 import os
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 import cv2
 import numpy as np
@@ -41,11 +42,49 @@ _MIN_COVERAGE = 0.5  # less covered pixels belong to the background
 _MIN_PIXELS = 4  # smaller specks are noise, such as where two other curves cross
 _RUN_GAP = 6  # a curve's pixels in a column this far apart or less are one run
 _MIN_BRANCH = 0.05  # branches across less of the plot's width than this are minor
+_FRAME_SIDE = 0.05  # frame lines span this fraction of the plot's shorter side
+_FRAME_CONTRAST = 32  # its lines differ from the background by this much or more
+_FRAME_LINED = 0.75  # its sides run along this fraction of its height or more
 _KEY_REACH = 20  # a legend key's marker lies within this many pixels of its position
 _KEY_LINE = 2  # a key this many times as wide as tall has a line through its marker
 _MARKER_SCORE = 0.6  # a marker correlates with its key's this well or better
 _MARKER_INK = 0.6  # a marker has at least this fraction of the ink of its key's
 _MARKER_SPACING = 0.75  # markers are this many marker widths apart or more
+
+
+@dataclass(frozen=True, slots=True)
+class _Box:
+    """A rectangle of an image, in rows from the top and columns from the left.
+
+    ``bottom`` and ``right`` are one past its last row and column.
+    """
+
+    top: int
+    bottom: int
+    left: int
+    right: int
+
+    def holds(self, other: _Box) -> bool:
+        """Return whether another box lies within this one."""
+        return (
+            self.top <= other.top
+            and other.bottom <= self.bottom
+            and self.left <= other.left
+            and other.right <= self.right
+        )
+
+    def within(self, other: _Box) -> _Box:
+        """Return this box measured from the top-left corner of another."""
+        return _Box(
+            self.top - other.top,
+            self.bottom - other.top,
+            self.left - other.left,
+            self.right - other.left,
+        )
+
+    def turned(self) -> _Box:
+        """Return this box in the image turned over its diagonal, rows for columns."""
+        return _Box(self.left, self.right, self.top, self.bottom)
 
 
 def load_image(path: str | os.PathLike[str]) -> Image:
@@ -133,13 +172,15 @@ def ink_mask(image: Image) -> npt.NDArray[np.uint8]:
 def find_colours(image: Image, count: int = 1, origin: Point = (0, 0)) -> list[Colour]:
     """Find the colours of the curves in a plot.
 
-    The plot area is the part of the image above and right of ``origin``. Its
-    common colours are those with enough pixels to span it; the most common
-    is the background, unless it is a filled area and the colour along the top
-    edge of the plot area is the background instead. Curves are the common
-    colours that differ from the background by at least a quarter of
-    the full range in some channel, and that neither fill areas nor are drawn
-    mostly in straight lines across the plot, as grid lines are.
+    The plot area is the part of the image above and right of ``origin``,
+    less the frames inside it, such as those of insets and legends, with all
+    they hold, as ``_frames`` finds them. Its common colours are those with
+    enough pixels to span it; the most common is the background, unless it
+    is a filled area and the colour along the top edge of the plot area is
+    the background instead. Curves are the common colours that differ from
+    the background by at least a quarter of the full range in some channel,
+    and that neither fill areas nor are drawn mostly in straight lines across
+    the plot, as grid lines are.
 
     Args:
         image: Colour image of a plot.
@@ -185,13 +226,16 @@ def trace_curves(
 
     Each colour picks the nearest common colour in the plot area, the part of
     the image above and right of ``origin``. Excluding the rest removes the
-    axes, their ticks and labels. Each pixel belongs to the common colour
-    that it best matches when blended with the background, so the antialiased
-    edges of a curve count towards it, unless it matches none, as black text
-    among coloured curves does; and specks of fewer than four pixels are
-    ignored. Each image column gives one point for each branch of a curve
-    that crosses it, at the median height of the branch's pixels there, so
-    both sides of a loop are traced. See ``_follow`` for what a branch is.
+    axes, their ticks and labels, and frames inside the plot area, such as
+    those of insets and legends, are painted over with all they hold, as
+    ``_frames`` finds them, so their curves and keys are not traced. Each
+    pixel belongs to the common colour that it best matches when blended with
+    the background, so the antialiased edges of a curve count towards it,
+    unless it matches none, as black text among coloured curves does; and
+    specks of fewer than four pixels are ignored. Each image column gives one
+    point for each branch of a curve that crosses it, at the median height of
+    the branch's pixels there, so both sides of a loop are traced. See
+    ``_follow`` for what a branch is.
 
     Args:
         image: Colour image of a plot.
@@ -258,9 +302,11 @@ def find_markers(
     Each key is the position of a series' marker in the legend. Its shape is
     cut out of the image, leaving out a line through it, as legends of line
     plots draw, and looked for in the plot area, the part of the image above
-    and right of ``origin``. A marker is where the shape correlates with the
-    image better than ``_MARKER_SCORE``, with at least ``_MARKER_INK`` of the
-    key's ink. Where the shapes of several keys match, closer together than
+    and right of ``origin``, less the frames inside it, such as those of
+    insets and legends, with all they hold, as ``_frames`` finds them. A
+    marker is where the shape correlates with the image better than
+    ``_MARKER_SCORE``, with at least ``_MARKER_INK`` of the key's ink. Where
+    the shapes of several keys match, closer together than
     ``_MARKER_SPACING`` of a marker's width, the best match wins. The keys
     themselves are not markers, if the legend lies in the plot area.
 
@@ -284,7 +330,7 @@ def find_markers(
     levels = _ink_levels(image)
     shapes = [_key_marker(levels, key) for key in keys]
     plot, left, top = _plot_area(image, origin)
-    area = levels[top : top + plot.shape[0], left : left + plot.shape[1]]
+    area = _ink_levels(plot)
     found = [
         (score, row, column, series)
         for series, (shape, mask) in enumerate(shapes)
@@ -314,7 +360,9 @@ def _plot_area(image: Image, origin: Point) -> tuple[Image, int, int]:
     """Return the part of the image inside the axes, and its left and top edges.
 
     That is the part above and right of the axes, or if a frame closes them,
-    as matplotlib draws by default, the part inside the frame too.
+    as matplotlib draws by default, the part inside the frame too. Frames
+    inside it, such as those of insets and legends, are painted out, as
+    ``_unframed`` paints them.
     """
     height = image.shape[0]
     left = max(0, int(origin[0]) + AXIS_MARGIN)
@@ -322,8 +370,10 @@ def _plot_area(image: Image, origin: Point) -> tuple[Image, int, int]:
     if image[:bottom, left:].size == 0:
         msg = "the axes leave no plot area to trace"
         raise ValueError(msg)
-    top, right = _inside_frame(ink_mask(image)[:bottom, left:] > 0)
-    return image[top:bottom, left : left + right], left, top
+    ink = ink_mask(image)[:bottom, left:] > 0
+    top, right = _inside_frame(ink)
+    plot = _unframed(image[top:bottom, left : left + right], ink[top:, :right])
+    return plot, left, top
 
 
 def _inside_frame(ink: npt.NDArray[np.bool_]) -> tuple[int, int]:
@@ -357,6 +407,164 @@ def _inside_frame(ink: npt.NDArray[np.bool_]) -> tuple[int, int]:
         if run >= (height - first) * FRAME_REACH:
             return last + 1 + AXIS_MARGIN, max(column - AXIS_MARGIN, 0)
     return 0, width
+
+
+def _unframed(plot: Image, ink: npt.NDArray[np.bool_]) -> Image:
+    """Return a plot area with the frames inside it painted in its background colour.
+
+    Each frame, as ``_frames`` finds it, is painted with all it holds, and
+    ``AXIS_MARGIN`` around it, so that an inset's curve or a legend's key is
+    not traced as part of a curve of its colour. The background colour is
+    the median.
+    """
+    background = np.median(plot.reshape(-1, 3), axis=0)
+    painted = plot.copy()
+    for frame in _frames(plot, ink, background):
+        painted[
+            max(frame.top - AXIS_MARGIN, 0) : frame.bottom + AXIS_MARGIN,
+            max(frame.left - AXIS_MARGIN, 0) : frame.right + AXIS_MARGIN,
+        ] = background
+    return painted
+
+
+def _frames(
+    plot: Image, ink: npt.NDArray[np.bool_], background: npt.NDArray[np.float64]
+) -> list[_Box]:
+    """Find the frames inside a plot area, such as those of insets and legends.
+
+    A frame is a box of four straight lines, in one colour, each at least
+    ``_FRAME_SIDE`` of the plot area's shorter side long and at most
+    ``FRAME_WIDTH`` pixels thick, and differing from the background by at
+    least ``_FRAME_CONTRAST``, as legends' light grey frames do. The lines
+    along its top and bottom run from one side to the other, and a line down
+    each side runs along ``_FRAME_LINED`` of the height between them or more.
+    Its corners are square, or rounded by a few pixels at most. Lines can
+    run on past its corners, as tick marks at an inset's corners do, and the
+    lines from an inset to the part it magnifies, but the top and bottom
+    each end at one side or the other, while grid lines run on past both.
+    The flat and upright stretches of a curve, as a step plot draws, never
+    close such a box, as a curve crosses each column once, and filled areas,
+    such as bars and shaded spans, are thicker than lines, outlined or not.
+
+    A frame hides what lies behind it, as an inset or a legend does, so no
+    curve crosses its lines, as ``_crossed`` finds, while one runs through a
+    box drawn around part of it, such as one marking the part an inset
+    magnifies. Lines that cross a frame from side to side, such as an
+    inset's grid lines, are not taken to cross it where they meet its tick
+    marks.
+
+    Args:
+        plot: The plot area.
+        ink: Its ink, as ``ink_mask`` finds it.
+        background: Its background colour.
+    """
+    drawn = (np.abs(plot - background).max(axis=2) >= _FRAME_CONTRAST).astype(np.uint8)
+    length = round(_FRAME_SIDE * min(drawn.shape)) | 1
+    horizontal, vertical = (
+        cv2.morphologyEx(
+            drawn, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, shape)
+        )
+        for shape in ((length, 1), (1, length))
+    )
+    ends = [
+        line for line in _pieces(horizontal) if line.bottom - line.top <= FRAME_WIDTH
+    ]
+    sides = [
+        line for line in _pieces(vertical) if line.right - line.left <= FRAME_WIDTH
+    ]
+    # The ink that may cross the top and bottom, and the image and ink
+    # turned over its diagonal, so the sides run across too.
+    across = ink & (vertical == 0)
+    turned, down = plot.transpose(1, 0, 2), (ink & (horizontal == 0)).T
+
+    frames = []
+    for top, bottom in itertools.permutations(ends, 2):
+        # The columns that both lines run along, the sides at their ends.
+        start, stop = max(top.left, bottom.left), min(top.right, bottom.right)
+        if top.bottom >= bottom.top or stop - start < length:
+            continue
+        lined = _FRAME_LINED * (bottom.bottom - top.top)
+        between = [
+            side
+            for side in sides
+            if start - AXIS_MARGIN < side.right
+            and side.left < stop + AXIS_MARGIN
+            and min(side.bottom, bottom.bottom) - max(side.top, top.top) >= lined
+        ]
+        if len(between) <= 1:
+            continue
+        left = min(between, key=lambda side: side.left)
+        right = max(between, key=lambda side: side.right)
+        # Grid lines run on past both sides.
+        if not all(
+            left.left - AXIS_MARGIN <= line.left
+            or line.right <= right.right + AXIS_MARGIN
+            for line in (top, bottom)
+        ):
+            continue
+        rows = slice(top.bottom, bottom.top)
+        colours = [
+            np.median(plot[line.top : line.bottom, line.left : line.right], axis=(0, 1))
+            for line in (top, bottom, left, right)
+        ]
+        if not (
+            np.ptp(colours, axis=0).max() >= _SAME_COLOUR
+            or any(
+                _crossed(plot, across, background, line, slice(left.right, right.left))
+                for line in (top, bottom)
+            )
+            or any(
+                _crossed(turned, down, background, line.turned(), rows)
+                for line in (left, right)
+            )
+        ):
+            frames.append(_Box(top.top, bottom.bottom, left.left, right.right))
+    return frames
+
+
+def _pieces(mask: npt.NDArray[np.integer | np.floating]) -> list[_Box]:
+    """Return the boxes around the pieces of a mask: its connected pixels."""
+    _, _, stats, _ = cv2.connectedComponentsWithStats(mask)
+    return [
+        _Box(int(top), int(top + rows), int(left), int(left + columns))
+        for left, top, columns, rows, _ in stats[1:]
+    ]
+
+
+def _crossed(
+    plot: Image,
+    ink: npt.NDArray[np.bool_],
+    background: npt.NDArray[np.float64],
+    line: _Box,
+    along: slice,
+) -> bool:
+    """Return whether a curve crosses a horizontal line, in the columns ``along``.
+
+    One does where there is ink within ``AXIS_MARGIN`` above the line and
+    within that below it, at most that far apart along the line, whose
+    colours, those furthest from the background in each column, lie less
+    than ``_SAME_COLOUR`` apart. So tick marks, in the colour of the line,
+    do not cross it where a curve of another colour meets it from the other
+    side.
+    """
+    places, colours = [], []
+    for band in (
+        slice(max(line.top - AXIS_MARGIN, 0), line.top),
+        slice(line.bottom, line.bottom + AXIS_MARGIN),
+    ):
+        levels = plot[band, along].astype(np.float64)
+        if not len(levels):  # the line lies along the edge of the plot
+            return False
+        inked = ink[band, along]
+        strength = np.where(inked, np.linalg.norm(levels - background, axis=2), -1)
+        (columns,) = np.nonzero(inked.any(axis=0))
+        places.append(columns)
+        colours.append(levels[strength.argmax(axis=0)[columns], columns])
+    near = np.abs(places[0][:, np.newaxis] - places[1]) <= AXIS_MARGIN
+    alike = (
+        np.linalg.norm(colours[0][:, np.newaxis] - colours[1], axis=2) < _SAME_COLOUR
+    )
+    return bool(np.any(near & alike))
 
 
 def _palette(plot: Image) -> npt.NDArray[np.float64]:

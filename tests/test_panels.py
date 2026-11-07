@@ -11,9 +11,9 @@ import pytest
 
 from figrecover import Image, Panel, load_image, panels, read_panels
 from figrecover.axes import _Text
+from figrecover.digitize import _Box
 from figrecover.panels import (
     _beside,
-    _Box,
     _boxes,
     _in_order,
     _in_sequence,

@@ -15,7 +15,7 @@ import numpy.typing as npt
 
 from .axes import Axes, _NoTicksError, _read_axes, _read_text, _Text
 from .calibration import Point
-from .digitize import AXIS_MARGIN, Image, ink_mask
+from .digitize import AXIS_MARGIN, Image, _Box, ink_mask
 
 _LINE_LENGTH = 0.1  # axis lines span this fraction of the image's shorter side or more
 _LABEL_REACH = 0.25  # a label lies this fraction of its axes' size from their corner
@@ -52,37 +52,6 @@ class Panel:
     image: Image
     offset: Point
     axes: Axes
-
-
-@dataclass(frozen=True, slots=True)
-class _Box:
-    """A rectangle of an image, in rows from the top and columns from the left.
-
-    ``bottom`` and ``right`` are one past its last row and column.
-    """
-
-    top: int
-    bottom: int
-    left: int
-    right: int
-
-    def holds(self, other: _Box) -> bool:
-        """Return whether another box lies within this one."""
-        return (
-            self.top <= other.top
-            and other.bottom <= self.bottom
-            and self.left <= other.left
-            and other.right <= self.right
-        )
-
-    def within(self, other: _Box) -> _Box:
-        """Return this box measured from the top-left corner of another."""
-        return _Box(
-            self.top - other.top,
-            self.bottom - other.top,
-            self.left - other.left,
-            self.right - other.left,
-        )
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -360,7 +329,8 @@ def _boxes(ink: npt.NDArray[np.uint8]) -> list[_Box]:
     other lines that meet them, such as the rest of a frame, or grid lines.
     The box around them takes in the tick marks that run on from the lines
     at the corners. Boxes within another's, such as an inset's, or a
-    legend's with square corners, are left out.
+    legend's with square corners, are left out, and are painted over when
+    the plot's curves are traced.
     """
     # An odd length, as OpenCV shifts what an even one keeps by a pixel.
     length = round(_LINE_LENGTH * min(ink.shape)) | 1
