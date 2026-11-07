@@ -28,7 +28,7 @@ _SNAP_REACH = 0.25  # a label lies within this fraction of the tick spacing of i
 _SNAP_SLACK = 2  # labels centred within this many pixels of the tick marks stay put
 _RAISED = 0.25  # a superscript sits this fraction of its label's height up or more
 _RAISED_TICK = 1.4  # a label this many times taller than usual has a tick on top
-_WRITTEN = 1.5  # words this much wider than tall run across
+_WRITTEN = 1.5  # words this much wider than tall run across, or taller, upwards
 _LINE_SPACING = 1  # a title's lines lie this many line heights apart or less
 _NUMBER = re.compile(  # 1, -2.5, 1,000, 2.5e-3 or 10%
     r"([+-]?(?:\d{1,3}(?:,\d{3})+(?:\.\d*)?|\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)%?",
@@ -78,13 +78,17 @@ class Axes:
 
 @dataclass(frozen=True, slots=True)
 class _Text:
-    """A line of text and its box, in pixels from the bottom-left corner."""
+    """A line of text and its box, in pixels from the bottom-left corner.
+
+    ``score`` is how sure OCR is of the text, from 0 to 1.
+    """
 
     text: str
     left: float
     bottom: float
     right: float
     top: float
+    score: float = 1
 
     @property
     def x(self) -> float:
@@ -142,8 +146,10 @@ def read_axes(image: Image) -> Axes:
     along their axes, from where the axes cross to the far end of the axis
     line or labels, so a title may be aligned with either end. A title runs
     on over the lines that follow, each within a line's height of the one
-    before and aligned with it. A y-axis title is read as written upwards, as
-    most are, unless its words are much wider than tall.
+    before and aligned with it. A y-axis title written upwards, as most are,
+    is read again turned upright, as OCR reads text written across more
+    surely; one whose words are about as wide as tall, such as a single
+    letter, is read whichever way OCR is surer of.
 
     The text is read with RapidOCR, which the ``ocr`` extra installs.
 
@@ -223,7 +229,7 @@ def read_axes(image: Image) -> Axes:
         x_ticks,
         y_ticks,
         _x_title(words, x_labels, x_span),
-        _y_title(words, y_labels, y_span),
+        _y_title(words, y_labels, y_span, image, ink),
     )
 
 
@@ -252,8 +258,42 @@ def _read_text(image: Image) -> list[_Text]:
             height - float(box[:, 1].max()),
             float(box[:, 0].max()),
             height - float(box[:, 1].min()),
+            float(score),
         )
-        for box, text in zip(found.boxes, found.txts, strict=True)
+        for box, text, score in zip(found.boxes, found.txts, found.scores, strict=True)
+    ]
+
+
+def _read_upwards(image: Image, ink: npt.NDArray[np.uint8], right: int) -> list[_Text]:
+    """Find the lines of text written upwards left of ``right``, turned upright.
+
+    The strip left of ``right`` is turned a quarter turn clockwise, so that
+    text written upwards runs across, and a strip without ink is not read.
+
+    Returns:
+        The lines of text, transposed as by ``_transposed``.
+    """
+    if not ink[:, :right].any():
+        return []
+    upright = cv2.rotate(image[:, :right], cv2.ROTATE_90_CLOCKWISE)
+    # OCR enlarges an image until its shorter side is 736 pixels, so a long,
+    # thin strip is read faster on a square of its background.
+    side = max(upright.shape[:2])
+    square = np.full(
+        (side, side, 3), np.median(upright.reshape(-1, 3), axis=0), dtype=np.uint8
+    )
+    square[:right] = upright
+    # The square's x is the image's y, and its y, from the top, the image's x.
+    return [
+        _Text(
+            text.text,
+            text.left,
+            side - text.top,
+            text.right,
+            side - text.bottom,
+            text.score,
+        )
+        for text in _read_text(square)
     ]
 
 
@@ -263,7 +303,7 @@ def _transposed(text: _Text) -> _Text:
     Transposed, text written upwards runs across from left to right, and the
     text nearest the y-axis tick labels on their left lies nearest them below.
     """
-    return _Text(text.text, text.bottom, text.left, text.top, text.right)
+    return _Text(text.text, text.bottom, text.left, text.top, text.right, text.score)
 
 
 def _lowest_row(numbers: Sequence[_Text]) -> list[_Text]:
@@ -691,12 +731,17 @@ def _y_title(
     words: Sequence[_Text],
     y_labels: Sequence[_Text],
     span: tuple[float, float],
+    image: Image,
+    ink: npt.NDArray[np.uint8],
 ) -> str | None:
     """Return the lines of text nearest left of the y-axis tick labels.
 
-    The title is centred within ``span``, along the axis. It is written
-    upwards unless the words nearest the labels are ``_WRITTEN`` times wider
-    than tall, and so run across.
+    The title is centred within ``span``, along the axis. OCR can split a
+    title written upwards into pieces, or misread it, so unless the words
+    nearest the labels are ``_WRITTEN`` times wider than tall, and so run
+    across, the text left of the labels is read again turned upright. If
+    they are about as wide as tall, as a single letter is, the title is read
+    whichever way OCR is surer of, upwards if it is as sure.
     """
     left = min(label.left for label in y_labels)
     beside = [word for word in words if word.x < left and span[0] <= word.y <= span[1]]
@@ -706,12 +751,22 @@ def _y_title(
     column = [
         word for word in beside if abs(word.x - nearest.x) < nearest.right - nearest.x
     ]
+    across = _lines(column)
     width = sum(word.right - word.left for word in column)
     height = sum(word.top - word.bottom for word in column)
     if width >= _WRITTEN * height:
-        return _title(_lines(column))
+        return _title(across)
+    right = min(math.ceil(max(word.right for word in beside)), math.floor(left))
+    upright = [
+        text
+        for text in _read_upwards(image, ink, right)
+        if span[0] <= text.x <= span[1]
+    ]
     # Transposed, the lines of a title written upwards run from the last up.
-    return _title(_lines(map(_transposed, beside))[::-1])
+    upwards = _lines(upright or map(_transposed, beside))[::-1]
+    if height >= _WRITTEN * width:
+        return _title(upwards)
+    return _title(max(upwards, across, key=_score))
 
 
 def _lines(texts: Iterable[_Text]) -> list[_Text]:
@@ -743,6 +798,7 @@ def _line(texts: Sequence[_Text]) -> _Text:
         min(text.bottom for text in texts),
         max(text.right for text in texts),
         max(text.top for text in texts),
+        float(np.mean([text.score for text in texts])),
     )
 
 
@@ -751,6 +807,11 @@ def _follows(line: _Text, before: _Text) -> bool:
     return before.y - line.y <= _LINE_SPACING * (before.top - before.bottom) and (
         before.left <= line.x <= before.right or line.left <= before.x <= line.right
     )
+
+
+def _score(lines: Sequence[_Text]) -> float:
+    """Return how sure OCR is of the lines of a title, on average."""
+    return float(np.mean([line.score for line in lines]))
 
 
 def _title(lines: Sequence[_Text]) -> str | None:

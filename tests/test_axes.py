@@ -656,6 +656,35 @@ def tall(content: str, x: float, y: float, height: float) -> _Text:
     return _Text(content, x - 7, y - height / 2, x + 7, y + height / 2)
 
 
+def upright(content: str, x: float, y: float, height: float, score: float = 1) -> _Text:
+    """Return a line of text written upwards as OCR reads it turned upright.
+
+    The text is 14 pixels wide and centred on a pixel position of the plot.
+    Turned a quarter turn clockwise, the plot's left side runs along the top
+    of a square as tall as the plot, which OCR reads.
+    """
+    return _Text(
+        content, y - height / 2, HEIGHT - x - 7, y + height / 2, HEIGHT - x + 7, score
+    )
+
+
+def read_turned(
+    monkeypatch: pytest.MonkeyPatch, texts: Sequence[_Text], turned: Sequence[_Text]
+) -> Axes:
+    """Read the axes of a plot with ink left of the y labels, as OCR read the texts.
+
+    Turned upright, OCR reads the turned texts left of the y-axis tick labels.
+    """
+    image = plot()
+    image[100:200, :20] = 0
+
+    def read_text(image: Image) -> list[_Text]:
+        return list(turned if image.shape[0] == image.shape[1] else texts)
+
+    monkeypatch.setattr(axes, "_read_text", read_text)
+    return read_axes(image)
+
+
 def test_reads_titles_over_several_lines(monkeypatch: pytest.MonkeyPatch) -> None:
     labels = [*x_labels(["0", "1", "2"]), *y_labels(["0", "1", "2"])]
     # Each line lies within a line's height of the one before, aligned with
@@ -702,3 +731,40 @@ def test_reads_titles_written_across(monkeypatch: pytest.MonkeyPatch) -> None:
     found = read(monkeypatch, [*labels, *y_title])
 
     assert found.y_title == "Voltage (mV)"
+
+
+def test_reads_titles_written_upwards_turned_upright(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    labels = [*x_labels(["0", "1", "2"]), *y_labels(["0", "1", "2"])]
+    # OCR split the title into pieces, and missed its first line, until the
+    # text was turned upright.
+    pieces = [
+        tall("Volt", 22, 115, 30),
+        tall("e", 22, 137, 10),
+        tall("age (mV)", 22, 170, 50),
+    ]
+    turned = [upright("Measured", 8, 150, 60), upright("Voltage (mV)", 22, 150, 100)]
+
+    found = read_turned(monkeypatch, [*labels, *pieces], turned)
+
+    assert found.y_title == "Measured Voltage (mV)"
+
+
+@pytest.mark.parametrize(
+    ("across", "turned", "title"),
+    [
+        # A V written upwards, read as > until turned upright.
+        (_Text(">", 1, 133, 15, 147, 0.9), upright("V", 8, 140, 14, 0.98), "V"),
+        # A y written across, misread when turned.
+        (_Text("y", 1, 133, 15, 147), upright("A", 8, 140, 14, 0.6), "y"),
+    ],
+)
+def test_reads_single_letters_whichever_way_ocr_is_surer_of(
+    monkeypatch: pytest.MonkeyPatch, across: _Text, turned: _Text, title: str
+) -> None:
+    labels = [*x_labels(["0", "1", "2"]), *y_labels(["0", "1", "2"])]
+
+    found = read_turned(monkeypatch, [*labels, across], [turned])
+
+    assert found.y_title == title
