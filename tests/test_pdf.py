@@ -14,6 +14,7 @@ from figrecover import (
     find_pdf_colours,
     load_pdf,
     read_pdf_axes,
+    remove_pdf_grid,
     render_pdf,
     trace_pdf_curves,
 )
@@ -148,6 +149,21 @@ def plot(*parts: str) -> str:
     return "\n".join([axes(), *titles, *parts])
 
 
+def image(width: int, height: int, rows: Sequence[int]) -> str:
+    """Return content that draws an image with a red line through it, in a unit square.
+
+    The line runs through the given row of each column, from the top, with
+    the row below it, on white.
+    """
+    pixels = np.full((height, width, 3), 255, dtype=np.uint8)
+    for column, row in enumerate(rows):
+        pixels[row : row + 2, column] = (255, 0, 0)
+    return (
+        f"BI /W {width} /H {height} /CS /RGB /BPC 8 /F /AHx ID "
+        f"{pixels.tobytes().hex()}> EI"
+    )
+
+
 def drawing(tmp_path: Path, content: str, forms: Sequence[str] = ()) -> Drawing:
     """Read a page drawn with the given content and forms."""
     return load_pdf(write_pdf(tmp_path / "plot.pdf", content, forms))
@@ -248,6 +264,23 @@ def test_reads_the_colours_of_the_example_pdfs_exactly() -> None:
 
     # matplotlib's colours, longest curve first.
     assert colours == [(44, 160, 44), (255, 127, 14), (31, 119, 180), (0, 0, 0)]
+
+
+def test_traces_curves_drawn_as_images() -> None:
+    found = load_pdf(EXAMPLES / "rasterised.pdf")
+    read = read_pdf_axes(found)
+
+    data = curves(found, 2)
+
+    assert [value for _, value in read.y_ticks] == [0, 0.5, 1, 1.5, 2, 2.5, 3]
+    assert (read.x_title, read.y_title) == ("Time (s)", "Voltage (mV)")
+    # The curves are drawn at 100 dots per inch, and traced to within half a
+    # pixel, from the first column of pixels to the last.
+    for curve, function in zip(data, [growth, decay], strict=True):
+        x, y = curve.T
+        np.testing.assert_allclose(y, function(x), atol=0.01)
+        assert x.min() < 0.02
+        assert x.max() > 9.98
 
 
 def test_reads_a_figure_in_a_box_on_a_page(tmp_path: Path) -> None:
@@ -436,6 +469,67 @@ def test_reads_a_box_of_a_page(tmp_path: Path) -> None:
     assert len(load_pdf(path, box=(-50, -50, 500, 500)).paths) == len(
         load_pdf(path).paths
     )
+
+
+# A line rising from the bottom-left corner of an image of 60 by 40 pixels,
+# to the top-right.
+DIAGONAL = image(60, 40, [round(38 - column * 38 / 59) for column in range(60)])
+
+
+def test_traces_images_within_the_axes_from_their_edges(tmp_path: Path) -> None:
+    content = "\n".join(
+        [
+            f"q 300 0 0 200 60 60 cm {DIAGONAL} Q",
+            f"q 40 0 0 40 0 200 cm {DIAGONAL} Q",  # left of the axes
+            f"q 40 0 0 40 200 0 cm {DIAGONAL} Q",  # below the axes
+        ]
+    )
+    found = drawing(tmp_path, content)
+
+    colours = find_pdf_colours(found, 1, (60, 60))
+    traced = trace_pdf_curves(found, colours, (60, 60))[0]
+
+    assert colours == [(255, 0, 0)]
+    with pytest.raises(ValueError, match="found only 1 of 2"):
+        find_pdf_colours(found, 2, (60, 60))
+    # The centres of the first and last columns of pixels, 5 points wide.
+    assert traced[:, 0].min() == pytest.approx(62.5)
+    assert traced[:, 0].max() == pytest.approx(357.5)
+
+
+def test_traces_images_around_the_axes_beyond_them(tmp_path: Path) -> None:
+    found = drawing(tmp_path, f"q 300 0 0 200 0 0 cm {DIAGONAL} Q")
+
+    traced = trace_pdf_curves(found, [(255, 0, 0)], (60, 60))[0]
+
+    # The axis lines in the image, and a margin of 3 pixels beyond them, are
+    # left out.
+    assert traced.min(axis=0).tolist() > [75, 75]
+    assert traced[:, 0].max() == pytest.approx(297.5)
+
+
+def test_leaves_out_images_outside_the_box(tmp_path: Path) -> None:
+    content = f"q 40 0 0 40 300 250 cm {image(4, 4, [0, 1, 2, 2])} Q"
+    path = write_pdf(tmp_path / "plot.pdf", content)
+
+    assert len(load_pdf(path).pictures) == 1
+    assert not load_pdf(path, box=(0, 0, 200, 200)).pictures
+
+
+def test_removes_grid_lines_from_images(tmp_path: Path) -> None:
+    pixels = ["ff" * 3 * 200] * 199 + ["00" * 3 * 200]  # a line along the bottom
+    content = (
+        "q 200 0 0 200 0 0 cm BI /W 200 /H 200 /CS /RGB /BPC 8 /F /AHx ID "
+        + "".join(pixels)
+        + "> EI Q"
+    )
+    found = drawing(tmp_path, content)
+
+    cleaned = remove_pdf_grid(found)
+
+    assert found.pictures[0].image.min() == 0
+    assert cleaned.pictures[0].image.min() > 0
+    assert cleaned.texts == found.texts
 
 
 def test_draws_the_part_of_the_page_read(tmp_path: Path) -> None:

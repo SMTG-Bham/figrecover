@@ -34,6 +34,7 @@ from .pdf import (
     find_pdf_colours,
     load_pdf,
     read_pdf_axes,
+    remove_pdf_grid,
     render_pdf,
     trace_pdf_curves,
 )
@@ -74,8 +75,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     if _is_pdf(arguments.image) and arguments.markers:
         parser.error("-m finds markers in images, not in PDF files")
-    if _is_pdf(arguments.image) and arguments.remove_grid:
-        parser.error("--remove-grid paints over grid lines in images, not in PDF files")
     if not _is_pdf(arguments.image) and (arguments.page or arguments.box):
         parser.error("--page and --box choose what to read in a PDF file")
     outputs = {"-o": arguments.output, "--preview": arguments.preview}
@@ -262,6 +261,8 @@ def _digitize_pdf(arguments: argparse.Namespace) -> None:
     the page read, ``PREVIEW_SCALE`` pixels to the point.
     """
     drawing = load_pdf(arguments.image, arguments.page or 1, arguments.box)
+    if arguments.remove_grid:
+        drawing = remove_pdf_grid(drawing)
     if arguments.points:
         _check_positions(arguments.locations, drawing.box)
         positions = arguments.locations or _click_positions(drawing, arguments.points)

@@ -6,7 +6,7 @@ import itertools
 import math
 import os
 from collections.abc import Callable, Iterator, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import numpy as np
@@ -37,7 +37,15 @@ from .axes import (
     _x_title,
 )
 from .calibration import Calibration, Point
-from .digitize import _MATCH_DISTANCE, Colour, Image
+from .digitize import (
+    _MATCH_DISTANCE,
+    AXIS_MARGIN,
+    Colour,
+    Image,
+    _curve_colours,
+    remove_grid,
+    trace_curves,
+)
 
 type Box = tuple[float, float, float, float]
 """A rectangle's left, bottom, right and top edges, in points."""
@@ -89,6 +97,15 @@ class _Path:
 
 
 @dataclass(frozen=True, slots=True)
+class _Picture:
+    """An image drawn on a page, on white, the box it fills, and its clip, in points."""
+
+    image: Image
+    box: Box
+    clip: Box
+
+
+@dataclass(frozen=True, slots=True)
 class Drawing:
     """What is drawn on a page of a PDF, as ``load_pdf`` reads it.
 
@@ -102,6 +119,7 @@ class Drawing:
             read, such as one figure on it.
         texts: The lines of text on the page, for figrecover's own use.
         paths: The paths drawn on the page, for figrecover's own use.
+        pictures: The images drawn on the page, for figrecover's own use.
     """
 
     path: str
@@ -109,6 +127,7 @@ class Drawing:
     box: Box
     texts: tuple[_Text, ...] = field(repr=False)
     paths: tuple[_Path, ...] = field(repr=False)
+    pictures: tuple[_Picture, ...] = field(repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,7 +174,7 @@ def _pdfium() -> Any:
 def load_pdf(
     path: str | os.PathLike[str], page: int = 1, box: Box | None = None
 ) -> Drawing:
-    """Read what is drawn on a page of a PDF: its text and paths.
+    """Read what is drawn on a page of a PDF: its text, paths and images.
 
     Text is read character by character, and characters next to one another
     along a line, less than ``_GAP`` font sizes apart, make a text, with a
@@ -164,7 +183,8 @@ def load_pdf(
     or more above or below it, are written as superscripts or subscripts, so
     that 10 with a small 2 raised beside it reads as 10 squared. Paths are
     read with the points they pass through, leaving out the control points
-    of curved pieces.
+    of curved pieces, and images on white, with any transparency, as they
+    are shown.
 
     The PDF is read with pypdfium2, which the ``pdf`` extra installs.
 
@@ -174,8 +194,8 @@ def load_pdf(
         box: The left, bottom, right and top edges of the part of the page
             to read, in points from its bottom-left corner, such as one figure
             on it. Text whose middle lies outside it is left out, and so are
-            paths wholly outside it; the rest is hidden beyond it, as though
-            clipped. Defaults to the whole page.
+            paths and images wholly outside it; the rest is hidden beyond it,
+            as though clipped. Defaults to the whole page.
 
     Returns:
         What is drawn on the page, within the box.
@@ -201,13 +221,16 @@ def load_pdf(
         msg = f"the box {_written(box)} lies off the page, {_written(bounds)}"
         raise ValueError(msg)
     texts = [text for text in _texts(sheet) if _holds(area, (text.x, text.y))]
-    paths = [
-        path
-        for drawn, matrix, clip in _objects(sheet, area)
-        if drawn.type == pdfium.raw.FPDF_PAGEOBJ_PATH
-        for path in _path(drawn.raw, matrix, clip)
-    ]
-    return Drawing(os.fspath(path), page, area, tuple(texts), tuple(paths))
+    paths: list[_Path] = []
+    pictures: list[_Picture] = []
+    for drawn, matrix, clip in _objects(sheet, area):
+        if drawn.type == pdfium.raw.FPDF_PAGEOBJ_PATH:
+            paths += _path(drawn.raw, matrix, clip)
+        elif drawn.type == pdfium.raw.FPDF_PAGEOBJ_IMAGE:
+            pictures += _picture(drawn, matrix, clip)
+    return Drawing(
+        os.fspath(path), page, area, tuple(texts), tuple(paths), tuple(pictures)
+    )
 
 
 def render_pdf(drawing: Drawing, scale: float = PREVIEW_SCALE) -> Image:
@@ -227,6 +250,25 @@ def render_pdf(drawing: Drawing, scale: float = PREVIEW_SCALE) -> Image:
     crop = (edges[0] - left, edges[1] - bottom, right - edges[2], top - edges[3])
     bitmap = sheet.render(scale=scale, crop=crop, rev_byteorder=True)
     return np.array(bitmap.to_numpy()[..., :3], dtype=np.uint8)
+
+
+def remove_pdf_grid(drawing: Drawing) -> Drawing:
+    """Paint over long horizontal and vertical lines in the images on a page.
+
+    Grid lines drawn as paths are left out of the curves anyway. Those in
+    images are painted over as ``remove_grid`` paints them over.
+
+    Args:
+        drawing: What is drawn on the page, as ``load_pdf`` returns it.
+
+    Returns:
+        The drawing with grid lines painted over in its images.
+    """
+    pictures = tuple(
+        replace(picture, image=remove_grid(picture.image))
+        for picture in drawing.pictures
+    )
+    return replace(drawing, pictures=pictures)
 
 
 def read_pdf_axes(drawing: Drawing) -> Axes:
@@ -335,7 +377,7 @@ def find_pdf_colours(
     """Find the colours of the curves in a plot on a page of a PDF.
 
     The curves are told apart by colour; see ``trace_pdf_curves`` for which
-    paths make them.
+    paths and images make them.
 
     Args:
         drawing: What is drawn on the page, as ``load_pdf`` returns it.
@@ -368,7 +410,9 @@ def trace_pdf_curves(
     mark, a grid line or the line in a legend's key, is left out, and so is
     a closed one, such as a frame. Points left of or below the axes, or
     hidden by a clip, as those beyond the limits of the axes are, are left
-    out too.
+    out too. Curves drawn in images, as plots of many points often are, are
+    traced as ``trace_curves`` traces them, from where the axes cross, if
+    they cross the image, and placed on the page where the image is shown.
 
     Each colour picks the curve whose colour is nearest, up to 96 levels
     away.
@@ -381,7 +425,8 @@ def trace_pdf_curves(
 
     Returns:
         One ``(n, 2)`` array per colour, of the ``(x, y)`` positions in points
-        of the points the curve passes through.
+        of the points the curve passes through. Those of curves traced in
+        images are those of pixel centres, sorted by x, then y.
 
     Raises:
         ValueError: If no curve has one of the colours, or two of them match
@@ -632,6 +677,26 @@ def _outline(
     )
 
 
+def _picture(
+    drawn: Any, matrix: npt.NDArray[np.float64], clip: Box | None
+) -> list[_Picture]:
+    """Return an image drawn on a page, on white, or none if it is not shown.
+
+    An image fills the square of side 1 in its own space, which ``matrix``
+    maps to the page's, and ``clip`` is the box it is shown in, or None if it
+    is hidden. PDFium draws it as it is shown, with any mask, at about as
+    many pixels as it has.
+    """
+    corners = matrix @ np.array([[0, 1, 0, 1], [0, 0, 1, 1], [1, 1, 1, 1]])
+    box = (*corners[:2].min(axis=1), *corners[:2].max(axis=1))
+    if clip is None or _overlap(box, clip) is None:
+        return []
+    shown = drawn.get_bitmap(render=True).to_numpy().astype(np.float64)
+    alpha = shown[..., 3:] / 255  # PDFium draws blue, green, red and alpha
+    on_white = shown[..., 2::-1] * alpha + 255 * (1 - alpha)
+    return [_Picture(np.round(on_white).astype(np.uint8), box, clip)]
+
+
 def _colour(getter: Callable[..., int], handle: Any) -> Colour | None:
     """Return an object's stroke or fill colour, or None if it is transparent."""
     red, green, blue, alpha = (ctypes.c_uint() for _ in range(4))
@@ -780,10 +845,41 @@ def _series(drawing: Drawing, origin: Point) -> list[_Series]:
         )
         for colour, pieces in parts.items()
     ]
+    series += _traced(drawing, origin)
     return sorted(
         (curve for curve in series if len(curve.points)),
         key=lambda curve: -curve.length,
     )
+
+
+def _traced(drawing: Drawing, origin: Point) -> list[_Series]:
+    """Return the curves traced in the images on a page, by colour.
+
+    Each image that reaches beyond where the axes cross is traced as
+    ``trace_curves`` traces an image of a plot, from where the axes cross in
+    it, or from its edges if they cross outside it or within a pixel of its
+    edges, as axes drawn as lines around an image of curves do. Pixel
+    positions are placed on the page where the image is shown.
+    """
+    found = []
+    for picture in drawing.pictures:
+        left, bottom, right, top = picture.box
+        if right <= origin[0] or top <= origin[1]:
+            continue
+        height, width = picture.image.shape[:2]
+        scale = np.array([(right - left) / width, (top - bottom) / height])
+        corner = np.array([left, bottom])
+        inner = (np.array(origin) - corner) / scale
+        inner[inner < 1] = -AXIS_MARGIN  # so no pixels are left out for the axes
+        start = (float(inner[0]), float(inner[1]))
+        colours = _curve_colours(picture.image, start)
+        for colour, curve in zip(
+            colours, trace_curves(picture.image, colours, start), strict=True
+        ):
+            points = corner + curve * scale
+            shown = _shown(points, picture.clip, origin)
+            found.append(_Series(colour, points[shown], _length(points, shown)))
+    return found
 
 
 def _shown(

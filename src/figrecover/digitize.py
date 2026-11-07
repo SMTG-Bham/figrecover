@@ -154,20 +154,28 @@ def find_colours(image: Image, count: int = 1, origin: Point = (0, 0)) -> list[C
     Raises:
         ValueError: If there are fewer than ``count`` curves.
     """
+    curves = _curve_colours(image, origin)
+    if len(curves) < count:
+        msg = f"found only {len(curves)} of {count} curves"
+        raise ValueError(msg if curves else "no curve found")
+    return curves[:count]
+
+
+def _curve_colours(image: Image, origin: Point) -> list[Colour]:
+    """Return the colours of all the curves in a plot, most pixels first.
+
+    See ``find_colours`` for which colours are curves.
+    """
     plot = _plot_area(image, origin)[0]
     palette = _palette(plot)
     labels = _classify(plot, palette)
-    curves = [
-        colour
+    return [
+        _to_colour(colour)
         for index, colour in enumerate(palette[1:], start=1)
         if np.abs(colour - palette[0]).max() >= _CONTRAST
         and not _fills_areas(labels == index)
         and not _draws_grid(labels == index)
     ]
-    if len(curves) < count:
-        msg = f"found only {len(curves)} of {count} curves"
-        raise ValueError(msg if curves else "no curve found")
-    return [_to_colour(colour) for colour in curves[:count]]
 
 
 def trace_curves(

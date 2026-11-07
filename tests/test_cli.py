@@ -393,6 +393,20 @@ def test_asks_for_missing_locations_in_pdf_files_and_prints_them(
     np.testing.assert_allclose(data[:, 1], decay(data[:, 0]), atol=1e-5)
 
 
+def test_traces_curves_drawn_as_images_in_pdf_files(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    rasterised = str(EXAMPLES / "rasterised.pdf")
+
+    assert main([rasterised, "-n", "2", "--remove-grid"]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.err.endswith("figrecover: colours: -c ff7f0e -c 1f77b4\n")
+    data = read_csv(captured.out, header="series,Time (s),Voltage (mV)")
+    for series, curve in enumerate([growth, decay], start=1):
+        assert_follows(data[data[:, 0] == series, 1:], curve)
+
+
 @pytest.mark.usefixtures("without_pdf")
 def test_reports_a_missing_pdf_extra(capsys: pytest.CaptureFixture[str]) -> None:
     assert main([LABELLED_PDF]) == 1
@@ -472,7 +486,6 @@ def test_accepts_points_with_spaces_and_exponents(
         (["plot.png", "--page", "2"], "--page and --box choose what to read in a PDF"),
         (["plot.png", "--box", "0,0,1,1"], "--page and --box choose what to read"),
         ([LABELLED_PDF, "-m", "1,1"], "-m finds markers in images, not in PDF files"),
-        ([LABELLED_PDF, "--remove-grid"], "--remove-grid paints over grid lines in"),
         ([LABELLED_PDF, "--page", "0"], "expected a positive whole number, got '0'"),
         ([LABELLED_PDF, "--box", "0,0,1"], "expected a box written as x0,y0,x1,y1"),
         ([LABELLED_PDF, "--box", "0,0,inf,1"], "expected finite numbers in the box"),

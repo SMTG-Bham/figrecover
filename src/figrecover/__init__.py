@@ -20,6 +20,7 @@ from .pdf import (
     find_pdf_colours,
     load_pdf,
     read_pdf_axes,
+    remove_pdf_grid,
     render_pdf,
     trace_pdf_curves,
 )
@@ -44,6 +45,7 @@ __all__ = [
     "read_axes",
     "read_pdf_axes",
     "remove_grid",
+    "remove_pdf_grid",
     "render_pdf",
     "trace_curve",
     "trace_curves",
