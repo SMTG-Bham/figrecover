@@ -7,7 +7,9 @@ import math
 import os
 import re
 import sys
+import warnings
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TextIO
 
@@ -16,7 +18,6 @@ import numpy as np
 import numpy.typing as npt
 
 from . import __version__, interactive
-from .axes import read_axes
 from .calibration import MIN_POINTS, Calibration, Point
 from .digitize import (
     Colour,
@@ -27,6 +28,10 @@ from .digitize import (
     remove_grid,
     trace_curves,
 )
+from .panels import read_panels
+
+type Ring = tuple[Point, int, Colour]
+"""A ring to draw in the preview: its centre, its radius and its colour."""
 
 SERIES_COLOURS: list[Colour] = [  # matplotlib's, to draw series of markers in
     (31, 119, 180),
@@ -40,6 +45,31 @@ SERIES_COLOURS: list[Colour] = [  # matplotlib's, to draw series of markers in
     (188, 189, 34),
     (23, 190, 207),
 ]
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class _Plot:
+    """A plot to trace: the whole image, or one of its panels.
+
+    Attributes:
+        name: The name of the panel, the letter of its label or its number,
+            or None if the image is one plot.
+        image: The plot's image, in which to trace its curves.
+        offset: The pixel position, in the whole image, of the bottom-left
+            corner of ``image``.
+        calibration: The map from pixels of ``image`` to data.
+        pixels: The pixel position of each reference point or tick, to ring
+            in the preview.
+        columns: The names of the x and y columns: the axis titles, or x and
+            y.
+    """
+
+    name: str | None
+    image: Image
+    offset: Point
+    calibration: Calibration
+    pixels: list[Point]
+    columns: tuple[str, str]
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -87,7 +117,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="figrecover",
         description="Recover the curves in an image of a plot as CSV, with "
-        "columns for x and y, and a series column if there are several curves.",
+        "columns for x and y, and a series column if there are several curves. "
+        "An image of several plots, such as the panels of a figure, gives a CSV "
+        "for each when its axes are read.",
     )
     parser.add_argument("--version", action="version", version=__version__)
     parser.add_argument("image", type=Path, help="image of the plot")
@@ -160,7 +192,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "--output",
         type=Path,
         metavar="FILE",
-        help="CSV file to write (default: standard output)",
+        help="CSV file to write (default: standard output); for an image of "
+        "several panels, one for each, named after the panel, such as out_a.csv "
+        "for -o out.csv (default: standard output, with a panel column)",
     )
     parser.add_argument(
         "--preview",
@@ -176,7 +210,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _digitize(arguments: argparse.Namespace) -> None:
-    """Write the curves in the image as CSV."""
+    """Write the curves in the image, or in each of its panels, as CSV.
+
+    A panel whose curves cannot be traced is left out, with a warning.
+    """
     image = load_image(arguments.image)
     _check_locations(arguments.markers, image, "-m position")
     if arguments.points:
@@ -188,15 +225,60 @@ def _digitize(arguments: argparse.Namespace) -> None:
             x_log="x" in arguments.log,
             y_log="y" in arguments.log,
         )
-        names = ("x", "y")
+        plots = [_Plot(None, image, (0, 0), calibration, pixels, ("x", "y"))]
     else:
-        calibration, pixels, names = _read_axes(image)
-    traced = remove_grid(image) if arguments.remove_grid else image
-    rings: list[tuple[Point, int, Colour]] = [
-        (pixel, 6, (0, 0, 255)) for pixel in pixels
-    ]
+        plots = _read_panels(image)
+    if arguments.markers and len(plots) > 1:
+        msg = (
+            f"-m finds the markers of one plot, but the image has {len(plots)} "
+            "panels; crop it to one"
+        )
+        raise ValueError(msg)
+
+    tables: list[tuple[_Plot, list[npt.NDArray[np.float64]]]] = []
+    curves: list[npt.NDArray[np.float64]] = []
+    colours: list[Colour] = []
+    rings: list[Ring] = []
+    for plot in plots:
+        try:
+            traced, traced_colours, marked = _trace(plot, arguments)
+        except ValueError as error:
+            if plot.name is None:
+                raise
+            message = f"left out panel {plot.name}, as its curves cannot be traced"
+            print(f"figrecover: {message}: {error}", file=sys.stderr)
+            continue
+        tables.append((plot, [plot.calibration.to_data(curve) for curve in traced]))
+        x, y = plot.offset
+        curves += [curve + np.array([x, y]) for curve in traced]
+        colours += traced_colours
+        rings += [
+            ((cx + x, cy + y), radius, colour) for (cx, cy), radius, colour in marked
+        ]
+    if not tables:
+        msg = f"cannot trace the curves of any of the {len(plots)} panels"
+        raise ValueError(msg)
+
+    if arguments.preview:
+        _save_preview(arguments.preview, image, curves, colours, rings)
+    _write(arguments.output, tables)
+
+
+def _trace(
+    plot: _Plot, arguments: argparse.Namespace
+) -> tuple[list[npt.NDArray[np.float64]], list[Colour], list[Ring]]:
+    """Trace the curves of a plot, by colour or by markers.
+
+    Returns:
+        The pixel positions of the points of each curve, its colour in the
+        preview, and the rings to draw in the preview around the reference
+        points or ticks, and the markers and legend keys.
+    """
+    traced = remove_grid(plot.image) if arguments.remove_grid else plot.image
+    origin = plot.calibration.origin
+    rings: list[Ring] = [(pixel, 6, (0, 0, 255)) for pixel in plot.pixels]
     if arguments.markers:
-        curves = _find_markers(traced, arguments.markers, calibration.origin)
+        curves = _find_markers(traced, arguments.markers, origin)
         colours = [
             SERIES_COLOURS[series % len(SERIES_COLOURS)]
             for series in range(len(curves))
@@ -205,14 +287,10 @@ def _digitize(arguments: argparse.Namespace) -> None:
             rings += [(key, 6, colour), *((marker, 4, colour) for marker in curve)]
     else:
         colours = arguments.colours or _find_colours(
-            traced, arguments.series, calibration.origin
+            traced, arguments.series, origin, _prefix(plot.name)
         )
-        curves = trace_curves(traced, colours, calibration.origin)
-
-    if arguments.preview:
-        _save_preview(arguments.preview, image, curves, colours, rings)
-    data = [calibration.to_data(curve) for curve in curves]
-    _write_csv(arguments.output or sys.stdout, data, names)
+        curves = trace_curves(traced, colours, origin)
+    return curves, colours, rings
 
 
 def _check_locations(locations: Sequence[Point], image: Image, name: str) -> None:
@@ -232,35 +310,62 @@ def _click_locations(image: Image, points: Sequence[Point]) -> list[Point]:
     return pixels
 
 
-def _read_axes(image: Image) -> tuple[Calibration, list[Point], tuple[str, str]]:
-    """Read the axes, and print what was read so it can be checked.
+def _read_panels(image: Image) -> list[_Plot]:
+    """Read the axes of the image's panels, and print them so they can be checked.
 
-    Returns:
-        The calibration, the pixel position of each tick on its axis line, and
-        the names of the x and y columns: the axis titles, or x and y.
+    Panels left out, as their axes cannot be read, are reported too. An
+    image of one plot is one panel, without a name. Each panel's pixel
+    positions to ring in the preview are those of its ticks, on their axis
+    lines, and its columns are named after its axis titles.
     """
-    axes = read_axes(image)
-    x_origin, y_origin = axes.calibration.origin
-    for name, title, ticks, log in (
-        ("x", axes.x_title, axes.x_ticks, axes.calibration.x_log),
-        ("y", axes.y_title, axes.y_ticks, axes.calibration.y_log),
-    ):
-        values = ", ".join(f"{value:g}" for _, value in ticks)
-        scale = "logarithmic " if log else ""
-        titled = f' "{title}"' if title else ""
-        message = f"figrecover: {scale}{name}-axis{titled} with ticks at {values}"
-        print(message, file=sys.stderr)
-    pixels = [(x, y_origin) for x, _ in axes.x_ticks]
-    pixels += [(x_origin, y) for y, _ in axes.y_ticks]
-    return axes.calibration, pixels, (axes.x_title or "x", axes.y_title or "y")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        try:
+            panels = read_panels(image)
+        finally:
+            for warning in caught:
+                print(f"figrecover: {warning.message}", file=sys.stderr)
+    plots = []
+    for number, panel in enumerate(panels, start=1):
+        name = (panel.label or str(number)) if len(panels) > 1 else None
+        axes = panel.axes
+        for axis, title, ticks, log in (
+            ("x", axes.x_title, axes.x_ticks, axes.calibration.x_log),
+            ("y", axes.y_title, axes.y_ticks, axes.calibration.y_log),
+        ):
+            values = ", ".join(f"{value:g}" for _, value in ticks)
+            scale = "logarithmic " if log else ""
+            titled = f' "{title}"' if title else ""
+            message = (
+                f"{_prefix(name)}{scale}{axis}-axis{titled} with ticks at {values}"
+            )
+            print(f"figrecover: {message}", file=sys.stderr)
+        x_origin, y_origin = axes.calibration.origin
+        pixels = [(x, y_origin) for x, _ in axes.x_ticks]
+        pixels += [(x_origin, y) for y, _ in axes.y_ticks]
+        columns = (axes.x_title or "x", axes.y_title or "y")
+        plots.append(
+            _Plot(name, panel.image, panel.offset, axes.calibration, pixels, columns)
+        )
+    return plots
 
 
-def _find_colours(image: Image, count: int | None, origin: Point) -> list[Colour]:
-    """Find the curve colours, and print the -c options to reuse if -n was given."""
+def _prefix(name: str | None) -> str:
+    """Return the start of a message about a panel, naming it if it has a name."""
+    return f"panel {name}: " if name else ""
+
+
+def _find_colours(
+    image: Image, count: int | None, origin: Point, prefix: str
+) -> list[Colour]:
+    """Find the curve colours, and print the -c options to reuse if -n was given.
+
+    ``prefix`` starts the message, naming the panel.
+    """
     colours = find_colours(image, count or 1, origin)
     if count is not None:
         options = " ".join(f"-c {bytes(colour).hex()}" for colour in colours)
-        print(f"figrecover: colours: {options}", file=sys.stderr)
+        print(f"figrecover: {prefix}colours: {options}", file=sys.stderr)
     return colours
 
 
@@ -274,27 +379,55 @@ def _find_markers(
     return markers
 
 
+def _write(
+    output: Path | None,
+    tables: Sequence[tuple[_Plot, Sequence[npt.NDArray[np.float64]]]],
+) -> None:
+    """Write the curves of each plot as CSV, to the output file or standard output.
+
+    The curves of an image of several panels go to a file for each panel,
+    named after it, such as out_a.csv for out.csv, or to standard output
+    with a panel column, whose x and y columns are named after the axis
+    titles if every panel's are the same, or x and y.
+    """
+    if tables[0][0].name is None:
+        plot, curves = tables[0]
+        _write_csv(output or sys.stdout, [(None, curves)], plot.columns)
+    elif output is not None:
+        paths = [output.with_stem(f"{output.stem}_{plot.name}") for plot, _ in tables]
+        for path, (plot, curves) in zip(paths, tables, strict=True):
+            _write_csv(path, [(None, curves)], plot.columns)
+        print(f"figrecover: wrote {', '.join(map(str, paths))}", file=sys.stderr)
+    else:
+        columns = {plot.columns for plot, _ in tables}
+        names = columns.pop() if len(columns) == 1 else ("x", "y")
+        _write_csv(sys.stdout, [(plot.name, curves) for plot, curves in tables], names)
+
+
 def _write_csv(
     file: Path | TextIO,
-    curves: Sequence[npt.NDArray[np.float64]],
+    tables: Sequence[tuple[str | None, Sequence[npt.NDArray[np.float64]]]],
     names: tuple[str, str],
 ) -> None:
-    """Write the curves as CSV, with a series column if there are several."""
-    if len(curves) == 1:
-        table, columns, fmt = curves[0], [*names], ["%.6g"] * 2
+    """Write curves as CSV, from tables of curves named after their panels.
+
+    There is a panel column if the tables are named, rather than one named
+    None for an image of one plot, and a series column if a table has
+    several curves.
+    """
+    series = any(len(curves) > 1 for _, curves in tables)
+    named = tables[0][0] is not None
+    text = io.StringIO()
+    writer = csv.writer(text, lineterminator="\n")
+    writer.writerow([*(["panel"] * named), *(["series"] * series), *names])
+    for name, curves in tables:
+        for number, curve in enumerate(curves, start=1):
+            start = [*([name] if name is not None else []), *[str(number)] * series]
+            writer.writerows([*start, f"{x:.6g}", f"{y:.6g}"] for x, y in curve)
+    if isinstance(file, Path):
+        file.write_text(text.getvalue(), encoding="utf-8")
     else:
-        table = np.vstack(
-            [
-                np.column_stack((np.full(len(curve), series), curve))
-                for series, curve in enumerate(curves, start=1)
-            ]
-        )
-        columns, fmt = ["series", *names], ["%d", "%.6g", "%.6g"]
-    header = io.StringIO()
-    csv.writer(header, lineterminator="").writerow(columns)
-    np.savetxt(
-        file, table, fmt=fmt, delimiter=",", header=header.getvalue(), comments=""
-    )
+        file.write(text.getvalue())
 
 
 def _save_preview(
