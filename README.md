@@ -269,17 +269,35 @@ figrecover: logarithmic y-axis "Power (mW)" with ticks at 0.1, 1, 10, 100, 1000
 
 ![A low-pass filter's response recovered from a plot with logarithmic axes](examples/logarithmic.preview.png)
 
-The tick labels can be decimals, such as `0.01` and `1000`, or powers of ten
-with superscript exponents, such as 10⁻² and 2×10³, as matplotlib draws them.
-OCR often misses a superscript, reading 10² as `102`, so figrecover checks
-how such a label is drawn: if its last digit sits raised above the others,
-it is an exponent, and a raised minus sign before it makes the exponent
-negative. A label whose digits are not drawn that way is still a power of
-ten if most of the others on its axis are, so an axis whose labels all read
-as `100`, `101`, `102` is logarithmic when they are drawn as 10⁰, 10¹, 10²,
+The tick labels can be decimals, such as `0.01` and `1000`, or powers with
+superscript exponents, such as 10⁻², 2×10³ and 2⁵, as matplotlib draws them.
+OCR often misses a superscript, reading 10² as `102` and 2⁵ as `25`, so
+figrecover checks how a label of digits is drawn: if its last digit sits
+raised above the others, the raised digits are an exponent and the full-size
+ones its base, and a raised minus sign before the exponent makes it negative.
+Each axis takes the base that most of its powers have. A label that reads as
+that base followed by digits, but is not drawn that way, is still a power if
+most of the others on its axis are, so an axis whose labels all read as
+`100`, `101`, `102` is logarithmic when they are drawn as 10⁰, 10¹, 10²,
 while labels really drawn as 100, 101, 102 stay linear, even if one is
 misread as a power. As on a linear axis, three labelled ticks are needed, so
 an axis labelled only at 10⁰ and 10¹ cannot be read.
+
+The plot in `examples/binary.png` is labelled with powers of two, most of
+whose superscripts OCR misses:
+
+```bash
+figrecover examples/binary.png
+```
+
+```text
+figrecover: logarithmic x-axis "Size (KiB)" with ticks at 1, 2, 4, 8, 16
+figrecover: logarithmic y-axis "Time (ms)" with ticks at 0.25, 0.5, 1, 2, 4, 8, 16, 32, 64
+```
+
+Superscripts are small, so at low resolution OCR can misread them as other
+digits, such as 2¹⁶ as `226`, and an axis whose exponents are all misread
+alike is read wrongly. Check the printed ticks.
 
 With `-p`, name the logarithmic axes with `--log x`, `--log y` or `--log xy`.
 Reference points on a logarithmic axis must be positive, so take the lowest

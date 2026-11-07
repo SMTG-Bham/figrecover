@@ -29,7 +29,7 @@ The first release.
   their tick marks, reads plots without axis lines, and refuses a second
   y-axis on the right.
 - Logarithmic axes work too. figrecover finds them itself when it reads the
-  axes, including tick labels written as powers of ten, such as 10⁻², even
+  axes, including tick labels written as powers, such as 10⁻² or 2⁵, even
   where OCR misses the superscripts; and `--log` names them for `-p`.
 - `--preview` saves a faded copy of the image with each recovered curve drawn
   in its colour, and `--remove-grid` paints over grid lines before tracing.
