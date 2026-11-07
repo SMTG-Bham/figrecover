@@ -271,6 +271,32 @@ def draw_shared(name: str) -> None:
     plt.close(figure)
 
 
+def draw_inset(name: str) -> None:
+    """Draw a plot with an inset magnifying its tail, and print their points.
+
+    The plot is drawn over x from 0 to 10 and y from 0 to 3, and the inset,
+    in the top right of its axes, over x from 6 to 10, with a margin around
+    the curve, each framed as matplotlib draws axes by default.
+    """
+    figure, axes = plt.subplots(figsize=(6.4, 4), dpi=100)
+    x = np.linspace(0, 10, 2000)
+    axes.plot(x, decay(x), color="black", linewidth=1.5)
+    axes.set(xlabel="Time (s)", ylabel="Voltage (mV)", xlim=(0, 10), ylim=(0, 3))
+    inset = axes.inset_axes((0.55, 0.55, 0.4, 0.4))
+    x = np.linspace(6, 10, 1000)
+    inset.plot(x, decay(x), color="black", linewidth=1.5)
+    inset.set(xlim=(6, 10))
+    figure.savefig(HERE / f"{name}.png", facecolor="white")
+
+    for label, plot, points in [
+        ("plot", axes, [(0, 0), (10, 0), (0, 1)]),
+        ("inset", inset, [(6, 0.1), (10, 0.1), (6, 0.3)]),
+    ]:
+        pixels = plot.transData.transform(points).round().astype(int)
+        print(f"{name} ({label})", " ".join(f"-l {x},{y}" for x, y in pixels))
+    plt.close(figure)
+
+
 def save(
     name: str,
     figure: Figure,
@@ -343,5 +369,6 @@ draw_markers("markers", {"D": decay, "s": growth, "o": wave, "x": trend})
 draw_slanted("slanted", damped, ("Time (s)", "Voltage (mV)"))
 draw_panels("panels")
 draw_shared("shared")
+draw_inset("inset")
 draw_rasterised("rasterised", {"tab:blue": decay, "tab:orange": growth})
 draw_scatter("scatter", decay, growth)
