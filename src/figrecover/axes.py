@@ -6,7 +6,7 @@ import math
 import re
 from collections import Counter
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import cv2
@@ -31,9 +31,10 @@ _RAISED_TICK = 1.4  # a label this many times taller than usual has a tick on to
 _WRITTEN = 1.5  # words this much wider than tall run across, or taller, upwards
 _LINE_SPACING = 1  # a title's lines lie this many line heights apart or less
 _NUMBER = re.compile(  # 1, -2.5, 1,000, 2.5e-3 or 10%
-    r"([+-]?(?:\d{1,3}(?:,\d{3})+(?:\.\d*)?|\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)%?",
+    r"([+-]?(?:[1-9]\d{0,2}(?:,\d{3})+(?:\.\d*)?|\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)%?",
     re.IGNORECASE,
 )
+_SWAP = str.maketrans(",.", ".,")  # decimal commas to points, and back
 _TRAILING_DASH = re.compile(r"(.*\d%?)-+")  # a tick mark after a y-axis label
 _POWER = re.compile(  # 10^2, 10^{2}, 10-2, 2x10^2 or 2^5: a power, as OCR reads it
     r"(?:(\d+(?:\.\d*)?|\.\d+)[x\u00d7])?"
@@ -106,12 +107,12 @@ class _Text:
 
     @property
     def plain(self) -> str:
-        """Return the text without spaces, and with dashes as minus signs.
+        """Return the text without spaces of any width, and dashes as minus signs.
 
         Superscripts become plain characters after a caret, so 10 to the
         power of -2 reads as 10^-2.
         """
-        text = _SUPERSCRIPT.sub(r"^\1", self.text.replace(" ", ""))
+        text = _SUPERSCRIPT.sub(r"^\1", "".join(self.text.split()))
         return text.translate(_PLAIN)
 
 
@@ -125,6 +126,13 @@ def read_axes(image: Image) -> Axes:
     Each tick lies at the middle of its label. A scale factor printed where
     plotting libraries put one, such as ``1e-5`` above the y-axis or below
     the x-axis, multiplies the values of its axis's ticks.
+
+    Numbers may have decimal points and thousands separators of commas or
+    spaces, or decimal commas and thousands separators of points or spaces.
+    Numbers such as 0,5 and 1.000,5 read as numbers only with their commas
+    and points swapped, while 0.5 and 1,000.5 read as numbers only as
+    written, and 1,000 either way. A plot's numbers have decimal commas if
+    more read only with commas and points swapped than only as written.
 
     Numbers may be written as powers, such as 10^2, 2x10^3 or 2^5 with
     superscript exponents. OCR often misses superscripts, reading 2^5 as 25,
@@ -170,12 +178,10 @@ def read_axes(image: Image) -> Axes:
             right, with other values.
     """
     texts = _read_text(image)
+    if _decimal_comma(texts):
+        texts = [_with_decimal_points(text) for text in texts]
     ink = ink_mask(image)
-    numbers = [
-        text
-        for text in texts
-        if _NUMBER.fullmatch(_reading(text)) or _POWER.fullmatch(_reading(text))
-    ]
+    numbers = [text for text in texts if _number(_reading(text))]
     x_row = _lowest_row(numbers)
     above = [text for text in numbers if text.y > max(t.top for t in x_row)]
     y_column = _leftmost_column(above)
@@ -308,6 +314,34 @@ def _transposed(text: _Text) -> _Text:
     text nearest the y-axis tick labels on their left lies nearest them below.
     """
     return _Text(text.text, text.bottom, text.left, text.top, text.right, text.score)
+
+
+def _number(reading: str) -> bool:
+    """Return whether a label's reading is a number or a power."""
+    return bool(_NUMBER.fullmatch(reading) or _POWER.fullmatch(reading))
+
+
+def _decimal_comma(texts: Iterable[_Text]) -> bool:
+    """Return whether the numbers among texts are written with decimal commas.
+
+    That is, whether more texts read as numbers only with their commas and
+    points swapped, as 0,5 does, than only as written, as 0.5 does.
+    """
+    votes = 0
+    for text in texts:
+        reading = _reading(text)
+        votes += bool(_NUMBER.fullmatch(reading.translate(_SWAP)))
+        votes -= bool(_NUMBER.fullmatch(reading))
+    return votes > 0
+
+
+def _with_decimal_points(text: _Text) -> _Text:
+    """Return a text with its commas and points swapped if it then reads as a number.
+
+    Other text, such as a title with a comma, is returned as it is.
+    """
+    swapped = replace(text, text=text.text.translate(_SWAP))
+    return swapped if _number(_reading(swapped)) else text
 
 
 def _lowest_row(numbers: Sequence[_Text]) -> list[_Text]:

@@ -297,6 +297,54 @@ def test_reads_separators_percentages_and_exponents(
     assert [value for _, value in found.y_ticks] == [0, 50, 100]
 
 
+@pytest.mark.parametrize(
+    "space",
+    [" ", "\N{NO-BREAK SPACE}", "\N{THIN SPACE}", "\N{NARROW NO-BREAK SPACE}"],
+)
+def test_reads_thousands_separators_of_spaces(
+    monkeypatch: pytest.MonkeyPatch, space: str
+) -> None:
+    labels = [
+        *x_labels(["0", f"5{space}000", f"10{space}000"]),
+        *y_labels(["0", "1", "2"]),
+    ]
+
+    found = read(monkeypatch, labels)
+
+    assert [value for _, value in found.x_ticks] == [0, 5000, 10000]
+
+
+def test_reads_decimal_commas(monkeypatch: pytest.MonkeyPatch) -> None:
+    # As German plots write them: 2.000 is two thousand on the x-axis, as the
+    # decimal commas on the y-axis show.
+    labels = [
+        *x_labels(["0", "2.000", "4.000", "6.000"]),
+        *y_labels(["-0,5", "0,0", "0,5", "1,0"]),
+        text("Länge, gesamt (m)", 200, 20, width=120),
+    ]
+
+    found = read(monkeypatch, labels)
+
+    assert [value for _, value in found.x_ticks] == [0, 2000, 4000, 6000]
+    assert [value for _, value in found.y_ticks] == [-0.5, 0, 0.5, 1]
+    assert found.x_title == "Länge, gesamt (m)"
+
+
+def test_one_misread_comma_does_not_make_decimal_commas(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The second y label, 0.5, was misread as 0,5.
+    labels = [
+        *x_labels(["0", "1,000", "2,000", "3,000"]),
+        *y_labels(["0.0", "0,5", "1.0", "1.5"]),
+    ]
+
+    found = read(monkeypatch, labels)
+
+    assert [value for _, value in found.x_ticks] == [0, 1000, 2000, 3000]
+    assert [value for _, value in found.y_ticks] == [0, 1, 1.5]
+
+
 def test_reads_scientific_notation(monkeypatch: pytest.MonkeyPatch) -> None:
     # R labels a logarithmic axis 1e+01, 1e+02, ...
     labels = [
