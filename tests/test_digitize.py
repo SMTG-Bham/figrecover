@@ -12,7 +12,9 @@ from figrecover import (
     Calibration,
     Colour,
     Image,
+    Point,
     find_colours,
+    find_markers,
     load_image,
     remove_grid,
     trace_curve,
@@ -366,6 +368,141 @@ def test_trace_curve_needs_a_plot_area() -> None:
     image, _ = synthetic_plot()
     with pytest.raises(ValueError, match="no plot area"):
         trace_curve(image, (WIDTH, 0))
+
+
+MARKER_XS = np.arange(0.5, 10, 0.5)  # where the synthetic markers lie
+LEGEND_ROW = 185  # below the x-axis
+
+
+def wavy(level: int) -> Function:
+    """Return a gentle wave that keeps clear of those of the other levels."""
+    return lambda x: 0.5 + 0.9 * level + 0.2 * np.sin(x)
+
+
+def draw_marker(image: Image, shape: str, column: int, row: int) -> None:
+    """Draw a marker 9 pixels across, centred on a pixel, over what is there."""
+    match shape:
+        case "square":
+            cv2.rectangle(
+                image, (column - 4, row - 4), (column + 4, row + 4), BLACK, -1
+            )
+        case "diamond":
+            corners = [(column, row - 5), (column + 5, row), (column, row + 5)]
+            corners.append((column - 5, row))
+            cv2.fillPoly(image, [np.array(corners)], BLACK, cv2.LINE_AA)
+        case "circle":
+            cv2.circle(image, (column, row), 4, (255, 255, 255), -1)
+            cv2.circle(image, (column, row), 4, BLACK, 1, cv2.LINE_AA)
+        case _:  # a cross
+            for end in (-3, 3):
+                start, stop = (column - 3, row - end), (column + 3, row + end)
+                cv2.line(image, start, stop, BLACK, 1, cv2.LINE_AA)
+
+
+def marker_plot(
+    shapes: Sequence[str], legend_row: int = LEGEND_ROW, *, key_lines: bool = True
+) -> tuple[Image, Calibration, list[Point], list[npt.NDArray[np.float64]]]:
+    """Draw axes and series of markers joined by lines, with a legend.
+
+    Series ``k`` follows ``wavy(k)``, with markers at ``MARKER_XS``. The
+    legend's keys lie in a row, each with a short line through its marker
+    unless ``key_lines`` is false.
+
+    Returns:
+        The image, its calibration, the position of each key's marker, and
+        the true pixel position of each series' markers.
+    """
+    image, calibration = synthetic_plot(curves=[])
+    keys: list[Point] = []
+    markers = []
+    for level, shape in enumerate(shapes):
+        columns = np.round(ORIGIN[0] + MARKER_XS * PIXELS_PER_UNIT[0]).astype(int)
+        heights = ORIGIN[1] + wavy(level)(MARKER_XS) * PIXELS_PER_UNIT[1]
+        rows = np.round(HEIGHT - heights).astype(int)
+        line = np.column_stack((columns, rows)).astype(np.int32)
+        cv2.polylines(image, [line], isClosed=False, color=BLACK, lineType=cv2.LINE_AA)
+        for column, row in zip(columns, rows, strict=True):
+            draw_marker(image, shape, int(column), int(row))
+        markers.append(np.column_stack((columns + 0.5, HEIGHT - rows - 0.5)))
+
+        column = 70 + 80 * level
+        if key_lines:
+            start, stop = (column - 12, legend_row), (column + 12, legend_row)
+            cv2.line(image, start, stop, BLACK, 1, cv2.LINE_AA)
+        draw_marker(image, shape, column, legend_row)
+        keys.append((column + 0.5, HEIGHT - legend_row - 0.5))
+    return image, calibration, keys, markers
+
+
+def assert_finds_markers(
+    found: Sequence[npt.NDArray[np.float64]],
+    markers: Sequence[npt.NDArray[np.float64]],
+) -> None:
+    """Check that each series' markers are found, each to half a pixel."""
+    assert len(found) == len(markers)
+    for pixels, true in zip(found, markers, strict=True):
+        assert pixels.shape == true.shape
+        np.testing.assert_allclose(pixels, true, atol=0.5)
+
+
+SHAPES = ["square", "diamond", "circle", "cross"]
+
+
+def test_find_markers_tells_series_apart_by_their_shapes() -> None:
+    image, calibration, keys, markers = marker_plot(SHAPES)
+
+    found = find_markers(image, keys, calibration.origin)
+
+    assert_finds_markers(found, markers)
+
+
+def test_find_markers_reads_keys_without_lines() -> None:
+    image, calibration, keys, markers = marker_plot(SHAPES, key_lines=False)
+    assert_finds_markers(find_markers(image, keys, calibration.origin), markers)
+
+
+def test_find_markers_skips_a_legend_in_the_plot_area() -> None:
+    image, calibration, keys, markers = marker_plot(SHAPES[:3], legend_row=12)
+    assert_finds_markers(find_markers(image, keys, calibration.origin), markers)
+
+
+def test_find_markers_handles_dark_backgrounds() -> None:
+    image, calibration, keys, markers = marker_plot(SHAPES)
+    assert_finds_markers(find_markers(255 - image, keys, calibration.origin), markers)
+
+
+def test_find_markers_gives_no_markers_for_a_series_not_drawn() -> None:
+    image, _, keys, markers = marker_plot(SHAPES[:2])
+    draw_marker(image, "circle", 300, LEGEND_ROW)  # a key, but no series
+
+    found = find_markers(image, [*keys, (300.5, HEIGHT - LEGEND_ROW - 0.5)])
+
+    assert_finds_markers(found, [*markers, np.empty((0, 2))])
+
+
+def test_find_markers_needs_a_plot_area_bigger_than_a_marker() -> None:
+    image, _, keys, _ = marker_plot(SHAPES[:2])
+
+    found = find_markers(image, keys, (WIDTH - 6, HEIGHT - 6))
+
+    assert_finds_markers(found, [np.empty((0, 2))] * 2)
+
+
+@pytest.mark.parametrize(
+    ("key", "message"),
+    [
+        ((WIDTH + 1, 50), f"the marker position {WIDTH + 1},50 lies outside"),
+        ((-1, 50), "the marker position -1,50 lies outside"),
+        ((380.5, 190.5), "found no marker near 380.5,190.5"),
+        ((350.5, 9.5), "found only a line, and no marker, at 350.5,9.5"),
+    ],
+)
+def test_find_markers_needs_a_marker_at_each_key(key: Point, message: str) -> None:
+    image, calibration, keys, _ = marker_plot(SHAPES[:1])
+    cv2.line(image, (330, 190), (370, 190), BLACK, 1)  # a key without a marker
+
+    with pytest.raises(ValueError, match=message):
+        find_markers(image, [*keys, key], calibration.origin)
 
 
 def test_load_image_reads_colour_stretched_to_the_full_range(tmp_path: Path) -> None:

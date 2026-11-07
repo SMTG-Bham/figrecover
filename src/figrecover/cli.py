@@ -22,10 +22,24 @@ from .digitize import (
     Colour,
     Image,
     find_colours,
+    find_markers,
     load_image,
     remove_grid,
     trace_curves,
 )
+
+SERIES_COLOURS: list[Colour] = [  # matplotlib's, to draw series of markers in
+    (31, 119, 180),
+    (255, 127, 14),
+    (44, 160, 44),
+    (214, 39, 40),
+    (148, 103, 189),
+    (140, 86, 75),
+    (227, 119, 194),
+    (127, 127, 127),
+    (188, 189, 34),
+    (23, 190, 207),
+]
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -129,6 +143,18 @@ def _build_parser() -> argparse.ArgumentParser:
         help="hexadecimal colour of a curve to trace, such as 1f77b4; repeat for "
         "several curves",
     )
+    curves.add_argument(
+        "-m",
+        "--marker",
+        dest="markers",
+        action="append",
+        default=[],
+        type=_point,
+        metavar="X,Y",
+        help="pixel position of the marker in a series' legend key, measured from "
+        "the bottom-left corner; repeat for each series, to find the series by "
+        "the shapes of their markers rather than by colour",
+    )
     parser.add_argument(
         "-o",
         "--output",
@@ -141,7 +167,7 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         metavar="IMAGE",
         help="also save a faded copy of the image with each recovered curve "
-        "drawn in its colour",
+        "drawn in its colour, or each series of markers in a colour of its own",
     )
     parser.add_argument(
         "--remove-grid", action="store_true", help="paint over grid lines first"
@@ -152,8 +178,9 @@ def _build_parser() -> argparse.ArgumentParser:
 def _digitize(arguments: argparse.Namespace) -> None:
     """Write the curves in the image as CSV."""
     image = load_image(arguments.image)
+    _check_locations(arguments.markers, image, "-m position")
     if arguments.points:
-        _check_locations(arguments.locations, image)
+        _check_locations(arguments.locations, image, "-l location")
         pixels = arguments.locations or _click_locations(image, arguments.points)
         calibration = Calibration.from_points(
             arguments.points,
@@ -165,23 +192,35 @@ def _digitize(arguments: argparse.Namespace) -> None:
     else:
         calibration, pixels, names = _read_axes(image)
     traced = remove_grid(image) if arguments.remove_grid else image
-    colours = arguments.colours or _find_colours(
-        traced, arguments.series, calibration.origin
-    )
-    curves = trace_curves(traced, colours, calibration.origin)
+    rings: list[tuple[Point, int, Colour]] = [
+        (pixel, 6, (0, 0, 255)) for pixel in pixels
+    ]
+    if arguments.markers:
+        curves = _find_markers(traced, arguments.markers, calibration.origin)
+        colours = [
+            SERIES_COLOURS[series % len(SERIES_COLOURS)]
+            for series in range(len(curves))
+        ]
+        for key, curve, colour in zip(arguments.markers, curves, colours, strict=True):
+            rings += [(key, 6, colour), *((marker, 4, colour) for marker in curve)]
+    else:
+        colours = arguments.colours or _find_colours(
+            traced, arguments.series, calibration.origin
+        )
+        curves = trace_curves(traced, colours, calibration.origin)
 
     if arguments.preview:
-        _save_preview(arguments.preview, image, curves, colours, pixels)
+        _save_preview(arguments.preview, image, curves, colours, rings)
     data = [calibration.to_data(curve) for curve in curves]
     _write_csv(arguments.output or sys.stdout, data, names)
 
 
-def _check_locations(locations: Sequence[Point], image: Image) -> None:
-    """Check that each -l location lies on the image."""
+def _check_locations(locations: Sequence[Point], image: Image, name: str) -> None:
+    """Check that each pixel position, such as an -l location, lies on the image."""
     height, width = image.shape[:2]
     for x, y in locations:
         if not (0 <= x <= width and 0 <= y <= height):
-            msg = f"the -l location {x:g},{y:g} lies outside the {width}x{height} image"
+            msg = f"the {name} {x:g},{y:g} lies outside the {width}x{height} image"
             raise ValueError(msg)
 
 
@@ -225,6 +264,16 @@ def _find_colours(image: Image, count: int | None, origin: Point) -> list[Colour
     return colours
 
 
+def _find_markers(
+    image: Image, keys: Sequence[Point], origin: Point
+) -> list[npt.NDArray[np.float64]]:
+    """Find the markers of each series, and print how many were found."""
+    markers = find_markers(image, keys, origin)
+    counts = ", ".join(str(len(series)) for series in markers)
+    print(f"figrecover: markers found in each series: {counts}", file=sys.stderr)
+    return markers
+
+
 def _write_csv(
     file: Path | TextIO,
     curves: Sequence[npt.NDArray[np.float64]],
@@ -253,11 +302,12 @@ def _save_preview(
     image: Image,
     curves: Sequence[npt.NDArray[np.float64]],
     colours: Sequence[Colour],
-    pixels: Sequence[Point],
+    rings: Sequence[tuple[Point, int, Colour]],
 ) -> None:
     """Save a faded copy of the image with the curves and reference points on it.
 
-    Each curve is drawn in its own colour, and the reference points in blue.
+    Each curve is drawn in its own colour, and rings of the given radii
+    around points, such as the reference points, in theirs.
     """
     height = image.shape[0]
     grey = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
@@ -266,8 +316,9 @@ def _save_preview(
         for x, y in curve:
             centre = (round(x), round(height - y))
             cv2.circle(preview, centre, 1, (blue, green, red), -1)
-    for x, y in pixels:
-        cv2.circle(preview, (round(x), round(height - y)), 6, (255, 0, 0), 2)
+    for (x, y), radius, (red, green, blue) in rings:
+        centre = (round(x), round(height - y))
+        cv2.circle(preview, centre, radius, (blue, green, red), radius // 3)
     if not cv2.imwrite(os.fspath(path), preview, [cv2.IMWRITE_PNG_COMPRESSION, 9]):
         msg = f"cannot write image {os.fspath(path)!r}"
         raise OSError(msg)

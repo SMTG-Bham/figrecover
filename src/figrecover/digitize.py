@@ -1,6 +1,7 @@
 """Find the curves in an image of a plot."""
 
 import itertools
+import math
 import os
 from collections.abc import Sequence
 
@@ -40,6 +41,11 @@ _MIN_COVERAGE = 0.5  # less covered pixels belong to the background
 _MIN_PIXELS = 4  # smaller specks are noise, such as where two other curves cross
 _RUN_GAP = 6  # a curve's pixels in a column this far apart or less are one run
 _MIN_BRANCH = 0.05  # branches across less of the plot's width than this are minor
+_KEY_REACH = 20  # a legend key's marker lies within this many pixels of its position
+_KEY_LINE = 2  # a key this many times as wide as tall has a line through its marker
+_MARKER_SCORE = 0.6  # a marker correlates with its key's this well or better
+_MARKER_INK = 0.6  # a marker has at least this fraction of the ink of its key's
+_MARKER_SPACING = 0.75  # markers are this many marker widths apart or more
 
 
 def load_image(path: str | os.PathLike[str]) -> Image:
@@ -233,6 +239,66 @@ def trace_curve(image: Image, origin: Point = (0, 0)) -> npt.NDArray[np.float64]
         ValueError: If no curve is found.
     """
     return trace_curves(image, find_colours(image, 1, origin), origin)[0]
+
+
+def find_markers(
+    image: Image, keys: Sequence[Point], origin: Point = (0, 0)
+) -> list[npt.NDArray[np.float64]]:
+    """Find the markers of each series in a plot, by their shapes.
+
+    Each key is the position of a series' marker in the legend. Its shape is
+    cut out of the image, leaving out a line through it, as legends of line
+    plots draw, and looked for in the plot area, the part of the image above
+    and right of ``origin``. A marker is where the shape correlates with the
+    image better than ``_MARKER_SCORE``, with at least ``_MARKER_INK`` of the
+    key's ink. Where the shapes of several keys match, closer together than
+    ``_MARKER_SPACING`` of a marker's width, the best match wins. The keys
+    themselves are not markers, if the legend lies in the plot area.
+
+    Args:
+        image: Colour image of a plot.
+        keys: The pixel position of the marker in each series' legend key,
+            measured from the bottom-left corner. Each key's marker must have
+            its own shape.
+        origin: Pixel position where the axes cross, measured from the
+            bottom-left corner.
+
+    Returns:
+        One ``(n, 2)`` array per key, of the pixel ``(x, y)`` coordinates of
+        the centres of the markers, measured from the bottom-left corner and
+        sorted by x, then y. A series whose markers are all hidden gives an
+        empty array.
+
+    Raises:
+        ValueError: If there is no marker at a key, or there is no plot area.
+    """
+    levels = _ink_levels(image)
+    shapes = [_key_marker(levels, key) for key in keys]
+    plot, left, top = _plot_area(image, origin)
+    area = levels[top : top + plot.shape[0], left : left + plot.shape[1]]
+    found = [
+        (score, row, column, series)
+        for series, (shape, mask) in enumerate(shapes)
+        for score, row, column in _matches(area, shape, mask)
+    ]
+    sizes = [max(shape.shape) - 2 for shape, _ in shapes]  # less the margin
+    spacing = _MARKER_SPACING * min(sizes)
+    height = image.shape[0]
+    centres: list[list[Point]] = [[] for _ in keys]
+    kept: list[tuple[float, float]] = []
+    for _, row, column, series in sorted(found, reverse=True):
+        # The centre of the pixel in column c and row r is at
+        # (c + 0.5, height - r - 0.5).
+        x, y = column + left + 0.5, height - top - row - 0.5
+        if any(math.dist((row, column), other) < spacing for other in kept) or any(
+            math.dist((x, y), key) < size for key, size in zip(keys, sizes, strict=True)
+        ):
+            continue
+        kept.append((row, column))
+        centres[series].append((x, y))
+    return [
+        np.array(sorted(points), dtype=np.float64).reshape(-1, 2) for points in centres
+    ]
 
 
 def _plot_area(image: Image, origin: Point) -> tuple[Image, int, int]:
@@ -525,6 +591,117 @@ def _branches(
         branches.append(numbers)
         count += len(now)
     return branches
+
+
+def _ink_levels(image: Image) -> npt.NDArray[np.float32]:
+    """Return how far each pixel's grey level is from the median's, from 0 to 1."""
+    grey = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY).astype(np.float32)
+    return (np.abs(grey - np.median(grey)) / 255).astype(np.float32)
+
+
+def _key_marker(
+    levels: npt.NDArray[np.float32], key: Point
+) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]:
+    """Cut a legend key's marker out of an image, and mask out the key's line.
+
+    The key is the piece of ink, differing from the background by at least
+    ``_CONTRAST``, nearest its position, at most ``_KEY_REACH`` pixels away
+    each way, so the middle of an open marker picks it. If the piece is
+    ``_KEY_LINE`` times as wide as it is tall, or more, a line runs through the
+    marker. The line's rows are those with ink across half the key or more,
+    and the marker is the rest of the key, with the line's rows masked out,
+    as lines cross the markers in the plot at other angles.
+
+    Returns:
+        The ink levels of the marker, with a pixel's margin, and the mask.
+
+    Raises:
+        ValueError: If there is no marker at the key's position.
+    """
+    height, width = levels.shape
+    row, column = math.floor(height - key[1]), math.floor(key[0])
+    if not (0 <= row < height and 0 <= column < width):
+        msg = f"the marker position {key[0]:g},{key[1]:g} lies outside the image"
+        raise ValueError(msg)
+    top, left = max(row - _KEY_REACH, 0), max(column - _KEY_REACH, 0)
+    window = levels[top : row + _KEY_REACH + 1, left : column + _KEY_REACH + 1]
+    ink = window >= _CONTRAST / 255
+    rows, columns = np.nonzero(ink)
+    if not len(rows):
+        msg = f"found no marker near {key[0]:g},{key[1]:g}"
+        raise ValueError(msg)
+    nearest = np.argmin((rows + top - row) ** 2 + (columns + left - column) ** 2)
+    _, pieces = cv2.connectedComponents(ink.astype(np.uint8))
+    piece = pieces == pieces[rows[nearest], columns[nearest]]
+    rows, columns = np.nonzero(piece)
+
+    line = np.zeros(len(window), dtype=np.bool_)  # the rows of the key's line
+    if np.ptp(columns) + 1 >= _KEY_LINE * (np.ptp(rows) + 1):
+        line = 2 * np.count_nonzero(piece, axis=1) >= np.ptp(columns) + 1
+        marker = ~line[rows]
+        if not np.any(marker):
+            msg = f"found only a line, and no marker, at {key[0]:g},{key[1]:g}"
+            raise ValueError(msg)
+        rows = np.arange(rows[marker].min(), rows[marker].max() + 1)
+        columns = columns[marker]
+
+    box = (
+        slice(max(rows.min() - 1, 0), rows.max() + 2),
+        slice(max(columns.min() - 1, 0), columns.max() + 2),
+    )
+    fringe = cv2.dilate(piece.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
+    shape = np.where(fringe, window, 0)[box]
+    mask = np.broadcast_to(~line[box[0], np.newaxis], shape.shape)
+    return shape.astype(np.float32), mask.astype(np.float32)
+
+
+def _matches(
+    area: npt.NDArray[np.float32],
+    shape: npt.NDArray[np.float32],
+    mask: npt.NDArray[np.float32],
+) -> list[tuple[float, float, float]]:
+    """Return where a key's marker matches the image, and how well.
+
+    A match is a local maximum of the correlation of the marker with the
+    image, outside the mask, of at least ``_MARKER_SCORE``, where the image
+    has at least ``_MARKER_INK`` of the marker's ink. Its centre is placed to
+    a fraction of a pixel, at the top of a parabola through the correlation
+    each way.
+
+    Returns:
+        The correlation, row and column of the centre of each match.
+    """
+    if area.shape[0] < shape.shape[0] or area.shape[1] < shape.shape[1]:
+        return []
+    scores = cv2.matchTemplate(area, shape, cv2.TM_CCOEFF_NORMED, mask=mask)
+    scores = np.nan_to_num(scores, nan=-1, posinf=-1, neginf=-1)  # flat patches
+    ink = ((shape >= _CONTRAST / 255) & (mask > 0)).astype(np.float32)
+    shown = cv2.matchTemplate(area, ink, cv2.TM_CCORR) / float(np.sum(shape * ink))
+    scores[shown < _MARKER_INK] = -1
+    peaks = (scores >= _MARKER_SCORE) & (
+        scores == cv2.dilate(scores, np.ones((3, 3), np.uint8))
+    )
+    padded = np.pad(scores, 1, constant_values=-1)
+    middle_row, middle_column = (shape.shape[0] - 1) / 2, (shape.shape[1] - 1) / 2
+    return [
+        (
+            float(scores[row, column]),
+            row + middle_row + _vertex(padded[row : row + 3, column + 1]),
+            column + middle_column + _vertex(padded[row + 1, column : column + 3]),
+        )
+        for row, column in np.argwhere(peaks)
+    ]
+
+
+def _vertex(values: npt.ArrayLike) -> float:
+    """Return where the parabola through three values, a pixel apart, peaks.
+
+    The values are those before, at and after a local maximum, and the peak
+    is given from it, at most half a pixel away.
+    """
+    before, peak, after = np.asarray(values, dtype=np.float64)
+    curvature = min(before - 2 * peak + after, -1e-9)  # flat at worst
+    return float(np.clip((before - after) / (2 * curvature), -0.5, 0.5))
 
 
 def _to_colour(levels: npt.NDArray[np.float64]) -> Colour:

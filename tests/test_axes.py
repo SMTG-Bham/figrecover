@@ -107,6 +107,26 @@ def test_reads_negative_exponents_whose_minus_ocr_missed(
     assert [value for _, value in found.y_ticks] == [0.1, 1, 10, 100, 1000]
 
 
+def test_reads_powers_of_two() -> None:
+    found = read_axes(load_image(EXAMPLES / "binary.png"))
+    # The pixel positions of (1, 1/4), (16, 1/4) and (1, 64) that
+    # examples/make_examples.py prints.
+    pixels = [(84, 66), (610, 66), (84, 380)]
+
+    data = found.calibration.to_data(pixels)
+
+    # OCR misses the superscripts of the x-axis labels, reading 2 to the 0
+    # to 4 as 20 to 24, and of some of the y-axis labels.
+    assert [value for _, value in found.x_ticks] == [1, 2, 4, 8, 16]
+    assert [value for _, value in found.y_ticks] == [2**n for n in range(-2, 7)]
+    assert found.calibration.x_log
+    assert found.calibration.y_log
+    expected = [(1, 0.25), (16, 0.25), (1, 64)]
+    np.testing.assert_allclose(np.log2(data), np.log2(expected), atol=0.02)
+    assert found.x_title == "Size (KiB)"
+    assert found.y_title == "Time (ms)"
+
+
 @pytest.mark.parametrize("name", ["labelled", "spectrum"])
 def test_finds_where_the_axis_lines_cross(name: str) -> None:
     # The axes of labelled.png start before the first ticks, and those of
@@ -282,6 +302,30 @@ def test_reads_powers_of_ten(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+def test_reads_powers_of_other_bases(monkeypatch: pytest.MonkeyPatch) -> None:
+    # As OCR reads 2 to the 0 to 3, and e to the -1, 0 and 1 as matplotlib
+    # writes them.
+    e = "2.718281828459045"
+    labels = [
+        *x_labels(["2\N{SUPERSCRIPT ZERO}", "2^1", "2^{2}", "2\N{SUPERSCRIPT THREE}"]),
+        *y_labels(
+            [
+                f"{e}\N{SUPERSCRIPT MINUS}\N{SUPERSCRIPT ONE}",
+                f"{e}\N{DEGREE SIGN}",
+                f"{e}^1",
+            ]
+        ),
+    ]
+
+    found = read(monkeypatch, labels)
+
+    assert [value for _, value in found.x_ticks] == [1, 2, 4, 8]
+    y_values = [value for _, value in found.y_ticks]
+    np.testing.assert_allclose(y_values, [1 / math.e, 1, math.e])
+    assert found.calibration.x_log
+    assert found.calibration.y_log
+
+
 def test_one_misread_label_does_not_make_powers_of_ten(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -340,8 +384,13 @@ def write(image: Image, x: float, y: float, content: str, superscript: str) -> _
     cv2.putText(image, content, (left, baseline), font, 0.5, (0, 0, 0), 1)
     above = (left + width, baseline - height // 2)
     cv2.putText(image, superscript, above, font, 0.35, (0, 0, 0), 1)
+    (raised, _), _ = cv2.getTextSize(superscript, font, 0.35, 1)
     return _Text(
-        content + superscript, x - width / 2 - 2, y - 10, x + width / 2 + 10, y + 10
+        content + superscript,
+        x - width / 2 - 2,
+        y - 10,
+        x + width / 2 + raised + 3,
+        y + 10,
     )
 
 
@@ -367,6 +416,46 @@ def test_reads_raised_last_digits_as_exponents(
     assert [label.text for label in labels] == ["100", "101", "102"]
     assert [value for _, value in found.x_ticks] == values
     assert found.calibration.x_log is log
+
+
+@pytest.mark.parametrize(
+    ("exponents", "values"),
+    [(["0", "1", "2"], [1, 2, 4]), (["10", "11", "12"], [1024, 2048, 4096])],
+)
+def test_reads_raised_digits_as_exponents_of_other_bases(
+    monkeypatch: pytest.MonkeyPatch, exponents: list[str], values: list[float]
+) -> None:
+    # OCR reads 2 to the 0, 1 and 2 as 20, 21 and 22, and 2 to the 10 as 210.
+    image = plot()
+    labels = [write(image, 80 + 80 * i, 45, "2", e) for i, e in enumerate(exponents)]
+    monkeypatch.setattr(
+        axes, "_read_text", lambda _image: [*labels, *y_labels(["0", "1", "2"])]
+    )
+
+    found = read_axes(image)
+
+    assert [value for _, value in found.x_ticks] == values
+    assert found.calibration.x_log
+
+
+def test_reads_powers_of_the_base_most_labels_show(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 2 to the 1 is drawn without a raised digit, and 2 to the 3 is misread
+    # as 9 to the 3.
+    image = plot()
+    drawn = [("2", "0"), ("21", ""), ("2", "2"), ("9", "3")]
+    labels = [write(image, 80 + 80 * i, 45, *parts) for i, parts in enumerate(drawn)]
+    monkeypatch.setattr(
+        axes, "_read_text", lambda _image: [*labels, *y_labels(["0", "1", "2"])]
+    )
+
+    found = read_axes(image)
+
+    # Most labels are powers of 2, so 21 is one too, but 93 is out of line.
+    assert [label.text for label in labels] == ["20", "21", "22", "93"]
+    assert [value for _, value in found.x_ticks] == [1, 2, 4]
+    assert found.calibration.x_log
 
 
 def right_labels(values: Sequence[str]) -> list[_Text]:

@@ -15,6 +15,10 @@ The first release.
   on each side, and short marks beside a curve, such as the caps of error
   bars, are ignored. A frame around the axes, as matplotlib draws, is left
   out.
+- `-m` tells series apart by the shapes of their markers, such as squares,
+  diamonds, open circles and crosses, cut out of the legend, for plots whose
+  series share a colour, as many spreadsheet charts do. It gives a point at
+  the middle of each marker, allowing for lines and error bars across them.
 - Reference points can be clicked on, after which figrecover prints the
   matching `-l` options to reuse for similar plots.
 - With the `ocr` extra, figrecover reads the axes when `-p` is left out: it
@@ -25,7 +29,7 @@ The first release.
   their tick marks, reads plots without axis lines, and refuses a second
   y-axis on the right.
 - Logarithmic axes work too. figrecover finds them itself when it reads the
-  axes, including tick labels written as powers of ten, such as 10⁻², even
+  axes, including tick labels written as powers, such as 10⁻² or 2⁵, even
   where OCR misses the superscripts; and `--log` names them for `-p`.
 - `--preview` saves a faded copy of the image with each recovered curve drawn
   in its colour, and `--remove-grid` paints over grid lines before tracing.
@@ -34,6 +38,6 @@ The first release.
 - Reference points must be finite numbers, and `-l` positions must lie on the
   image. `-o` and `--preview` refuse to overwrite the image, or each other.
 - A typed Python API: `Calibration`, with linear or logarithmic axes,
-  `load_image`, `remove_grid`, `find_colours`, `trace_curves`, `trace_curve`
-  and, with the `ocr` extra, `read_axes`.
+  `load_image`, `remove_grid`, `find_colours`, `trace_curves`, `trace_curve`,
+  `find_markers` and, with the `ocr` extra, `read_axes`.
 - Requires Python 3.14 on Linux, with NumPy and OpenCV.

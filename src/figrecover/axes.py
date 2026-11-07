@@ -4,6 +4,7 @@ import functools
 import itertools
 import math
 import re
+from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -32,10 +33,11 @@ _NUMBER = re.compile(  # 1, -2.5, 1,000, 2.5e-3 or 10%
     re.IGNORECASE,
 )
 _TRAILING_DASH = re.compile(r"(.*\d%?)-+")  # a tick mark after a y-axis label
-_POWER = re.compile(  # 10^2, 10^{2}, 10-2 or 2x10^2: a power of ten, as OCR reads it
-    r"(?:(\d+(?:\.\d*)?|\.\d+)[x\u00d7])?10(?:\^\{?|(?=[+-]))([+-]?\d+)\}?"
+_POWER = re.compile(  # 10^2, 10^{2}, 10-2, 2x10^2 or 2^5: a power, as OCR reads it
+    r"(?:(\d+(?:\.\d*)?|\.\d+)[x\u00d7])?"
+    r"(?:(\d+(?:\.\d*)?|\.\d+)\^\{?|10(?=[+-]))([+-]?\d+)\}?"
 )
-_RUN_TOGETHER = re.compile(r"10(\d+)")  # 102: 10^2 read without its superscript
+_DIGITS = re.compile(r"\d+(?:\.\d+)?")  # 25, or 2^5 read without its superscript
 _SCALE = re.compile(r"(?:1e|[x\u00d7]10\^?)([+-]?\d+)")  # 1e-5 or 10 to the -5
 _OFFSET = re.compile(r"[+-].*\d(?:e|[x\u00d7]10).*")  # +1e3, added to the ticks
 # Superscript signs and digits, and the degree and ordinal signs that OCR reads
@@ -114,12 +116,15 @@ def read_axes(image: Image) -> Axes:
     plotting libraries put one, such as ``1e-5`` above the y-axis or below
     the x-axis, multiplies the values of its axis's ticks.
 
-    Numbers may be written as powers of ten, such as 10^2 or 2x10^3 with
-    superscript exponents. OCR often misses superscripts, reading 10^2 as 102,
-    so a label that reads as 10 followed by digits is a power of ten if its
-    last digit is drawn raised, a raised minus sign before it making the
-    exponent negative, or if most of the other labels on its axis that read
-    as 10 followed by digits or as powers of ten show that they are.
+    Numbers may be written as powers, such as 10^2, 2x10^3 or 2^5 with
+    superscript exponents. OCR often misses superscripts, reading 2^5 as 25,
+    so a label that reads as digits is a power if its last digit is drawn
+    raised: the digits drawn full size are its base, the rest its exponent,
+    and a raised minus sign before them makes the exponent negative. The base
+    of an axis is the one most of its powers have, and a label that reads as
+    that base followed by digits is a power of it if its last digit is drawn
+    raised, or if most of the other labels on its axis that read as powers of
+    it or as it followed by digits show that they are.
     An axis is logarithmic if more of its labels fall in line on a logarithmic
     scale than on a linear one.
 
@@ -315,40 +320,67 @@ def _in_line(
 def _values(
     labels: Sequence[_Text], ink: npt.NDArray[np.uint8], height: float
 ) -> npt.NDArray[np.float64]:
-    """Return the values of tick labels, which are numbers or powers of ten.
+    """Return the values of tick labels, which are numbers or powers.
 
-    OCR often misses superscripts, reading 10^2 as 102. A label that reads as
-    10 followed by digits is a power of ten if its last digit is drawn raised,
-    or if most of the other labels that read as powers of ten or as 10 and
-    digits show that they are powers, by their text or a raised digit. One
-    misread label, such as 100 read with a degree sign for its last 0, so
-    does not make an axis of 100, 101 and 102 logarithmic.
+    OCR often misses superscripts, reading 2^5 as 25. A label that reads as
+    digits shows that it is a power if its last digit is drawn raised, and
+    its digits drawn full size are then its base. The base of the axis is the
+    one most labels shown as powers have, by their text or raised digits, or
+    10 if none are. A label that reads as that base followed by digits is a
+    power of it if its last digit is raised, or if most of the other labels
+    that read as powers of the base or as it followed by digits show that
+    they are powers. One misread label, such as 100 read with a degree sign
+    for its last 0, so does not make an axis of 100, 101 and 102 logarithmic.
     """
     readings = [_reading(label, height) for label in labels]
-    signs = [
-        _exponent_sign(ink, label) if _RUN_TOGETHER.fullmatch(reading) else None
+    written = [_POWER.fullmatch(reading) for reading in readings]
+    raised = [
+        _exponent(ink, label) if _DIGITS.fullmatch(reading) else None
         for label, reading in zip(labels, readings, strict=True)
     ]
+    bases = Counter(
+        [match[2] or "10" for match in written if match]
+        + [
+            base
+            for reading, exponent in zip(readings, raised, strict=True)
+            if exponent and (base := _base(reading, exponent[0]))
+        ]
+    )
+    base = bases.most_common(1)[0][0] if bases else "10"
+    together = [
+        re.fullmatch(rf"{re.escape(base)}(\d+)", reading) for reading in readings
+    ]
+    of_base = [bool(match and (match[2] or "10") == base) for match in written]
     shown = [
-        bool(_POWER.fullmatch(reading)) or sign is not None
-        for reading, sign in zip(readings, signs, strict=True)
+        power or bool(exponent and match)
+        for power, exponent, match in zip(of_base, raised, together, strict=True)
     ]
     candidates = [
-        index
-        for index, reading in enumerate(readings)
-        if _POWER.fullmatch(reading) or _RUN_TOGETHER.fullmatch(reading)
+        index for index, match in enumerate(together) if of_base[index] or match
     ]
     values = []
-    for index, (reading, sign) in enumerate(zip(readings, signs, strict=True)):
+    for index, reading in enumerate(readings):
         others = [shown[other] for other in candidates if other != index]
         mostly = 2 * sum(others) > len(others)
-        if (match := _RUN_TOGETHER.fullmatch(reading)) and (sign or mostly):
-            values.append(10.0 ** ((sign or 1) * int(match[1])))
-        elif match := _POWER.fullmatch(reading):
-            values.append(float(match[1] or 1) * 10.0 ** int(match[2]))
+        exponent = raised[index]
+        if match := written[index]:
+            power = float(match[2] or 10) ** int(match[3])
+            values.append(float(match[1] or 1) * power)
+        elif (match := together[index]) and (exponent or mostly):
+            sign = exponent[1] if exponent else 1
+            values.append(float(base) ** (sign * int(match[1])))
         else:  # a number, less any % and thousands separators
             values.append(float(_NUMBER.sub(r"\1", reading).replace(",", "")))
     return np.array(values)
+
+
+def _base(reading: str, length: int) -> str | None:
+    """Return the first ``length`` digits of a reading, with any point among them.
+
+    Returns None unless they make a number and more digits follow them.
+    """
+    match = re.match(rf"(?:\d\.?){{{length}}}(?=\d)", reading)
+    return match[0] if match and _DIGITS.fullmatch(match[0]) else None
 
 
 def _reading(label: _Text, height: float = math.inf) -> str:
@@ -366,15 +398,21 @@ def _reading(label: _Text, height: float = math.inf) -> str:
     return text
 
 
-def _exponent_sign(ink: npt.NDArray[np.uint8], label: _Text) -> int | None:
-    """Return the sign of a label's exponent, or None if it has none.
+def _exponent(ink: npt.NDArray[np.uint8], label: _Text) -> tuple[int, int] | None:
+    """Return how long a label's base is and the sign of its exponent, if any.
 
     The characters are the pieces of ink in the label's box at least a third as
-    tall as the tallest, which leaves out points, minus signs and tick marks.
-    The last is an exponent if its bottom is ``_RAISED`` of the characters'
-    height or more above the lowest bottom. The exponent is negative if a
-    flat piece, at least twice as wide as tall, lies level with the exponent
-    and before it, after the middle of the second character, the 0 of 10.
+    tall as the tallest, which leaves out points, minus signs and flat tick
+    marks. A character is raised if its bottom is ``_RAISED`` of the
+    characters' height or more above the lowest bottom. The last character
+    is an exponent if it is raised, and the base is then the characters that
+    are not, leaving out tick marks above the label. The exponent is negative
+    if a flat piece, at least twice as wide as tall, lies level with the
+    exponent and before it, after the middle of the base's last character.
+
+    Returns:
+        The number of characters in the base and the sign of the exponent, or
+        None if the label has no exponent.
     """
     height = ink.shape[0]
     box = ink[
@@ -387,13 +425,12 @@ def _exponent_sign(ink: npt.NDArray[np.uint8], label: _Text) -> int | None:
     left, top, width, tall = stats[:, :4].T
     characters = np.flatnonzero(tall >= tall.max() / 3)
     bottoms = top + tall
+    lowest = bottoms[characters].max()  # rows count downwards
+    raised = lowest - bottoms >= _RAISED * (lowest - top[characters].min())
     last = characters[np.argmax(left[characters] + width[characters])]
-    lift = bottoms[characters].max() - bottoms[last]  # rows count downwards
-    if lift < _RAISED * (bottoms[characters].max() - top[characters].min()):
+    if not raised[last]:
         return None
-    after = np.sort(left[characters] + width[characters] / 2)[
-        min(1, len(characters) - 1)
-    ]
+    base = characters[~raised[characters]]
     middles = top + tall / 2
     centres = left + width / 2
     minus = (
@@ -401,10 +438,10 @@ def _exponent_sign(ink: npt.NDArray[np.uint8], label: _Text) -> int | None:
         & (width >= 2 * tall)
         & (top[last] <= middles)
         & (middles <= bottoms[last])
-        & (after < centres)
+        & (centres[base].max() < centres)
         & (centres < left[last])
     )
-    return -1 if minus.any() else 1
+    return len(base), -1 if minus.any() else 1
 
 
 def _most_in_line(
