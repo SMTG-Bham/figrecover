@@ -5,7 +5,8 @@
 """Draw the example plots, whose curves the tests know exactly.
 
 Run from the repository root with ``uv run examples/make_examples.py``. It
-prints the pixel position of each reference point, for figrecover's -l option.
+prints the pixel position of each reference point, for figrecover's -l option,
+or in a PDF its position in points.
 """
 
 from collections.abc import Callable
@@ -21,6 +22,7 @@ from matplotlib.legend import Legend
 type Curve = Callable[[npt.NDArray[np.float64]], npt.NDArray[np.float64]]
 
 HERE = Path(__file__).parent
+ALSO_PDF = {"labelled", "logarithmic", "series"}  # also saved as vector PDFs
 
 
 def spectrum(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
@@ -174,9 +176,12 @@ def save(
 ) -> None:
     """Save a plot, and print the pixel positions of reference points in it.
 
-    With a legend, also print the pixel positions of its markers.
+    With a legend, also print the pixel positions of its markers. Plots named
+    in ``ALSO_PDF`` are saved as PDFs too.
     """
     figure.savefig(HERE / f"{name}.png", facecolor="white")
+    if name in ALSO_PDF:
+        save_pdf(name, figure, axes, points)
 
     # Display coordinates are pixels from the bottom-left corner.
     pixels = axes.transData.transform(points).round().astype(int)
@@ -187,6 +192,21 @@ def save(
         options.append(f"-m {x:.0f},{y:.0f}")
     print(name, " ".join(options))
     plt.close(figure)
+
+
+def save_pdf(
+    name: str, figure: Figure, axes: Axes, points: list[tuple[float, float]]
+) -> None:
+    """Save a plot as a PDF, and print the positions of reference points in points.
+
+    The PDF's date is left out, so that it is drawn the same each time.
+    """
+    figure.savefig(
+        HERE / f"{name}.pdf", facecolor="white", metadata={"CreationDate": None}
+    )
+    # Display coordinates are pixels, of which there are dpi to 72 points.
+    positions = axes.transData.transform(points) * 72 / figure.dpi
+    print(f"{name}.pdf", " ".join(f"-l {x:.2f},{y:.2f}" for x, y in positions))
 
 
 draw("spectrum", {"black": spectrum}, 3, grid=False)
