@@ -118,6 +118,22 @@ def draw_log(
     save(name, figure, axes, points)
 
 
+def draw_rasterised(name: str, curves: dict[str, Curve]) -> None:
+    """Draw curves, keyed by colour, as an image in a PDF, and print the points.
+
+    The curves are rasterised at 100 dots per inch, as plots of many points
+    often are to keep their PDFs small, while the axes and text stay vector.
+    """
+    figure, axes = plt.subplots(figsize=(6.4, 4), dpi=100)
+    x = np.linspace(0, 10, 2000)
+    for colour, curve in curves.items():
+        axes.plot(x, curve(x), color=colour, linewidth=1.5, rasterized=True)
+    axes.set(xlabel="Time (s)", ylabel="Voltage (mV)", xlim=(0, 10), ylim=(0, 3))
+    axes.spines[["top", "right"]].set_visible(False)
+    save_pdf(name, figure, axes, [(0, 0), (10, 0), (0, 1)])
+    plt.close(figure)
+
+
 def draw_titled(name: str, curve: Curve, titles: tuple[str, str]) -> None:
     """Draw a curve over x from 0 to 10 with titles of two lines, and print the points.
 
@@ -222,3 +238,4 @@ draw_log("binary", quadratic, titles, [(1, 0.25), (16, 0.25), (1, 64)], base=2)
 draw_titled("titled", spectrum, ("Photon energy\n(eV)", "Absorbance\n(arb. units)"))
 draw_markers("markers", {"D": decay, "s": growth, "o": wave, "x": trend})
 draw_slanted("slanted", damped, ("Time (s)", "Voltage (mV)"))
+draw_rasterised("rasterised", {"tab:blue": decay, "tab:orange": growth})
