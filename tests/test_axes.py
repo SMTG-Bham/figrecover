@@ -4,6 +4,7 @@ import dataclasses
 import math
 from collections.abc import Sequence
 from pathlib import Path
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
@@ -160,6 +161,34 @@ def test_needs_tick_labels() -> None:
 def test_needs_the_ocr_extra() -> None:
     with pytest.raises(ModuleNotFoundError, match="needs the ocr extra"):
         read_axes(load_image(EXAMPLES / "labelled.png"))
+
+
+def test_writes_symbols_read_in_several_ways_one_way(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # OCR read delta as the increment sign, where it reads Greek capital delta
+    # too, mu as the micro sign, and the brackets and percent sign full width.
+    misread = (
+        "\N{INCREMENT}E \N{FULLWIDTH LEFT PARENTHESIS}\N{MICRO SIGN}m, "
+        "\N{OHM SIGN}, \N{ANGSTROM SIGN}, 5\N{FULLWIDTH PERCENT SIGN}"
+        "\N{FULLWIDTH RIGHT PARENTHESIS} "
+    )
+    found = SimpleNamespace(
+        boxes=np.array([[[0, 2], [60, 2], [60, 12], [0, 12]]], dtype=np.float32),
+        txts=[misread],
+        scores=[0.9],
+    )
+    monkeypatch.setattr(axes, "_engine", lambda: lambda _image: found)
+
+    [line] = _read_text(np.full((20, 80, 3), 255, dtype=np.uint8))
+
+    delta, mu = "\N{GREEK CAPITAL LETTER DELTA}", "\N{GREEK SMALL LETTER MU}"
+    omega, ring = (
+        "\N{GREEK CAPITAL LETTER OMEGA}",
+        "\N{LATIN CAPITAL LETTER A WITH RING ABOVE}",
+    )
+    assert line.text == f"{delta}E ({mu}m, {omega}, {ring}, 5%)"
+    assert (line.left, line.bottom, line.right, line.top) == (0, 8, 60, 18)
 
 
 def text(content: str, x: float, y: float, width: float = 20) -> _Text:

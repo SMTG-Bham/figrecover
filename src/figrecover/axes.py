@@ -4,6 +4,7 @@ import functools
 import itertools
 import math
 import re
+import unicodedata
 from collections import Counter
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, replace
@@ -52,6 +53,13 @@ _PLAIN = str.maketrans(  # minus signs, dashes and superscripts
     "\u2212\u2010\u2011\u2012\u2013\u2014\u2015\ufe63\uff0d"
     "\u207b\u207a\u2070\u00b9\u00b2\u00b3\u2074\u2075\u2076\u2077\u2078\u2079\u00b0\u00ba",
     "----------+012345678900",
+)
+# Symbols that OCR reads in more than one way, written one way: the increment
+# and micro signs as Greek capital delta and small mu, and full-width letters,
+# digits and signs, such as the full-width percent sign, as plain ones.
+_SYMBOLS = str.maketrans(
+    {"\u2206": "\u0394", "\u00b5": "\u03bc"}
+    | {chr(code): chr(code - 0xFEE0) for code in range(0xFF01, 0xFF5F)}
 )
 _DIGIT = re.compile(r"\d")
 _ZERO = re.compile(r"[Oo]")  # a 0 misread, in a label with a digit
@@ -256,14 +264,20 @@ def _engine() -> Any:
 
 
 def _read_text(image: Image) -> list[_Text]:
-    """Find the lines of text in an image."""
+    """Find the lines of text in an image.
+
+    Symbols that OCR reads in more than one way are written one way, so that
+    a title reads alike each time: the increment, micro, ohm and angstrom
+    signs as Greek capital delta, small mu, capital omega and A with a ring,
+    and full-width letters, digits and signs as plain ones.
+    """
     found = _engine()(cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
     if found.boxes is None:
         return []
     height = image.shape[0]
     return [
         _Text(
-            text.strip(),
+            unicodedata.normalize("NFC", text.strip()).translate(_SYMBOLS),
             float(box[:, 0].min()),
             height - float(box[:, 1].max()),
             float(box[:, 0].max()),
