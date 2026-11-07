@@ -13,8 +13,9 @@ The first release.
   curves, the CSV has a `series` column.
 - A curve that crosses a column more than once, such as a loop, gives a point
   on each side, and short marks beside a curve, such as the caps of error
-  bars, are ignored. A frame around the axes, as matplotlib draws, is left
-  out.
+  bars, are ignored, as is ink of other colours, such as the black arrow of
+  an annotation among coloured curves. A frame around the axes, as
+  matplotlib draws, is left out.
 - `-m` tells series apart by the shapes of their markers, such as squares,
   diamonds, open circles and crosses, cut out of the legend, for plots whose
   series share a colour, as many spreadsheet charts do. It gives a point at

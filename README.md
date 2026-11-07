@@ -697,8 +697,10 @@ in an image, from the position of a marker of each series in points.
    colour, up to 96 levels away.
 6. Each pixel belongs to the common colour that it best matches when blended
    with the background, if it is at least half-way there, so a curve's
-   antialiased edges count towards it. Specks of fewer than four pixels, such
-   as where two other curves cross, are ignored.
+   antialiased edges count towards it, and within 96 levels of the blend, so
+   ink of other colours, such as the black text and arrows of annotations
+   among coloured curves, is not taken for the nearest curve. Specks of fewer
+   than four pixels, such as where two other curves cross, are ignored.
 7. In each image column, a curve's pixels form runs, split by gaps of more
    than 6 pixels, and runs that overlap one to one in neighbouring columns
    form branches. Each run of a branch across at least 5% of the plot gives a
