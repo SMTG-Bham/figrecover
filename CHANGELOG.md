@@ -32,7 +32,8 @@ The first release.
   labels at their tick marks, reads plots without axis lines, and refuses a
   second y-axis on the right. Tick labels in which OCR mistook letters for
   digits, such as `1O` or `l.5`, or dashes for minus signs, are read as they
-  were written. Titles keep their Greek letters, symbols, superscripts and
+  were written, and those misread as other digits, off the even steps of a
+  linear axis, such as 758 among 250 and 500, are dropped. Titles keep their Greek letters, symbols, superscripts and
   subscripts, such as Δ, μm, CO₂ and mg L⁻¹, each written one way however OCR
   reads it.
 - Logarithmic axes work too. figrecover finds them itself when it reads the

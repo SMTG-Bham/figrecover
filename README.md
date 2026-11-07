@@ -235,7 +235,12 @@ work as before.
 - The x-axis tick labels are the lowest row of three or more numbers, and the
   y-axis tick labels the leftmost column of three or more numbers above them.
   Labels whose values are out of line with the rest, such as misread ones, are
-  dropped. An axis with fewer than three labels in line cannot be read.
+  dropped. On a linear axis, labels must also take the even steps that
+  plotting libraries label at: at low resolution OCR misreads digits as
+  others, such as 750 as 758, close enough to their ticks to look in line,
+  and those are dropped too. An axis with fewer than three labels in line
+  cannot be read, so neither can a linear axis labelled at uneven values,
+  such as 0, 273 and 373; give `-p` instead.
   Logarithmic axes are read too; see [Logarithmic axes](#logarithmic-axes).
   So are reversed axes, whose values fall from left to right or from bottom
   to top, as depth often does.
