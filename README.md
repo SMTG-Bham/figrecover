@@ -299,8 +299,11 @@ work as before.
   sign as Greek μ, and full-width signs, such as `％`, as plain ones. It can
   also read the raised minus sign of a superscript full size, so a minus sign
   before a superscript digit is raised, and `10−³` reads as 10⁻³, in titles
-  and tick labels alike. OCR reads symbols less surely than letters, and has
-  read `ΔE` written upwards as `ΔΔE`, so check the printed titles.
+  and tick labels alike. OCR reads symbols less surely than letters, so
+  check the printed titles. Turned upright, it has read `ΔE` as `ΔΔE`, so if
+  a title reads upright as it first did but with a character twice,
+  figrecover takes whichever reading OCR is surer of; `ΔΔG`, read alike both
+  ways, is kept.
 
 The titles of `examples/titled.png` run over two lines:
 
