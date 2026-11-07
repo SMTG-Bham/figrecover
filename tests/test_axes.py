@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 from figrecover import Axes, Image, axes, load_image, read_axes
-from figrecover.axes import _PLAIN, _read_text, _Text
+from figrecover.axes import _PLAIN, _factor, _read_text, _Text
 
 EXAMPLES = Path(__file__).parents[1] / "examples"
 HEIGHT, WIDTH = 300, 400
@@ -1058,6 +1058,45 @@ def test_reads_titles_written_across(monkeypatch: pytest.MonkeyPatch) -> None:
     found = read(monkeypatch, [*labels, *y_title])
 
     assert found.y_title == "Voltage (mV)"
+
+
+def test_applies_scale_factors_in_titles(monkeypatch: pytest.MonkeyPatch) -> None:
+    labels = [*x_labels(["0", "1", "2"]), *y_labels(["0", "1", "2"])]
+    times, minus = "\N{MULTIPLICATION SIGN}", "\N{SUPERSCRIPT MINUS}"
+    x_title = text(f"Current ({times}10{minus}\N{SUPERSCRIPT THREE} A)", 160, 25, 120)
+    y_title = text("Energy / 10\N{SUPERSCRIPT THREE} J", 14, 140, width=28)
+
+    found = read(monkeypatch, [*labels, x_title, y_title])
+
+    assert found.x_title == "Current (A)"
+    assert [value for _, value in found.x_ticks] == [0, 0.001, 0.002]
+    assert found.y_title == "Energy / J"
+    assert [value for _, value in found.y_ticks] == [0, 1000, 2000]
+    np.testing.assert_allclose(
+        found.calibration.to_data([(80, 80), (240, 200)]),
+        [(0, 0), (0.002, 2000)],
+        atol=1e-9,
+    )
+
+
+@pytest.mark.parametrize(
+    ("title", "rest", "factor"),
+    [
+        ("Count (\N{MULTIPLICATION SIGN}10\N{SUPERSCRIPT THREE})", "Count", 1e3),
+        ("Pressure (10^3 Pa)", "Pressure (Pa)", 1e3),
+        ("Signal [x10^{-2}]", "Signal", 1e-2),
+        ("Rate (10\N{SUPERSCRIPT ONE}\N{SUPERSCRIPT ZERO} Hz)", "Rate (Hz)", 1e10),
+        ("(\N{MULTIPLICATION SIGN}10\N{SUPERSCRIPT THREE})", None, 1e3),
+        # Prefixes of units, and tens that are not powers, stay.
+        ("Voltage (mV)", "Voltage (mV)", 1),
+        ("Year (10 BC)", "Year (10 BC)", 1),
+        (None, None, 1),
+    ],
+)
+def test_finds_scale_factors_in_titles(
+    title: str | None, rest: str | None, factor: float
+) -> None:
+    assert _factor(title) == (rest, factor)
 
 
 def test_reads_titles_written_upwards_turned_upright(

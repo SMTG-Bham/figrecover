@@ -48,6 +48,11 @@ _POWER = re.compile(  # 10^2, 10^{2}, 10-2, 2x10^2 or 2^5: a power, as OCR reads
 _DIGITS = re.compile(r"\d+(?:\.\d+)?")  # 25, or 2^5 read without its superscript
 _SCALE = re.compile(r"(?:1e|[x\u00d7]10\^?)([+-]?\d+)")  # 1e-5 or 10 to the -5
 _OFFSET = re.compile(r"[+-].*\d(?:e|[x\u00d7]10).*")  # +1e3, added to the ticks
+_TITLE_FACTOR = re.compile(  # a power of ten after a bracket or slash, as in (x10^-3 A)
+    r"([(\[/]\s*)(?:[x\u00d7]\s?)?10"
+    r"(?:\^\{?([+-]?\d+)\}?|([\u207a\u207b]?[\u2070\u00b9\u00b2\u00b3\u2074-\u2079]+))\s*"
+)
+_EMPTY_BRACKETS = re.compile(r"\s*[(\[]\s*[)\]]")
 # Superscript signs and digits, and the degree and ordinal signs that OCR reads
 # for a superscript zero.
 _SUPERSCRIPT = re.compile(
@@ -186,7 +191,10 @@ def read_axes(image: Image) -> Axes:
     before and aligned with it. A y-axis title written upwards, as most are,
     is read again turned upright, as OCR reads text written across more
     surely; one whose words are about as wide as tall, such as a single
-    letter, is read whichever way OCR is surer of.
+    letter, is read whichever way OCR is surer of. A power of ten after a
+    bracket or a slash in a title, as in Current (x10^-3 A) or Energy /
+    10^3 J, multiplies the values of its axis's ticks, and is left out of
+    the title.
 
     The text is read with RapidOCR, which the ``ocr`` extra installs.
 
@@ -259,12 +267,16 @@ def read_axes(image: Image) -> Axes:
         top = max(top, _line_end(ink[::-1, round(x_line - 0.5)] > 0, origin[1]))
     x_span = (origin[0], max(end, x_labels[-1].right))
     y_span = (origin[1], top)
+    x_title, x_factor = _factor(_x_title(words, x_labels, x_span))
+    y_title, y_factor = _factor(_y_title(words, y_labels, y_span, image, ink))
+    x_ticks = tuple((pixel, value * x_factor) for pixel, value in x_ticks)
+    y_ticks = tuple((pixel, value * y_factor) for pixel, value in y_ticks)
     return Axes(
-        calibration,
+        Calibration.from_ticks(x_ticks, y_ticks, origin, x_log=x_log, y_log=y_log),
         x_ticks,
         y_ticks,
-        _x_title(words, x_labels, x_span),
-        _y_title(words, y_labels, y_span, image, ink),
+        x_title,
+        y_title,
     )
 
 
@@ -1004,6 +1016,25 @@ def _y_title(
     if height >= _WRITTEN * width:
         return _title(upwards)
     return _title(max(upwards, across, key=_score))
+
+
+def _factor(title: str | None) -> tuple[str | None, float]:
+    """Return a title without the scale factor it gives its axis, and the factor.
+
+    The factor is a power of ten, after an opening bracket or a slash, as in
+    Current (x10^-3 A), Count (x10^3) or Energy / 10^3 J, with superscript
+    exponents, whose values are in units of 10^-3 A, thousands, or 10^3 J.
+    The title is left as Current (A), Count or Energy / J, without brackets
+    left empty. The prefixes of units, as in Voltage (mV), are kept: values
+    stay in the units the title names. A title without a factor has a
+    factor of 1.
+    """
+    match = _TITLE_FACTOR.search(title or "")
+    if title is None or match is None:
+        return title, 1.0
+    exponent = match[2] or match[3].translate(_PLAIN)
+    title = title[: match.start()] + match[1] + title[match.end() :]
+    return _EMPTY_BRACKETS.sub("", title).strip() or None, 10.0 ** int(exponent)
 
 
 def _lines(texts: Iterable[_Text]) -> list[_Text]:
