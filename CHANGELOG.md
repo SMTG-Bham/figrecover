@@ -50,9 +50,10 @@ The first release.
   superscripts and subscripts, and their ticks at their tick marks; and the
   curves as the points their paths pass through, told apart by colour, without
   axis lines, tick marks, grid lines, legend keys, frames, filled areas or
-  points hidden beyond the axes. `--page` and `--box` choose the page and the
-  part of it to read, such as one figure on a page of a paper, and positions
-  on the page are in points.
+  points hidden beyond the axes. Curves drawn as images in the PDF are traced
+  as in an image and placed on the page. `--page` and `--box` choose the page
+  and the part of it to read, such as one figure on a page of a paper, and
+  positions on the page are in points.
 - `--preview` saves a faded copy of the image with each recovered curve drawn
   in its colour, and `--remove-grid` paints over grid lines before tracing.
 - Transparent pixels are treated as white, and plots with a dark background
@@ -62,6 +63,6 @@ The first release.
 - A typed Python API: `Calibration`, with linear or logarithmic axes,
   `load_image`, `remove_grid`, `find_colours`, `trace_curves`, `trace_curve`,
   `find_markers` and, with the `ocr` extra, `read_axes`; and, with the `pdf`
-  extra, `load_pdf`, `read_pdf_axes`, `find_pdf_colours`, `trace_pdf_curves`
-  and `render_pdf`.
+  extra, `load_pdf`, `read_pdf_axes`, `find_pdf_colours`, `trace_pdf_curves`,
+  `render_pdf` and `remove_pdf_grid`.
 - Requires Python 3.14 on Linux, with NumPy and OpenCV.

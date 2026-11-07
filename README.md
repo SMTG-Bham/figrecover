@@ -454,6 +454,21 @@ its ends.
   lines in a legend's keys, are left out, as are closed shapes, such as
   frames and markers, filled areas, and points hidden beyond the limits of
   the axes.
+- Curves drawn as images, as plots of many points often are to keep their PDF
+  files small, are traced as they are in an image, from the image's own
+  pixels, and placed where the image lies on the page, while the axes are
+  still read from the PDF's text and lines. On `examples/rasterised.pdf`,
+  whose curves matplotlib draws as an image at 100 dots per inch, they are
+  within 0.006 of the true curves, about half a pixel. `--remove-grid` paints
+  over grid lines in such images.
+
+```bash
+figrecover examples/rasterised.pdf -n 2
+```
+
+```text
+figrecover: colours: -c ff7f0e -c 1f77b4
+```
 
 ### Python
 
@@ -531,8 +546,9 @@ data = [axes.calibration.to_data(curve) for curve in curves]
 ```
 
 `load_pdf` takes the part of the page to read as `box`, a tuple of its left,
-bottom, right and top edges in points, and `render_pdf(drawing)` draws that
-part as an image, at 2 pixels to the point.
+bottom, right and top edges in points. `render_pdf(drawing)` draws that part
+as an image, at 2 pixels to the point, and `remove_pdf_grid(drawing)` paints
+over grid lines in the images that it draws.
 
 ## How it works
 
@@ -592,12 +608,12 @@ they mark, about two pixels.
 With a PDF file, steps 1 to 7 give way to these:
 
 1. [PDFium](https://pdfium.googlesource.com/pdfium/), through pypdfium2, reads
-   the characters and paths that the page draws, each with the matrix that
-   places it on the page, through any forms that hold it. Characters along a
-   line less than 0.6 of their font size apart make a text, with a space where
-   they lie 0.2 of it apart or more. Characters at most 0.85 the size of their
-   line's largest, and 0.15 of its size or more above or below it, are
-   superscripts or subscripts.
+   the characters, paths and images that the page draws, each with the matrix
+   that places it on the page, through any forms that hold it. Characters
+   along a line less than 0.6 of their font size apart make a text, with a
+   space where they lie 0.2 of it apart or more. Characters at most 0.85 the
+   size of their line's largest, and 0.15 of its size or more above or below
+   it, are superscripts or subscripts.
 2. The tick labels and titles are read from the texts as they are from those
    that OCR reads. The x-axis line is the lowest straight horizontal line
    above the x-axis tick labels that runs along 90% of their span, and the
@@ -614,6 +630,9 @@ With a PDF file, steps 1 to 7 give way to these:
    the path's clip, are left out. Curved pieces give their ends, not their
    control points. Curves are ranked by the length of the lines through their
    points.
+5. Each image drawn on the page, with any transparency on white, is traced as
+   an image of a plot from where the axes cross in it, or from its edges if
+   they cross outside it, and its curves are ranked with those drawn as paths.
 
 ## Limitations
 
@@ -638,9 +657,9 @@ With a PDF file, steps 1 to 7 give way to these:
   outlines, as some programs export it, has none to read, so give `-p` and
   `-l`.
 - Markers in a PDF file, such as those of a scatter plot, are not curves, and
-  `-m` and `--remove-grid` work only on images. Lines that are straight along
-  an axis are left out, as grid lines are, so a constant curve drawn as a
-  single horizontal line is too.
+  `-m` works only on images. Lines that are straight along an axis are left
+  out, as grid lines are, so a constant curve drawn as a single horizontal
+  line is too.
 - A plot drawn turned on its page, as on a landscape page that the PDF shows
   turned with its `/Rotate` setting, is read as drawn, and its axes cannot be
   read.
