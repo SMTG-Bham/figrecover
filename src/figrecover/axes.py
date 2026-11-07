@@ -468,11 +468,15 @@ def _exponent(ink: npt.NDArray[np.uint8], label: _Text) -> tuple[int, int] | Non
     The characters are the pieces of ink in the label's box at least a third as
     tall as the tallest, which leaves out points, minus signs and flat tick
     marks. A character is raised if its bottom is ``_RAISED`` of the
-    characters' height or more above the lowest bottom. The last character
-    is an exponent if it is raised, and the base is then the characters that
-    are not, leaving out tick marks above the label. The exponent is negative
-    if a flat piece, at least twice as wide as tall, lies level with the
-    exponent and before it, after the middle of the base's last character.
+    characters' height or more above the lowest bottom. The base is the
+    characters that are not raised, leaving out tick marks above the label,
+    and the last character, the one ending furthest right, is an exponent if
+    it is raised and starts after the middle of the base's last character.
+    The characters of a label written upwards, as rotated tick labels can
+    be, stand one above another, so its last one is raised but no exponent.
+    The exponent is negative if a flat piece, at least twice as wide as tall,
+    lies level with the exponent and before it, after the middle of the
+    base's last character.
 
     Returns:
         The number of characters in the base and the sign of the exponent, or
@@ -492,11 +496,11 @@ def _exponent(ink: npt.NDArray[np.uint8], label: _Text) -> tuple[int, int] | Non
     lowest = bottoms[characters].max()  # rows count downwards
     raised = lowest - bottoms >= _RAISED * (lowest - top[characters].min())
     last = characters[np.argmax(left[characters] + width[characters])]
-    if not raised[last]:
-        return None
     base = characters[~raised[characters]]
     middles = top + tall / 2
     centres = left + width / 2
+    if not raised[last] or left[last] <= centres[base].max():
+        return None
     minus = (
         (tall < tall.max() / 3)
         & (width >= 2 * tall)

@@ -503,6 +503,37 @@ def test_reads_powers_of_the_base_most_labels_show(
     assert found.calibration.x_log
 
 
+def write_upwards(image: Image, x: float, y: float, content: str) -> _Text:
+    """Write text upwards, centred on a pixel position, as rotated labels are.
+
+    Returns:
+        The text as OCR reads it, and its box.
+    """
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    (width, height), baseline = cv2.getTextSize(content, font, 0.5, 1)
+    across = np.full((height + baseline + 4, width + 4, 3), 255, dtype=np.uint8)
+    cv2.putText(across, content, (2, height + 2), font, 0.5, (0, 0, 0), 1)
+    upwards = cv2.rotate(across, cv2.ROTATE_90_COUNTERCLOCKWISE)
+    tall, wide = upwards.shape[:2]
+    top, left = HEIGHT - round(y + tall / 2), round(x - wide / 2)
+    image[top : top + tall, left : left + wide] = upwards
+    return _Text(content, left, HEIGHT - top - tall, left + wide, HEIGHT - top)
+
+
+def test_reads_labels_written_upwards(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Written upwards, each label's last digit stands above the others.
+    image = plot()
+    labels = [write_upwards(image, 80 + 80 * i, 40, f"{2 * i + 2}0") for i in range(3)]
+    monkeypatch.setattr(
+        axes, "_read_text", lambda _image: [*labels, *y_labels(["0", "1", "2"])]
+    )
+
+    found = read_axes(image)
+
+    assert [value for _, value in found.x_ticks] == [20, 40, 60]
+    assert not found.calibration.x_log
+
+
 def right_labels(values: Sequence[str]) -> list[_Text]:
     """Return labels of a second y-axis, beyond the x-axis line, aligned left."""
     return [
