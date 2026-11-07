@@ -285,13 +285,16 @@ work as before.
   one, cannot be read: crop the right axis out, or give `-p`.
 - The titles are the nearest text below the x-axis tick labels and left of the
   y-axis ones, centred anywhere along their axes, so a title aligned with
-  either end of its axis is read too. A title can run over several lines,
-  each within a line's height of the one before and lined up with it, so a
-  caption further below is left out. A y-axis title written upwards, as most
-  are, is read again with the text left of the tick labels turned upright,
-  which OCR reads more surely; one written across is read as it is. A column
-  without a title is named `x` or `y`. Titles of a single letter are easily
-  misread, such as `x` as `X`, or missed.
+  either end of its axis is read too. A title can run over several lines, as a
+  `\n` breaks it, each within 1.25 line heights of the one before, by the
+  taller of the two, and lined up with it, so a caption beside it, or further
+  below, is left out. Tick labels broken over lines, such as `0\ns` with units
+  under each number, are read by their first lines, and their other lines are
+  not taken for the x-axis title. A y-axis title written upwards, as most are,
+  is read again with the text left of the tick labels turned upright, which
+  OCR reads more surely; one written across is read as it is. A column without
+  a title is named `x` or `y`. Titles of a single letter are easily misread,
+  such as `x` as `X`, or missed.
 - Titles keep their Greek letters, symbols, superscripts and subscripts, such
   as `ΔE (%)`, `Wavelength (μm)` and `CO₂ (mg L⁻¹)`, and the CSV header
   writes them in UTF-8. OCR reads some symbols as either of two that look
