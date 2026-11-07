@@ -215,7 +215,15 @@ def read_axes(image: Image) -> Axes:
             add to its tick values, or the plot has a second y-axis, on the
             right, with other values.
     """
-    texts = _with_slanted_labels(image, _read_text(image))
+    return _read_axes(image, _read_text(image))
+
+
+def _read_axes(image: Image, texts: list[_Text]) -> Axes:
+    """Read the axes of a plot from the lines of text that OCR found in its image.
+
+    See ``read_axes``.
+    """
+    texts = _with_slanted_labels(image, texts)
     if _decimal_comma(texts):
         texts = [_with_decimal_points(text) for text in texts]
     ink = ink_mask(image)

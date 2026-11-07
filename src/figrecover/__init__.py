@@ -14,6 +14,7 @@ from .digitize import (
     trace_curve,
     trace_curves,
 )
+from .panels import Panel, read_panels
 
 __version__ = version("figrecover")
 
@@ -22,6 +23,7 @@ __all__ = [
     "Calibration",
     "Colour",
     "Image",
+    "Panel",
     "Point",
     "Tick",
     "__version__",
@@ -29,6 +31,7 @@ __all__ = [
     "find_markers",
     "load_image",
     "read_axes",
+    "read_panels",
     "remove_grid",
     "trace_curve",
     "trace_curves",
