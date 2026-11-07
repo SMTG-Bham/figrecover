@@ -913,6 +913,35 @@ def test_moves_ticks_to_the_marks_drawn(
     assert [pixel for pixel, _ in found.y_ticks] == [80, 140, 200]
 
 
+def test_moves_ticks_to_marks_beside_the_labels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Rotated y labels can lie alike to one side of their ticks, here 9.5
+    # pixels below them, and as tall as wide, so their ends lie further off.
+    rotated = [
+        _Text(value, 10, 60 + 60 * i, 50, 100 + 60 * i) for i, value in enumerate("012")
+    ]
+    labels = [*x_labels(["0", "1", "2"]), *rotated]
+    monkeypatch.setattr(axes, "_read_text", lambda _image: labels)
+
+    found = read_axes(marked_plot([80, 160, 240], [90, 150, 210]))
+
+    assert [pixel for pixel, _ in found.y_ticks] == [89.5, 149.5, 209.5]
+
+
+def test_keeps_ticks_at_labels_beside_minor_marks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Minor tick marks lie alike beside the labels too, nearer than the
+    # major ones, so the labels stay rather than take the minor marks.
+    labels = [*x_labels(["0", "1", "2"]), *y_labels(["0", "1", "2"])]
+    monkeypatch.setattr(axes, "_read_text", lambda _image: labels)
+
+    found = read_axes(marked_plot([80, 160, 240], [84, 90, 144, 150, 204, 210]))
+
+    assert [pixel for pixel, _ in found.y_ticks] == [80, 140, 200]
+
+
 def test_keeps_ticks_at_labels_far_from_the_marks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

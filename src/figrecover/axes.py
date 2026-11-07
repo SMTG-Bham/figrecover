@@ -927,32 +927,49 @@ def _snap(
     The anchors are points of each label by which it may be aligned with its
     tick: first its middle, then its ends. Ticks lie at the labels' middles,
     unless those lie more than ``_SNAP_SLACK`` from the marks, by their median
-    distance, and the ends at one side lie at most half as far, and within
-    ``_SNAP_REACH`` of the tick spacing: labels end at their ticks, as rotated
-    labels do. Each label then moves to the mark nearest that end, if it is
-    as close. Tick marks are not always exactly where the ticks are, as
-    plotting libraries may move them to whole pixels, so centred labels stay.
+    distance. Labels may then lie alike to one side of their marks, as
+    rotated y-axis labels do: if their middles, moved by the median of the
+    distances from each to the mark nearest it, lie within ``_SNAP_SLACK`` of
+    the marks, and the move is within ``_SNAP_REACH`` of the tick spacing,
+    each label moves to the mark nearest its middle so moved; but not if two
+    marks lie less than half the tick spacing apart, as the minor ticks of a
+    logarithmic axis do, which could lie alike beside the labels as well.
+    Otherwise, if
+    the ends at one side lie at most half as far from the marks as the
+    middles, and within ``_SNAP_REACH`` of the tick spacing, labels end at
+    their ticks, as rotated x-axis labels do, and each moves to the mark
+    nearest that end. A label moves only to a mark that close. Tick marks
+    are not always exactly where the ticks are, as plotting libraries may
+    move them to whole pixels, so centred labels stay.
     """
     middles, *ends = anchors
     spacing = float(np.median(np.diff(np.sort(middles))))
     if len(marks) < MIN_TICKS:
         return middles
 
+    def nearest(points: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+        return marks[np.abs(points[:, np.newaxis] - marks).argmin(axis=1)]
+
     def offsets(points: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
-        return np.abs(points[:, np.newaxis] - marks).min(axis=1)
+        return np.abs(nearest(points) - points)
 
     def offset(points: npt.NDArray[np.float64]) -> float:
         return float(np.median(offsets(points)))
 
-    best = min(ends, key=offset)
-    if (
-        offset(middles) <= _SNAP_SLACK
-        or offset(best) > _SNAP_REACH * spacing
-        or 2 * offset(best) > offset(middles)
-    ):
+    if offset(middles) <= _SNAP_SLACK:
         return middles
-    nearest = marks[np.abs(best[:, np.newaxis] - marks).argmin(axis=1)]
-    return np.where(offsets(best) <= _SNAP_REACH * spacing, nearest, best)
+    shift = float(np.median(nearest(middles) - middles))
+    if (
+        offset(middles + shift) <= _SNAP_SLACK
+        and abs(shift) <= _SNAP_REACH * spacing
+        and 2 * np.diff(np.sort(marks)).min() >= spacing
+    ):
+        best = middles + shift
+    else:
+        best = min(ends, key=offset)
+        if offset(best) > _SNAP_REACH * spacing or 2 * offset(best) > offset(middles):
+            return middles
+    return np.where(offsets(best) <= _SNAP_REACH * spacing, nearest(best), best)
 
 
 def _scales(
