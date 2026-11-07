@@ -248,6 +248,9 @@ work as before.
   not. An axis offset, such as `+1e3`, cannot be read.
 - Each tick lies at the middle of its label, or, for labels that end at their
   tick marks rather than centring on them, as rotated labels do, at the mark.
+  Labels written upwards, turned a quarter turn, are read as well as those
+  written across, but OCR often misreads labels at a slant, such as 45°, and
+  those it misreads are dropped.
 - figrecover traces the curves from the axis lines, not from the first ticks,
   so the margins that plotting libraries leave inside the axes are kept. If
   there are no axis lines, it starts just beyond the tick labels and their

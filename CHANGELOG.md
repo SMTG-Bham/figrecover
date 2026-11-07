@@ -27,9 +27,10 @@ The first release.
   beside an axis, traces from where the axis lines cross, and names the CSV
   columns after the axis titles. Titles can run over several lines and be
   aligned with either end of their axes, and y-axis titles written upwards
-  are read turned upright, so OCR no longer splits or misreads them. It
-  places the ticks of rotated labels at their tick marks, reads plots without
-  axis lines, and refuses a second y-axis on the right.
+  are read turned upright, so OCR no longer splits or misreads them. It reads
+  tick labels written upwards, places the ticks of rotated labels at their
+  tick marks, reads plots without axis lines, and refuses a second y-axis on
+  the right.
 - Logarithmic axes work too. figrecover finds them itself when it reads the
   axes, including tick labels written as powers, such as 10⁻² or 2⁵, even
   where OCR misses the superscripts; and `--log` names them for `-p`.
