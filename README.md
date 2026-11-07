@@ -286,8 +286,11 @@ work as before.
   units of that power, so it multiplies the tick values too, and is left out
   of the column's name: `Current (A)`, `Count` or `Energy / J`. Units are not
   converted, so a column titled `Voltage (mV)` stays in millivolts.
-- Each tick lies at the middle of its label, or, for labels that end at their
-  tick marks rather than centring on them, as rotated labels do, at the mark.
+- Each tick lies at the middle of its label, or at a tick mark: for labels
+  that end at their tick marks rather than centring on them, as rotated
+  x-axis labels do, at the mark at that end, and for labels that lie alike
+  to one side of their marks, as matplotlib draws rotated y-axis labels, at
+  the mark beside each.
   Labels written upwards, turned a quarter turn, are read as well as those
   written across. OCR often misreads x-axis labels at a slant, such as 45°,
   so if it misreads one and finds another's box tilted, figrecover reads the
