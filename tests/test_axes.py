@@ -1118,6 +1118,37 @@ def test_reads_titles_written_upwards_turned_upright(
 
 
 @pytest.mark.parametrize(
+    ("first", "turned", "title"),
+    [
+        # Turned, OCR read the delta twice, less surely than as first read.
+        (
+            "\N{GREEK CAPITAL LETTER DELTA}E (%)",
+            0.85,
+            "\N{GREEK CAPITAL LETTER DELTA}E (%)",
+        ),
+        # Turned, OCR read surely what is written twice, as in delta delta G.
+        (
+            "\N{GREEK CAPITAL LETTER DELTA}G",
+            0.95,
+            "\N{GREEK CAPITAL LETTER DELTA}" * 2 + "G",
+        ),
+    ],
+)
+def test_reads_titles_with_a_character_doubled_turned_the_surer_way(
+    monkeypatch: pytest.MonkeyPatch, first: str, turned: float, title: str
+) -> None:
+    labels = [*x_labels(["0", "1", "2"]), *y_labels(["0", "1", "2"])]
+    upwards = dataclasses.replace(tall(first, 8, 150, 60), score=0.9)
+    doubled = first[0] + first
+
+    found = read_turned(
+        monkeypatch, [*labels, upwards], [upright(doubled, 8, 150, 70, turned)]
+    )
+
+    assert found.y_title == title
+
+
+@pytest.mark.parametrize(
     ("across", "turned", "title"),
     [
         # A V written upwards, read as > until turned upright.

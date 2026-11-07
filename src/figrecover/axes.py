@@ -990,7 +990,9 @@ def _y_title(
     nearest the labels are ``_WRITTEN`` times wider than tall, and so run
     across, the text left of the labels is read again turned upright. If
     they are about as wide as tall, as a single letter is, the title is read
-    whichever way OCR is surer of, upwards if it is as sure.
+    whichever way OCR is surer of, upwards if it is as sure. So it is if it
+    reads upright as it does as first read but with a character twice, as
+    OCR can read a turned capital delta.
     """
     left = min(label.left for label in y_labels)
     beside = [word for word in words if word.x < left and span[0] <= word.y <= span[1]]
@@ -1013,9 +1015,19 @@ def _y_title(
     ]
     # Transposed, the lines of a title written upwards run from the last up.
     upwards = _lines(upright or map(_transposed, beside))[::-1]
-    if height >= _WRITTEN * width:
+    if height >= _WRITTEN * width and not _doubled(upwards, across):
         return _title(upwards)
     return _title(max(upwards, across, key=_score))
+
+
+def _doubled(lines: Sequence[_Text], others: Sequence[_Text]) -> bool:
+    """Return whether a title reads as another with one of its characters twice."""
+    title, other = _title(lines) or "", _title(others) or ""
+    return any(
+        title[:index] + title[index + 1 :] == other
+        for index in range(1, len(title))
+        if title[index] == title[index - 1]
+    )
 
 
 def _factor(title: str | None) -> tuple[str | None, float]:
