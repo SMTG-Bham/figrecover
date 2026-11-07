@@ -56,6 +56,12 @@ With the `ocr` extra, you can leave out both and let figrecover read the tick
 labels instead; see [Reading the axes](#reading-the-axes). For logarithmic
 axes, see [Logarithmic axes](#logarithmic-axes).
 
+figrecover traces the part of the image above and right of the lowest and
+leftmost reference points, so take them on the axis lines. A reversed axis,
+whose values fall from left to right or from bottom to top, starts at its
+largest value, so take the corner where the axes cross rather than the
+origin, and ticks on the axis lines.
+
 If you leave out `-l`, figrecover opens the image and asks you to click on each
 reference point in turn (press q to cancel). It then prints the matching `-l`
 options, ready to reuse for the rest of a batch of similar plots:
@@ -231,6 +237,8 @@ work as before.
   Labels whose values are out of line with the rest, such as misread ones, are
   dropped. An axis with fewer than three labels in line cannot be read.
   Logarithmic axes are read too; see [Logarithmic axes](#logarithmic-axes).
+  So are reversed axes, whose values fall from left to right or from bottom
+  to top, as depth often does.
 - Numbers can have thousands separators (`2,000`), a percent sign (`50%`, read
   in percent) or an exponent (`2.5e-3`). A tick mark that OCR reads as a dash
   beside a label, as it can where no axis line joins them, is ignored.
@@ -452,7 +460,9 @@ they mark, about two pixels.
   dotted lines may not be found.
 - Where curves cross, the one drawn underneath loses a few pixels, and its
   points there can be a pixel or two out.
-- The axes must be horizontal and vertical, with linear or logarithmic scales.
+- The axes must be horizontal and vertical, with linear or logarithmic scales,
+  though either may be reversed. To read the axes, the x-axis must lie below
+  the plot and the y-axis left of it.
 - Each column gives one point per branch of a curve, so steep peaks come out
   slightly lower, vertical lines in the plot area become single points, and
   the two sides of a loop merge into one point where they come within 6

@@ -33,6 +33,9 @@ The first release.
 - Logarithmic axes work too. figrecover finds them itself when it reads the
   axes, including tick labels written as powers, such as 10⁻² or 2⁵, even
   where OCR misses the superscripts; and `--log` names them for `-p`.
+- Reversed axes, whose values fall from left to right or from bottom to top,
+  work too, when figrecover reads the axes or with `-p` reference points on
+  the axis lines.
 - `--preview` saves a faded copy of the image with each recovered curve drawn
   in its colour, and `--remove-grid` paints over grid lines before tracing.
 - Transparent pixels are treated as white, and plots with a dark background
