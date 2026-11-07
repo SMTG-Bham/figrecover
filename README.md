@@ -2,7 +2,8 @@
 
 Recover data from images of plots. figrecover finds the curves in a picture of
 a plot, such as a scanned figure or a screenshot, and writes their points as
-CSV in the plot's own units. Curves are told apart by colour.
+CSV in the plot's own units. Curves are told apart by colour. It reads plots in
+PDF files too, exactly, from what they draw rather than from pixels.
 
 It suits batches of similar plots: calibrate once, then digitize every image
 the same way from the command line.
@@ -30,6 +31,14 @@ models, so it needs no network access when it runs:
 
 ```bash
 uv tool install "figrecover[ocr] @ git+https://github.com/SMTG-Bham/figrecover"
+```
+
+To read plots in PDF files (see [PDF files](#pdf-files)), install the `pdf`
+extra, which adds the [pypdfium2](https://github.com/pypdfium2-team/pypdfium2)
+PDF reader. Extras combine, as in `figrecover[ocr,pdf]`:
+
+```bash
+uv tool install "figrecover[pdf] @ git+https://github.com/SMTG-Bham/figrecover"
 ```
 
 ## Usage
@@ -107,6 +116,8 @@ in blue, so you can check the result at a glance:
 | `-o`, `--output FILE` | CSV file to write. Default: standard output. |
 | `--preview IMAGE` | Also save a faded copy of the image with the recovered curves drawn on it. |
 | `--remove-grid` | Paint over grid lines before tracing. |
+| `--page N` | The page of a PDF file to read, from 1. Default: 1. |
+| `--box X0,Y0,X1,Y1` | The part of a PDF file's page to read, such as one figure, as its left, bottom, right and top edges in points. Default: the whole page. |
 
 ### Several curves
 
@@ -390,6 +401,60 @@ figrecover examples/logarithmic.png \
     -p 1,0.1 -p 1e4,0.1 -p 1,1e3 -l 93,66 -l 610,66 -l 93,380 --log xy
 ```
 
+### PDF files
+
+With the `pdf` extra installed, give a PDF file instead of an image, and
+figrecover reads the plot on its first page exactly, from what the PDF draws
+rather than from pixels. The tick labels and titles are text, so they need no
+OCR, and the curves are lines through points whose positions the PDF holds:
+
+```bash
+figrecover examples/labelled.pdf --preview labelled.pdf.png
+```
+
+```text
+figrecover: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10
+figrecover: y-axis "Voltage (mV)" with ticks at -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1
+```
+
+```text
+Time (s),Voltage (mV)
+-1.11905e-07,1
+0.0250124,0.992523
+...
+```
+
+On the example PDFs, which matplotlib draws, the recovered points lie within
+4×10⁻⁷ of the true curves, in the units of the axes, or in decades on
+logarithmic ones: the PDF reader holds positions to about seven significant
+figures, and the CSV file writes six. Each curve gives the points that it is
+drawn through, in the order they are drawn, rather than a point per column of
+pixels. Plotting libraries leave out points that lie on a straight line
+between their neighbours, as matplotlib does, so a straight line gives only
+its ends.
+
+- Positions on a PDF's page are in points, 72 to the inch, from its bottom-left
+  corner, as PDF files give them. So are `-l` locations, and those that
+  figrecover prints when you click. The preview shows the part of the page
+  read, at 2 pixels to the point.
+- `--page N` reads another page than the first. On a page with several
+  figures, such as a page of a paper, give the part of it to read with
+  `--box X0,Y0,X1,Y1`: its left, bottom, right and top edges in points. Text
+  outside the box, and lines beyond it, are left out. Figures that a document
+  takes in from other PDF files, as LaTeX does, are read too.
+- The axes are read as they are from an image (see
+  [Reading the axes](#reading-the-axes)), but from the PDF's text, whose
+  superscripts and subscripts show by the sizes and heights of their
+  characters. The axis lines are the straight lines nearest the tick labels,
+  and each tick lies exactly at its tick mark, or its grid line: the mark
+  nearest the middle of its label, or, for rotated labels, the end.
+- Curves are told apart by the colour they are drawn in, and `-n` and `-c`
+  work as they do for images; `-n` ranks curves by their length. Lines
+  straight along an axis, such as axis lines, tick marks, grid lines and the
+  lines in a legend's keys, are left out, as are closed shapes, such as
+  frames and markers, filled areas, and points hidden beyond the limits of
+  the axes.
+
 ### Python
 
 The same steps are available as a library:
@@ -452,6 +517,23 @@ data = [calibration.to_data(series) for series in markers]
 `load_image` returns an RGB array, and `remove_grid(image)` paints over grid
 lines first, if needed.
 
+With the `pdf` extra, `load_pdf` reads what a page of a PDF file draws, and
+the same steps work on it, in points from the page's bottom-left corner:
+
+```python
+from figrecover import find_pdf_colours, load_pdf, read_pdf_axes, trace_pdf_curves
+
+drawing = load_pdf("examples/series.pdf", page=1)
+axes = read_pdf_axes(drawing)
+origin = axes.calibration.origin
+curves = trace_pdf_curves(drawing, find_pdf_colours(drawing, 4, origin), origin)
+data = [axes.calibration.to_data(curve) for curve in curves]
+```
+
+`load_pdf` takes the part of the page to read as `box`, a tuple of its left,
+bottom, right and top edges in points, and `render_pdf(drawing)` draws that
+part as an image, at 2 pixels to the point.
+
 ## How it works
 
 1. The image is read in colour and stretched to the full 0–255 range.
@@ -507,6 +589,32 @@ On the examples, the recovered values are within 0.03 of the true curves, about
 three pixels at the steepest point, and the markers within 0.02 of the points
 they mark, about two pixels.
 
+With a PDF file, steps 1 to 7 give way to these:
+
+1. [PDFium](https://pdfium.googlesource.com/pdfium/), through pypdfium2, reads
+   the characters and paths that the page draws, each with the matrix that
+   places it on the page, through any forms that hold it. Characters along a
+   line less than 0.6 of their font size apart make a text, with a space where
+   they lie 0.2 of it apart or more. Characters at most 0.85 the size of their
+   line's largest, and 0.15 of its size or more above or below it, are
+   superscripts or subscripts.
+2. The tick labels and titles are read from the texts as they are from those
+   that OCR reads. The x-axis line is the lowest straight horizontal line
+   above the x-axis tick labels that runs along 90% of their span, and the
+   y-axis line likewise the leftmost vertical one right of the y-axis's.
+3. The tick marks are the straight lines across an axis line that reach to
+   within a tenth of a label's height of it. Labels whose middles lie within
+   half a label's height of the marks are centred on their ticks; others are
+   aligned by the ends nearest the marks, as rotated labels are. Each tick
+   lies at the mark nearest its label's middle or end, within a quarter of the
+   tick spacing.
+4. The curves are the paths that are stroked but not filled, by colour,
+   without their subpaths that are closed or that lie along a straight
+   horizontal or vertical line. Points left of or below the axes, or outside
+   the path's clip, are left out. Curved pieces give their ends, not their
+   control points. Curves are ranked by the length of the lines through their
+   points.
+
 ## Limitations
 
 - Curves are told apart by colour, or by the shapes of their markers, so
@@ -526,6 +634,16 @@ they mark, about two pixels.
   pixels of each other.
 - `--remove-grid` also removes straight horizontal or vertical stretches of
   curves that are 120 pixels or longer.
+- In a PDF file, the text must be text to read the axes: text drawn as
+  outlines, as some programs export it, has none to read, so give `-p` and
+  `-l`.
+- Markers in a PDF file, such as those of a scatter plot, are not curves, and
+  `-m` and `--remove-grid` work only on images. Lines that are straight along
+  an axis are left out, as grid lines are, so a constant curve drawn as a
+  single horizontal line is too.
+- A plot drawn turned on its page, as on a landscape page that the PDF shows
+  turned with its `/Rotate` setting, is read as drawn, and its axes cannot be
+  read.
 
 ## Development
 
@@ -589,6 +707,7 @@ protection.
 │   ├── calibration.py       # pixel-to-data mapping
 │   ├── digitize.py          # image loading, grid removal, curve colours and tracing
 │   ├── interactive.py       # window for clicking on reference points
+│   ├── pdf.py               # reading plots from PDF files, from their drawing
 │   └── cli.py               # the figrecover command
 └── tests/
 ```
