@@ -15,7 +15,11 @@ The first release.
   on each side, and short marks beside a curve, such as the caps of error
   bars, are ignored, as is ink of other colours, such as the black arrow of
   an annotation among coloured curves. A frame around the axes, as
-  matplotlib draws, is left out.
+  matplotlib draws, is left out. Insets and legends inside a frame of their
+  own are painted out with all they hold, so an inset's curve or a legend's
+  key in a curve's colour is not traced as part of that curve, and an
+  inset's markers are not taken for a series' with `-m`; step plots, bars,
+  shaded spans, grid lines and boxes drawn around part of a curve are kept.
 - `-m` tells series apart by the shapes of their markers, such as squares,
   diamonds, open circles and crosses, cut out of the legend, for plots whose
   series share a colour, as many spreadsheet charts do. It gives a point at

@@ -49,12 +49,14 @@ Crop the image to the axes and the curves. figrecover ignores everything left
 of the y-axis and below the x-axis, and inside a frame around the axes, as
 matplotlib draws, everything beyond the frame too. It then traces the most
 common colour that stands out from the background in what remains, skipping
-filled areas and grid lines. Legends are traced too if they are the same
-colour as a curve, so crop or paint them out, unless the series are told apart
-by their [markers](#markers). Dark backgrounds work as well as light ones. To have figrecover read the axes, keep their tick labels and
-titles in the image. A figure of several plots, such as panels labelled (a)
-and (b), needs no cropping when figrecover reads the axes; see
-[Several panels](#several-panels).
+filled areas and grid lines. Insets and legends inside a frame, as matplotlib
+draws them, are painted out first, with all they hold; a legend without one
+is traced too if it is the same colour as a curve, so crop or paint it out,
+unless the series are told apart by their [markers](#markers). Dark
+backgrounds work as well as light ones. To have figrecover read the axes,
+keep their tick labels and titles in the image. A figure of several plots,
+such as panels labelled (a) and (b), needs no cropping when figrecover reads
+the axes; see [Several panels](#several-panels).
 
 ### 2. Choose reference points
 
@@ -195,7 +197,7 @@ The preview rings each marker, and each key, in a colour for its series:
   taken for the other's. Three markers are missed where the series above
   cross. Check the preview.
 - The legend must be in the image, but may be in the plot area: its keys are
-  not taken for markers.
+  not taken for markers. Nor are markers in an inset with a frame.
 - In a PDF file, markers are read exactly, from what the PDF draws; see
   [PDF files](#pdf-files).
 
@@ -473,7 +475,9 @@ figrecover: wrote shared_a.csv, shared_b.csv, shared_c.csv, shared_d.csv
   each at least a tenth of the image's shorter side long, that meet, as
   matplotlib's frames do too. An image with one such plot, or none, such as
   plots without axis lines, is read as one plot, as before. Axes inside
-  another's, such as an inset's, are not a panel of their own.
+  another's, such as an inset's, are not a panel of their own: they are
+  painted out before the panel's curves are traced, as frames inside the
+  plot area are; see [How it works](#how-it-works).
 - Each panel is read from its part of the image, which holds its tick labels
   and titles, and runs up to just short of the axes of the panels around it.
   On the right, it stops at the tick labels or title of the panel beside it,
@@ -492,7 +496,8 @@ figrecover: wrote shared_a.csv, shared_b.csv, shared_c.csv, shared_d.csv
   it lies above that panel's axes.
 - A panel's label is painted over, inside its axes, before its curves are
   traced, as it is usually drawn in a curve's colour. A label that OCR does
-  not find at all is traced as part of a curve of its colour, as a legend is.
+  not find at all is traced as part of a curve of its colour, as a legend
+  without a frame is.
 - Plots that share an axis often label its ticks only on the outer panels:
   an x-axis on the lowest panel of a column, and a y-axis on the leftmost of
   a row. A panel without tick labels on an axis takes that axis, and its
@@ -708,7 +713,25 @@ in an image, from the position of a marker of each series in points.
 3. Pixels left of and below the axes are ignored, which drops the axes, their
    ticks and labels. A frame closing the axes, a thin line along the top from
    the y-axis that meets one down the right, is dropped with everything
-   beyond it.
+   beyond it. Frames inside what remains, such as those of insets and
+   legends, are painted in the background colour with all they hold, and 3
+   pixels around them, so an inset's curve or a legend's key is not traced
+   as part of a curve of its colour. A frame is a box of four straight lines
+   of one colour, each at least 5% of the plot's shorter side long, at most
+   8 pixels thick, and 32 levels or more from the background, so light grey
+   legend frames count too. The lines along its top and bottom run from one
+   side to the other, and a line down each side runs along three quarters
+   of its height or more, so its corners are square or rounded by a few
+   pixels. Lines may run on past its corners, as an inset's tick marks and
+   the lines to the part it magnifies do, but the top and bottom must each
+   end at a side, which grid lines do not. A step plot's flat and upright
+   stretches never close a box, and filled areas, such as bars and shaded
+   spans, are thicker than lines. A frame hides what lies behind it, so a
+   box that a curve crosses, with ink of like colours, less than 48 levels
+   apart, within 3 pixels of a line on both sides, is not one, such as a
+   box drawn around part of a curve or marking the part an inset magnifies.
+   An inset's tick marks, in the colour of its frame, do not cross it where
+   its curve meets the frame inside, nor do its grid lines.
 4. A coarse colour histogram gives the common colours: those with enough pixels
    to span the plot, merging shades less than 48 levels apart. Each is then
    counted again in a finer histogram, and split if it holds two or more
@@ -815,9 +838,19 @@ With a PDF file, steps 1 to 7 give way to these:
   curves that are 120 pixels or longer.
 - Panels are found by axis lines that meet, so a figure of plots without
   them, or of plots whose axes touch, as plots sharing an axis can, is read
-  as one plot. Insets, and legends shared by several panels, are not
-  read. Panels are found in images only: in a PDF file, give `--box` to read
-  one.
+  as one plot. Insets are painted out, not read as panels of their own, and
+  legends shared by several panels are not read. Panels are found in images
+  only: in a PDF file, give `--box` to read one.
+- Insets and legends are painted out only inside a frame of four lines that
+  stands clear of the axes' own frame: an inset in the corner of the axes,
+  sharing two of their lines, is traced as part of the plot. So is an inset
+  whose curve meets its frame where a curve of a like colour runs behind it,
+  as the two look like one curve crossing a box. The tick labels and titles
+  of an inset, outside its frame, are left in, as other text in the plot
+  area is. `--remove-grid` removes the lines of an inset's frame 120 pixels
+  or longer before the frame is found, so give it only for plots without
+  insets. In a PDF file, insets are not left out: their curves are read with
+  the plot's.
 - In a PDF file, the text must be text to read the axes: text drawn as
   outlines, as some programs export it, has none to read, so give `-p` and
   `-l`.
