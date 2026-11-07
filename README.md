@@ -43,7 +43,9 @@ common colour that stands out from the background in what remains, skipping
 filled areas and grid lines. Legends are traced too if they are the same
 colour as a curve, so crop or paint them out, unless the series are told apart
 by their [markers](#markers). Dark backgrounds work as well as light ones. To have figrecover read the axes, keep their tick labels and
-titles in the image.
+titles in the image. A figure of several plots, such as panels labelled (a)
+and (b), needs no cropping when figrecover reads the axes; see
+[Several panels](#several-panels).
 
 ### 2. Choose reference points
 
@@ -260,9 +262,12 @@ work as before.
   unit, such as `5 l`, and are not read. Any dash before a number, such as
   an en or em dash, is a minus sign.
 - A scale factor printed where plotting libraries put one, such as `1e-5` or
-  `×10³` above the y-axis or below the x-axis, multiplies that axis's tick
-  values. Text elsewhere that looks like one, such as a legend entry, does
-  not. An axis offset, such as `+1e3`, cannot be read.
+  `×10³` above the y-axis, or below the right half of the x-axis, multiplies
+  that axis's tick values. Above the y-axis, it may lie beside the top half
+  of the topmost tick label, as matplotlib prints it when that tick is at the
+  top of the axis. Text elsewhere that looks like one, such as a legend entry,
+  or the scale factor above the y-axis of a plot below, does not. An axis
+  offset, such as `+1e3`, cannot be read.
 - A power of ten in an axis title, after a bracket or a slash, as in
   `Current (×10⁻³ A)`, `Count (×10³)` or `Energy / 10³ J`, says the axis is in
   units of that power, so it multiplies the tick values too, and is left out
@@ -288,7 +293,9 @@ work as before.
   either end of its axis is read too. A title can run over several lines, as a
   `\n` breaks it, each within 1.25 line heights of the one before, by the
   taller of the two, and lined up with it, so a caption beside it, or further
-  below, is left out. Tick labels broken over lines, such as `0\ns` with units
+  below, is left out; and the words of a line lie within a line height of
+  each other, so text further along, such as the labels of other plots, is
+  left out too. Tick labels broken over lines, such as `0\ns` with units
   under each number, are read by their first lines, and their other lines are
   not taken for the x-axis title. A y-axis title written upwards, as most are,
   is read again with the text left of the tick labels turned upright, which
@@ -390,6 +397,76 @@ figrecover examples/logarithmic.png \
     -p 1,0.1 -p 1e4,0.1 -p 1,1e3 -l 93,66 -l 610,66 -l 93,380 --log xy
 ```
 
+### Several panels
+
+A figure of several plots, such as panels labelled (a), (b), (c), is read
+panel by panel when figrecover reads the axes:
+
+```bash
+figrecover examples/panels.png -o panels.csv --preview panels.preview.png
+```
+
+It prints what it read of each panel, named after its label, and the files
+it wrote:
+
+```text
+figrecover: panel a: x-axis "Energy (eV)" with ticks at 0, 2, 4, 6, 8, 10
+figrecover: panel a: y-axis "Intensity" with ticks at 0, 0.5, 1, 1.5, 2, 2.5, 3
+figrecover: panel b: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10
+figrecover: panel b: y-axis "Voltage (mV)" with ticks at -1, -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1
+figrecover: panel c: x-axis "Depth (m)" with ticks at 0, 2, 4, 6, 8, 10
+figrecover: panel c: y-axis "Temperature (K)" with ticks at 0, 0.5, 1, 1.5, 2, 2.5, 3
+figrecover: panel d: logarithmic x-axis "Frequency (Hz)" with ticks at 1, 10, 100, 1000, 10000
+figrecover: panel d: logarithmic y-axis "Power (mW)" with ticks at 0.1, 1, 10, 100, 1000
+figrecover: wrote panels_a.csv, panels_b.csv, panels_c.csv, panels_d.csv
+```
+
+Each panel's CSV is like a single plot's, with its columns named after the
+panel's own axis titles. Without `-o`, standard output gets one CSV with a
+`panel` column first, whose other columns are named after the axis titles if
+every panel has the same ones, or `x` and `y`:
+
+```text
+panel,x,y
+a,0.117437,0.505713
+...
+```
+
+The preview draws every panel's curves and ticks on the one image:
+
+![Four panels, each recovered with its own axes, one of them logarithmic](examples/panels.preview.png)
+
+- The panels are found by their axes: a horizontal and a vertical axis line,
+  each at least a tenth of the image's shorter side long, that meet, as
+  matplotlib's frames do too. An image with one such plot, or none, such as
+  plots without axis lines, is read as one plot, as before. Axes inside
+  another's, such as an inset's, are not a panel of their own.
+- Each panel is read from its part of the image, which holds its tick labels
+  and titles, and runs up to just short of the axes of the panels around it.
+  On the right, it stops at the tick labels or title of the panel beside it,
+  so they are not read as a second y-axis.
+- Panels are named in reading order, in rows from the top, each from the
+  left. A panel's label is the text nearest the top-left corner of its axes,
+  inside or outside them, within a quarter of their width and height, written
+  as a letter: (a), a), a. or a. OCR misreads single letters in brackets,
+  such as (b) and (d) as (p), and misses some, but panels are labelled in
+  reading order, so if more than half the labels read are a, b, c… in that
+  order, counting a p read for b or d, every panel takes its letter in that
+  order, as capitals if most of those read are. Otherwise each panel keeps
+  the letter read, and one without, or with a letter read for another panel
+  too, is named by its number in reading order.
+- A panel's label is painted over, inside its axes, before its curves are
+  traced, as it is usually drawn in a curve's colour. A label that OCR does
+  not find at all is traced as part of a curve of its colour, as a legend is.
+- A panel whose axes cannot be read, such as a colour bar with a frame, or a
+  panel whose ticks are labelled only on the panel beside it, as plots that
+  share an axis often are, is left out with a warning, as is one whose
+  curves cannot be traced. figrecover fails only if no panel is left.
+- `-n` and `-c` apply to each panel, and `-n` prints the colours of each.
+  `-m` needs an image of one plot. With `-p`, the image is one plot, as
+  before.
+- Each panel takes about as long to read as a plot, about two seconds.
+
 ### Python
 
 The same steps are available as a library:
@@ -418,6 +495,21 @@ print(axes.x_title, axes.y_title)  # Time (s) Voltage (mV)
 
 For logarithmic axes, pass `x_log=True` or `y_log=True` to
 `Calibration.from_points`; `read_axes` sets them itself.
+
+`read_panels` reads each panel of a figure, in reading order. A `Panel` has
+its `label`, such as `"a"`, or None; its `image`, the panel's part of the
+image, in which to trace its curves, with its label painted over; its `axes`,
+in pixels of its image; and the `offset` of its image's bottom-left corner in
+the whole image. An image of one plot is one panel, of the whole image:
+
+```python
+from figrecover import load_image, read_panels, trace_curve
+
+for panel in read_panels(load_image("examples/panels.png")):
+    calibration = panel.axes.calibration
+    data = calibration.to_data(trace_curve(panel.image, calibration.origin))
+    print(panel.label, panel.axes.x_title)  # a Energy (eV), b Time (s), ...
+```
 
 For several curves, `find_colours` returns the colours of the most common
 curves as `(red, green, blue)` tuples, and `trace_curves` traces one curve per
@@ -526,6 +618,10 @@ they mark, about two pixels.
   pixels of each other.
 - `--remove-grid` also removes straight horizontal or vertical stretches of
   curves that are 120 pixels or longer.
+- Panels are found by axis lines that meet, so a figure of plots without
+  them, or of plots whose axes touch, as plots sharing an axis often do, is
+  read as one plot. Insets, and legends shared by several panels, are not
+  read.
 
 ## Development
 
@@ -586,6 +682,7 @@ protection.
 ├── examples/                # example plots, their previews and the script that draws them
 ├── src/figrecover/
 │   ├── axes.py              # reading the axes from their tick labels
+│   ├── panels.py            # finding the panels of a figure, and reading each
 │   ├── calibration.py       # pixel-to-data mapping
 │   ├── digitize.py          # image loading, grid removal, curve colours and tracing
 │   ├── interactive.py       # window for clicking on reference points

@@ -39,6 +39,15 @@ The first release.
   axis, such as 758 among 250 and 500, are dropped. Titles keep their Greek
   letters, symbols, superscripts and subscripts, such as Δ, μm, CO₂ and mg
   L⁻¹, each written one way however OCR reads it.
+- With the `ocr` extra, a figure of several plots, such as panels labelled
+  (a), (b), (c), is read panel by panel: each is found by its axis lines,
+  read from its own part of the image, and named after its label, taking the
+  letters in reading order where OCR misreads or misses some, such as (b) as
+  (p). `-o` writes a CSV for each panel, such as `out_a.csv`, and standard
+  output gets one with a panel column. Each label is painted over before
+  tracing, and panels that cannot be read, such as colour bars, are left out
+  with a warning. Scale factors are read only where plotting libraries print
+  them, so that of a panel below is not taken for one of the x-axis above.
 - Logarithmic axes work too. figrecover finds them itself when it reads the
   axes, including tick labels written as powers, such as 10⁻² or 2⁵, even
   where OCR misses the superscripts; and `--log` names them for `-p`.
@@ -53,5 +62,6 @@ The first release.
   image. `-o` and `--preview` refuse to overwrite the image, or each other.
 - A typed Python API: `Calibration`, with linear or logarithmic axes,
   `load_image`, `remove_grid`, `find_colours`, `trace_curves`, `trace_curve`,
-  `find_markers` and, with the `ocr` extra, `read_axes`.
+  `find_markers` and, with the `ocr` extra, `read_axes`, and `read_panels`,
+  which returns a `Panel` for each plot in a figure.
 - Requires Python 3.14 on Linux, with NumPy and OpenCV.
