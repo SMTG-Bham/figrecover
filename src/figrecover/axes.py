@@ -4,9 +4,10 @@ import functools
 import itertools
 import math
 import re
+import unicodedata
 from collections import Counter
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import cv2
@@ -20,6 +21,7 @@ MIN_TICKS = 3
 """Fewest labelled ticks read on each axis, so that a misread label shows."""
 
 _TICK_TOLERANCE = 0.1  # a tick label this fraction of the tick spacing off is misread
+_STEP_TOLERANCE = 0.01  # a tick value this fraction of a step off the steps is misread
 _AXIS_REACH = 3  # an axis line may lie this many pixels beyond the first tick
 _TICK_GAP = 0.6  # tick marks and their padding take this many label heights
 _LINE_COVER = 0.9  # an axis line has ink along this fraction of its labels' span
@@ -29,11 +31,15 @@ _SNAP_SLACK = 2  # labels centred within this many pixels of the tick marks stay
 _RAISED = 0.25  # a superscript sits this fraction of its label's height up or more
 _RAISED_TICK = 1.4  # a label this many times taller than usual has a tick on top
 _WRITTEN = 1.5  # words this much wider than tall run across, or taller, upwards
-_LINE_SPACING = 1  # a title's lines lie this many line heights apart or less
+_LINE_SPACING = 1.25  # a title's lines lie this many line heights apart or less
+_TILT = 15  # labels in boxes tilted this many degrees or more may be slanted
+_SLANT = 30  # text tilted this many degrees or more is slanted, not raised
+_TURN = 45  # slanted labels are read again turned this many degrees each way
 _NUMBER = re.compile(  # 1, -2.5, 1,000, 2.5e-3 or 10%
-    r"([+-]?(?:\d{1,3}(?:,\d{3})+(?:\.\d*)?|\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)%?",
+    r"([+-]?(?:[1-9]\d{0,2}(?:,\d{3})+(?:\.\d*)?|\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)%?",
     re.IGNORECASE,
 )
+_SWAP = str.maketrans(",.", ".,")  # decimal commas to points, and back
 _TRAILING_DASH = re.compile(r"(.*\d%?)-+")  # a tick mark after a y-axis label
 _POWER = re.compile(  # 10^2, 10^{2}, 10-2, 2x10^2 or 2^5: a power, as OCR reads it
     r"(?:(\d+(?:\.\d*)?|\.\d+)[x\u00d7])?"
@@ -42,15 +48,34 @@ _POWER = re.compile(  # 10^2, 10^{2}, 10-2, 2x10^2 or 2^5: a power, as OCR reads
 _DIGITS = re.compile(r"\d+(?:\.\d+)?")  # 25, or 2^5 read without its superscript
 _SCALE = re.compile(r"(?:1e|[x\u00d7]10\^?)([+-]?\d+)")  # 1e-5 or 10 to the -5
 _OFFSET = re.compile(r"[+-].*\d(?:e|[x\u00d7]10).*")  # +1e3, added to the ticks
+_TITLE_FACTOR = re.compile(  # a power of ten after a bracket or slash, as in (x10^-3 A)
+    r"([(\[/]\s*)(?:[x\u00d7]\s?)?10"
+    r"(?:\^\{?([+-]?\d+)\}?|([\u207a\u207b]?[\u2070\u00b9\u00b2\u00b3\u2074-\u2079]+))\s*"
+)
+_EMPTY_BRACKETS = re.compile(r"\s*[(\[]\s*[)\]]")
 # Superscript signs and digits, and the degree and ordinal signs that OCR reads
 # for a superscript zero.
 _SUPERSCRIPT = re.compile(
     r"\^?([\u207a\u207b\u2070\u00b9\u00b2\u00b3\u2074-\u2079\u00b0\u00ba]+)"
 )
-_PLAIN = str.maketrans(  # minus signs, en dashes and superscripts
-    "\u2212\u2013\u207b\u207a\u2070\u00b9\u00b2\u00b3\u2074\u2075\u2076\u2077\u2078\u2079\u00b0\u00ba",
-    "---+012345678900",
+_PLAIN = str.maketrans(  # minus signs, dashes and superscripts
+    "\u2212\u2010\u2011\u2012\u2013\u2014\u2015\ufe63\uff0d"
+    "\u207b\u207a\u2070\u00b9\u00b2\u00b3\u2074\u2075\u2076\u2077\u2078\u2079\u00b0\u00ba",
+    "----------+012345678900",
 )
+# Symbols that OCR reads in more than one way, written one way: the increment
+# and micro signs as Greek capital delta and small mu, and full-width letters,
+# digits and signs, such as the full-width percent sign, as plain ones.
+_SYMBOLS = str.maketrans(
+    {"\u2206": "\u0394", "\u00b5": "\u03bc"}
+    | {chr(code): chr(code - 0xFEE0) for code in range(0xFF01, 0xFF5F)}
+)
+_RAISED_SIGN = re.compile(  # a sign before a superscript digit, read full size
+    r"[-+\u2212\u2010-\u2015\ufe63](?=[\u2070\u00b9\u00b2\u00b3\u2074-\u2079])"
+)
+_DIGIT = re.compile(r"\d")
+_ZERO = re.compile(r"[Oo]")  # a 0 misread, in a label with a digit
+_ONE = re.compile(r"[lI|](?=[\dOo.,])")  # a 1 misread, before a digit or point
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,7 +105,10 @@ class Axes:
 class _Text:
     """A line of text and its box, in pixels from the bottom-left corner.
 
-    ``score`` is how sure OCR is of the text, from 0 to 1.
+    ``score`` is how sure OCR is of the text, from 0 to 1, and ``slant`` the
+    angle in degrees, anticlockwise from across, at which the top of the box
+    that OCR found around it runs. OCR tilts the box of a slanted text, but
+    of a short one with a raised exponent too.
     """
 
     text: str
@@ -89,6 +117,7 @@ class _Text:
     right: float
     top: float
     score: float = 1
+    slant: float = 0
 
     @property
     def x(self) -> float:
@@ -102,12 +131,12 @@ class _Text:
 
     @property
     def plain(self) -> str:
-        """Return the text without spaces or typographic minus signs.
+        """Return the text without spaces of any width, and dashes as minus signs.
 
         Superscripts become plain characters after a caret, so 10 to the
         power of -2 reads as 10^-2.
         """
-        text = _SUPERSCRIPT.sub(r"^\1", self.text.replace(" ", ""))
+        text = _SUPERSCRIPT.sub(r"^\1", "".join(self.text.split()))
         return text.translate(_PLAIN)
 
 
@@ -117,10 +146,19 @@ def read_axes(image: Image) -> Axes:
     The x-axis tick labels are the lowest row of at least ``MIN_TICKS``
     numbers, and the y-axis tick labels the leftmost column of at least
     ``MIN_TICKS`` numbers above them, aligned on the right. Labels whose values
-    do not fall in line with the others, such as misread ones, are dropped.
+    do not fall in line with the others, such as misread ones, are dropped,
+    as are those on a linear axis whose values are off the even steps that
+    the others take.
     Each tick lies at the middle of its label. A scale factor printed where
     plotting libraries put one, such as ``1e-5`` above the y-axis or below
     the x-axis, multiplies the values of its axis's ticks.
+
+    Numbers may have decimal points and thousands separators of commas or
+    spaces, or decimal commas and thousands separators of points or spaces.
+    Numbers such as 0,5 and 1.000,5 read as numbers only with their commas
+    and points swapped, while 0.5 and 1,000.5 read as numbers only as
+    written, and 1,000 either way. A plot's numbers have decimal commas if
+    more read only with commas and points swapped than only as written.
 
     Numbers may be written as powers, such as 10^2, 2x10^3 or 2^5 with
     superscript exponents. OCR often misses superscripts, reading 2^5 as 25,
@@ -134,6 +172,10 @@ def read_axes(image: Image) -> Axes:
     An axis is logarithmic if more of its labels fall in line on a logarithmic
     scale than on a linear one.
 
+    OCR misreads x-axis tick labels written at a slant, as rotated labels
+    are, so if it has, they are read again turned level, as by
+    ``_with_slanted_labels``, and their digits are not taken for exponents.
+
     The axes cross where the axis lines run beside the tick labels. Without
     an axis line, its place is taken to be just beyond the tick labels and
     their tick marks, but no more than halfway to the first tick of the other
@@ -145,11 +187,16 @@ def read_axes(image: Image) -> Axes:
     The titles are the nearest lines of text beyond the tick labels, centred
     along their axes, from where the axes cross to the far end of the axis
     line or labels, so a title may be aligned with either end. A title runs
-    on over the lines that follow, each within a line's height of the one
-    before and aligned with it. A y-axis title written upwards, as most are,
+    on over the lines that follow, each within ``_LINE_SPACING`` line heights
+    of the one before and aligned with it. Texts below the x-axis tick labels
+    that are their second lines, such as units under each, are not the
+    title. A y-axis title written upwards, as most are,
     is read again turned upright, as OCR reads text written across more
     surely; one whose words are about as wide as tall, such as a single
-    letter, is read whichever way OCR is surer of.
+    letter, is read whichever way OCR is surer of. A power of ten after a
+    bracket or a slash in a title, as in Current (x10^-3 A) or Energy /
+    10^3 J, multiplies the values of its axis's ticks, and is left out of
+    the title.
 
     The text is read with RapidOCR, which the ``ocr`` extra installs.
 
@@ -165,13 +212,11 @@ def read_axes(image: Image) -> Axes:
             add to its tick values, or the plot has a second y-axis, on the
             right, with other values.
     """
-    texts = _read_text(image)
+    texts = _with_slanted_labels(image, _read_text(image))
+    if _decimal_comma(texts):
+        texts = [_with_decimal_points(text) for text in texts]
     ink = ink_mask(image)
-    numbers = [
-        text
-        for text in texts
-        if _NUMBER.fullmatch(_reading(text)) or _POWER.fullmatch(_reading(text))
-    ]
+    numbers = [text for text in texts if _number(_reading(text))]
     x_row = _lowest_row(numbers)
     above = [text for text in numbers if text.y > max(t.top for t in x_row)]
     y_column = _leftmost_column(above)
@@ -199,7 +244,9 @@ def read_axes(image: Image) -> Axes:
         else _beyond([t.top for t in x_labels], y_pixels[0], height),
     )
 
-    words = [text for text in texts if text not in {*x_labels, *y_labels}]
+    words = _without_second_lines(
+        [text for text in texts if text not in {*x_labels, *y_labels}], x_labels
+    )
     x_scale, y_scale = _scales(words, origin, y_labels)
     words = [word for word in words if not _SCALE.fullmatch(word.plain)]
     x_ticks = tuple(
@@ -224,12 +271,16 @@ def read_axes(image: Image) -> Axes:
         top = max(top, _line_end(ink[::-1, round(x_line - 0.5)] > 0, origin[1]))
     x_span = (origin[0], max(end, x_labels[-1].right))
     y_span = (origin[1], top)
+    x_title, x_factor = _factor(_x_title(words, x_labels, x_span))
+    y_title, y_factor = _factor(_y_title(words, y_labels, y_span, image, ink))
+    x_ticks = tuple((pixel, value * x_factor) for pixel, value in x_ticks)
+    y_ticks = tuple((pixel, value * y_factor) for pixel, value in y_ticks)
     return Axes(
-        calibration,
+        Calibration.from_ticks(x_ticks, y_ticks, origin, x_log=x_log, y_log=y_log),
         x_ticks,
         y_ticks,
-        _x_title(words, x_labels, x_span),
-        _y_title(words, y_labels, y_span, image, ink),
+        x_title,
+        y_title,
     )
 
 
@@ -246,22 +297,146 @@ def _engine() -> Any:
 
 
 def _read_text(image: Image) -> list[_Text]:
-    """Find the lines of text in an image."""
+    """Find the lines of text in an image, with symbols as ``_normal`` writes them.
+
+    OCR gives the corners of each text's box clockwise from the top left, in
+    pixels from the top-left corner of the image.
+    """
     found = _engine()(cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
     if found.boxes is None:
         return []
     height = image.shape[0]
     return [
         _Text(
-            text.strip(),
+            _normal(text),
             float(box[:, 0].min()),
             height - float(box[:, 1].max()),
             float(box[:, 0].max()),
             height - float(box[:, 1].min()),
             float(score),
+            math.degrees(math.atan2(box[0, 1] - box[1, 1], box[1, 0] - box[0, 0])),
         )
         for box, text, score in zip(found.boxes, found.txts, found.scores, strict=True)
     ]
+
+
+def _normal(text: str) -> str:
+    """Return text read by OCR with each symbol written one way.
+
+    Symbols that OCR reads in more than one way are written one way, so that
+    a title reads alike each time: the increment, micro, ohm and angstrom
+    signs as Greek capital delta, small mu, capital omega and A with a ring,
+    and full-width letters, digits and signs as plain ones. OCR can read the
+    raised minus or plus sign of a superscript full size, as in 10 to the -3,
+    so a sign or dash before a superscript digit is written raised too.
+    """
+    text = unicodedata.normalize("NFC", text.strip()).translate(_SYMBOLS)
+    return _RAISED_SIGN.sub(lambda sign: "\u207a" if sign[0] == "+" else "\u207b", text)
+
+
+def _with_slanted_labels(image: Image, texts: list[_Text]) -> list[_Text]:
+    """Return texts with the x-axis tick labels read again turned, if slanted.
+
+    OCR misreads tick labels written at a slant, as rotated labels are, such
+    as 2 as a Chinese character and 6 as 9, but reads them well turned level.
+    The labels are the texts level with the lowest row of numbers, and along
+    it, and they are taken to be slanted if one is no number and the box of
+    one tilts ``_TILT`` degrees or more. The image below a label's height
+    above the row, so that the tops of the labels are kept, is then read
+    again, turned ``_TURN`` degrees each way. Each label takes the text of
+    the number read turned whose middle lies in its box, as slanted, keeping
+    its box, which fits the label better than one turned back. If more
+    labels are then numbers, those of the turn that makes the most replace
+    the labels.
+    """
+    try:
+        row = _lowest_row([text for text in texts if _number(_reading(text))])
+    except ValueError:
+        return texts  # no x-axis to read
+    bottom, top = min(t.bottom for t in row), max(t.top for t in row)
+    left, right = min(t.left for t in row), max(t.right for t in row)
+    labels = [
+        text for text in texts if bottom <= text.y <= top and left <= text.x <= right
+    ]
+    if all(_number(_reading(label)) for label in labels) or all(
+        abs(label.slant) < _TILT for label in labels
+    ):
+        return texts
+    height = float(np.median([text.top - text.bottom for text in row]))
+    best = row
+    for angle in (-_TURN, _TURN):
+        turned = [
+            text
+            for text in _read_turned(image, top + height, angle)
+            if _number(_reading(text))
+        ]
+        read = [
+            next(
+                (
+                    replace(label, text=text.text, slant=text.slant)
+                    for text in turned
+                    if label.left <= text.x <= label.right
+                    and label.bottom <= text.y <= label.top
+                ),
+                label,
+            )
+            for label in labels
+        ]
+        numbers = [label for label in read if _number(_reading(label))]
+        if len(numbers) > len(best):
+            best = numbers
+    if best is row:
+        return texts
+    return [text for text in texts if text not in labels] + best
+
+
+def _read_turned(image: Image, top: float, angle: float) -> list[_Text]:
+    """Find the lines of text below ``top``, read turned ``angle`` degrees.
+
+    The strip of the image below ``top`` is turned anticlockwise about its
+    middle on a square of its background, wide enough to hold it at any
+    angle. Each text read is placed where it lies in the image, in the box
+    around the corners of its box turned back, slanted at minus ``angle``.
+    """
+    height = image.shape[0]
+    first = max(height - math.ceil(top), 0)
+    strip = image[first:]
+    rows, columns = strip.shape[:2]
+    side = math.ceil(math.hypot(rows, columns))
+    background = np.median(strip.reshape(-1, 3), axis=0)
+    square = np.full((side, side, 3), background, dtype=np.uint8)
+    down, across = (side - rows) // 2, (side - columns) // 2
+    square[down : down + rows, across : across + columns] = strip
+    turn = cv2.getRotationMatrix2D((side / 2, side / 2), angle, 1)
+    level = np.asarray(
+        cv2.warpAffine(square, turn, (side, side), borderValue=background.tolist()),
+        dtype=np.uint8,
+    )
+    back = cv2.invertAffineTransform(turn)
+    texts = []
+    for text in _read_text(level):
+        # The box's corners, from the square's top-left corner, turned back.
+        corners = np.array(
+            [
+                (x, side - y)
+                for x in (text.left, text.right)
+                for y in (text.bottom, text.top)
+            ]
+        )
+        x, y = (corners @ back[:, :2].T + back[:, 2]).T
+        x, y = x - across, y - down + first
+        texts.append(
+            _Text(
+                text.text,
+                float(x.min()),
+                height - float(y.max()),
+                float(x.max()),
+                height - float(y.min()),
+                text.score,
+                -angle,
+            )
+        )
+    return texts
 
 
 def _read_upwards(image: Image, ink: npt.NDArray[np.uint8], right: int) -> list[_Text]:
@@ -304,6 +479,34 @@ def _transposed(text: _Text) -> _Text:
     text nearest the y-axis tick labels on their left lies nearest them below.
     """
     return _Text(text.text, text.bottom, text.left, text.top, text.right, text.score)
+
+
+def _number(reading: str) -> bool:
+    """Return whether a label's reading is a number or a power."""
+    return bool(_NUMBER.fullmatch(reading) or _POWER.fullmatch(reading))
+
+
+def _decimal_comma(texts: Iterable[_Text]) -> bool:
+    """Return whether the numbers among texts are written with decimal commas.
+
+    That is, whether more texts read as numbers only with their commas and
+    points swapped, as 0,5 does, than only as written, as 0.5 does.
+    """
+    votes = 0
+    for text in texts:
+        reading = _reading(text)
+        votes += bool(_NUMBER.fullmatch(reading.translate(_SWAP)))
+        votes -= bool(_NUMBER.fullmatch(reading))
+    return votes > 0
+
+
+def _with_decimal_points(text: _Text) -> _Text:
+    """Return a text with its commas and points swapped if it then reads as a number.
+
+    Other text, such as a title with a comma, is returned as it is.
+    """
+    swapped = replace(text, text=text.text.translate(_SWAP))
+    return swapped if _number(_reading(swapped)) else text
 
 
 def _lowest_row(numbers: Sequence[_Text]) -> list[_Text]:
@@ -355,9 +558,10 @@ def _in_line(
     """Return the most tick labels whose values are in line with their positions.
 
     The values are taken on a linear scale and on a logarithmic one, and the
-    scale on which more labels are in line wins, the linear one in a tie. The
-    ink shows which labels have superscripts, and ``height`` is the usual
-    height of a label.
+    scale on which more labels are in line wins, the linear one in a tie. On
+    the linear scale, labels in line count only if they take the even steps
+    that most do. The ink shows which labels have superscripts, and
+    ``height`` is the usual height of a label.
 
     Returns:
         The labels in line, by position, their values, and whether the scale
@@ -368,6 +572,8 @@ def _in_line(
     values = _values(labels, ink, height)
     tolerance = _TICK_TOLERANCE * np.median(np.diff(pixels))
     linear = _most_in_line(pixels, values, tolerance)
+    if np.count_nonzero(linear) >= MIN_TICKS:
+        linear = _evenly_stepped(pixels, values, linear)
     exponents = np.log10(values, out=np.full_like(values, np.nan), where=values > 0)
     logarithmic = _most_in_line(pixels, exponents, tolerance)
     log = bool(np.count_nonzero(logarithmic) > np.count_nonzero(linear))
@@ -375,7 +581,8 @@ def _in_line(
     if np.count_nonzero(best) < MIN_TICKS:
         msg = (
             f"only {np.count_nonzero(best)} of the {len(labels)} {name}-axis tick "
-            "labels are in line, on a linear or a logarithmic scale"
+            "labels are in line, on a linear scale at even steps or on a "
+            "logarithmic scale"
         )
         raise ValueError(msg)
     return list(itertools.compress(labels, best)), values[best].tolist(), log
@@ -387,19 +594,23 @@ def _values(
     """Return the values of tick labels, which are numbers or powers.
 
     OCR often misses superscripts, reading 2^5 as 25. A label that reads as
-    digits shows that it is a power if its last digit is drawn raised, and
-    its digits drawn full size are then its base. The base of the axis is the
-    one most labels shown as powers have, by their text or raised digits, or
-    10 if none are. A label that reads as that base followed by digits is a
+    digits shows that it is a power if its last digit is drawn raised, and its
+    digits drawn full size are then its base; but not if it is slanted
+    ``_SLANT`` degrees or more, as rotated labels are, whose last digit lies
+    higher than the others if they rise to the right. The base of the axis is
+    the one most labels shown as powers have, by their text or raised digits,
+    or 10 if none are. A label that reads as that base followed by digits is a
     power of it if its last digit is raised, or if most of the other labels
-    that read as powers of the base or as it followed by digits show that
-    they are powers. One misread label, such as 100 read with a degree sign
-    for its last 0, so does not make an axis of 100, 101 and 102 logarithmic.
+    that read as powers of the base or as it followed by digits show that they
+    are powers. One misread label, such as 100 read with a degree sign for its
+    last 0, so does not make an axis of 100, 101 and 102 logarithmic.
     """
     readings = [_reading(label, height) for label in labels]
     written = [_POWER.fullmatch(reading) for reading in readings]
     raised = [
-        _exponent(ink, label) if _DIGITS.fullmatch(reading) else None
+        _exponent(ink, label)
+        if _DIGITS.fullmatch(reading) and abs(label.slant) < _SLANT
+        else None
         for label, reading in zip(labels, readings, strict=True)
     ]
     bases = Counter(
@@ -448,13 +659,19 @@ def _base(reading: str, length: int) -> str | None:
 
 
 def _reading(label: _Text, height: float = math.inf) -> str:
-    """Return a label's plain text without dashes that are tick marks.
+    """Return a label's plain text, with misread digits, without tick marks.
+
+    OCR can read 0 as O or o, and 1 as l, I or |. In a label with a digit,
+    these letters are read as digits, but l, I and | only before a digit or
+    a point, as after one they may be a unit, such as l for litres.
 
     Where no axis line joins them, OCR can read a tick mark as a dash: after
     a y-axis label, or before an x-axis label, whose box the tick then makes
     ``_RAISED_TICK`` times taller than the usual ``height`` or more.
     """
     text = label.plain
+    if _DIGIT.search(text):
+        text = _ZERO.sub("0", _ONE.sub("1", text))
     if match := _TRAILING_DASH.fullmatch(text):
         text = match[1]
     if text.startswith("-") and label.top - label.bottom >= _RAISED_TICK * height:
@@ -468,11 +685,15 @@ def _exponent(ink: npt.NDArray[np.uint8], label: _Text) -> tuple[int, int] | Non
     The characters are the pieces of ink in the label's box at least a third as
     tall as the tallest, which leaves out points, minus signs and flat tick
     marks. A character is raised if its bottom is ``_RAISED`` of the
-    characters' height or more above the lowest bottom. The last character
-    is an exponent if it is raised, and the base is then the characters that
-    are not, leaving out tick marks above the label. The exponent is negative
-    if a flat piece, at least twice as wide as tall, lies level with the
-    exponent and before it, after the middle of the base's last character.
+    characters' height or more above the lowest bottom. The base is the
+    characters that are not raised, leaving out tick marks above the label,
+    and the last character, the one ending furthest right, is an exponent if
+    it is raised and starts after the middle of the base's last character.
+    The characters of a label written upwards, as rotated tick labels can
+    be, stand one above another, so its last one is raised but no exponent.
+    The exponent is negative if a flat piece, at least twice as wide as tall,
+    lies level with the exponent and before it, after the middle of the
+    base's last character.
 
     Returns:
         The number of characters in the base and the sign of the exponent, or
@@ -492,11 +713,11 @@ def _exponent(ink: npt.NDArray[np.uint8], label: _Text) -> tuple[int, int] | Non
     lowest = bottoms[characters].max()  # rows count downwards
     raised = lowest - bottoms >= _RAISED * (lowest - top[characters].min())
     last = characters[np.argmax(left[characters] + width[characters])]
-    if not raised[last]:
-        return None
     base = characters[~raised[characters]]
     middles = top + tall / 2
     centres = left + width / 2
+    if not raised[last] or left[last] <= centres[base].max():
+        return None
     minus = (
         (tall < tall.max() / 3)
         & (width >= 2 * tall)
@@ -528,6 +749,36 @@ def _most_in_line(
     return best
 
 
+def _evenly_stepped(
+    pixels: npt.NDArray[np.float64],
+    values: npt.NDArray[np.float64],
+    in_line: npt.NDArray[np.bool_],
+) -> npt.NDArray[np.bool_]:
+    """Return which values in line take the even steps that the most of them take.
+
+    Plotting libraries label a linear axis at even steps, such as 0, 250 and
+    500, so a value off the steps that the others take, such as 758 read for
+    750, is misread, though it may lie close enough to its tick to be in
+    line. Each pair of values in line sets a step: their difference over the
+    number of ticks between them, counted in the shortest spacing of the
+    labels in line. A value takes the steps if it lies within
+    ``_STEP_TOLERANCE`` of a step from the first value of the pair. The steps
+    that the most values take win, the longest in a tie.
+    """
+    indices = np.flatnonzero(in_line)
+    spacing = float(np.diff(pixels[indices]).min())
+    best = np.zeros_like(in_line)
+    longest = 0.0
+    for first, second in itertools.combinations(indices, 2):
+        ticks = max(round(float(pixels[second] - pixels[first]) / spacing), 1)
+        step = float(abs(values[second] - values[first])) / ticks
+        steps = (values - values[first]) / step
+        taken = in_line & (np.abs(steps - np.round(steps)) <= _STEP_TOLERANCE)
+        if (np.count_nonzero(taken), step) > (np.count_nonzero(best), longest):
+            best, longest = taken, step
+    return best
+
+
 def _axis_lines(
     ink: npt.NDArray[np.bool_], x_labels: Sequence[_Text], y_labels: Sequence[_Text]
 ) -> tuple[float | None, float | None]:
@@ -536,20 +787,22 @@ def _axis_lines(
     The y-axis line is the leftmost column, from the right of the y-axis tick
     labels to just past the first x-axis tick, with ink along ``_LINE_COVER``
     of the span of the y-axis ticks, as a flat stretch of a curve on the first
-    tick seldom has. The x-axis line is found the same way. An axis without
-    such a line gives None.
+    tick seldom has. The labels end where most of them do, as OCR can stretch
+    the box of one over the axis line, such as the label at the corner beside
+    a wide x-axis label. The x-axis line is found the same way. An axis
+    without such a line gives None.
     """
     height = ink.shape[0]
     first_x, last_x = x_labels[0].x, x_labels[-1].x
     first_y, last_y = y_labels[0].y, y_labels[-1].y
 
     # Columns run from the labels to the plot; so do rows, read bottom to top.
-    start = math.ceil(max(label.right for label in y_labels))
+    start = math.ceil(np.median([label.right for label in y_labels]))
     rows = slice(height - math.floor(last_y), height - math.ceil(first_y) + 1)
     columns = ink[rows, start : math.floor(first_x) + _AXIS_REACH + 1]
     x = _first_line(columns.sum(axis=0), last_y - first_y, start + 0.5)
 
-    start = math.ceil(max(label.top for label in x_labels))
+    start = math.ceil(np.median([label.top for label in x_labels]))
     rows = slice(height - math.floor(first_y) - _AXIS_REACH, height - start + 1)
     lines = ink[rows, math.ceil(first_x) : math.floor(last_x) + 1][::-1]
     y = _first_line(lines.sum(axis=1), last_x - first_x, start - 0.5)
@@ -715,6 +968,33 @@ def _scales(
     return scales[0], scales[1]
 
 
+def _without_second_lines(
+    words: Sequence[_Text], x_labels: Sequence[_Text]
+) -> list[_Text]:
+    """Return words without those that are second lines of the x-axis tick labels.
+
+    Tick labels can run over two lines or more, as in 2 above (120), or 0
+    above s. Words in the row nearest below the labels whose middles lie
+    within the box of a label are its second lines if at least ``MIN_TICKS``
+    labels have one, as a title, centred along the axis, does not. So are
+    those of each row below that likewise. Other words in such a row, such
+    as a scale factor beyond the last label, are kept.
+    """
+    words = list(words)
+    bottom = min(label.bottom for label in x_labels)
+    for row in _groups([word for word in words if word.y < bottom], lambda w: -w.y):
+        under = {
+            word: label
+            for word in row
+            for label in x_labels
+            if label.left <= word.x <= label.right
+        }
+        if len(set(under.values())) < MIN_TICKS:
+            break
+        words = [word for word in words if word not in under]
+    return words
+
+
 def _x_title(
     words: Sequence[_Text], x_labels: Sequence[_Text], span: tuple[float, float]
 ) -> str | None:
@@ -741,7 +1021,9 @@ def _y_title(
     nearest the labels are ``_WRITTEN`` times wider than tall, and so run
     across, the text left of the labels is read again turned upright. If
     they are about as wide as tall, as a single letter is, the title is read
-    whichever way OCR is surer of, upwards if it is as sure.
+    whichever way OCR is surer of, upwards if it is as sure. So it is if it
+    reads upright as it does as first read but with a character twice, as
+    OCR can read a turned capital delta.
     """
     left = min(label.left for label in y_labels)
     beside = [word for word in words if word.x < left and span[0] <= word.y <= span[1]]
@@ -764,18 +1046,49 @@ def _y_title(
     ]
     # Transposed, the lines of a title written upwards run from the last up.
     upwards = _lines(upright or map(_transposed, beside))[::-1]
-    if height >= _WRITTEN * width:
+    if height >= _WRITTEN * width and not _doubled(upwards, across):
         return _title(upwards)
     return _title(max(upwards, across, key=_score))
+
+
+def _doubled(lines: Sequence[_Text], others: Sequence[_Text]) -> bool:
+    """Return whether a title reads as another with one of its characters twice."""
+    title, other = _title(lines) or "", _title(others) or ""
+    return any(
+        title[:index] + title[index + 1 :] == other
+        for index in range(1, len(title))
+        if title[index] == title[index - 1]
+    )
+
+
+def _factor(title: str | None) -> tuple[str | None, float]:
+    """Return a title without the scale factor it gives its axis, and the factor.
+
+    The factor is a power of ten, after an opening bracket or a slash, as in
+    Current (x10^-3 A), Count (x10^3) or Energy / 10^3 J, with superscript
+    exponents, whose values are in units of 10^-3 A, thousands, or 10^3 J.
+    The title is left as Current (A), Count or Energy / J, without brackets
+    left empty. The prefixes of units, as in Voltage (mV), are kept: values
+    stay in the units the title names. A title without a factor has a
+    factor of 1.
+    """
+    match = _TITLE_FACTOR.search(title or "")
+    if title is None or match is None:
+        return title, 1.0
+    exponent = match[2] or match[3].translate(_PLAIN)
+    title = title[: match.start()] + match[1] + title[match.end() :]
+    return _EMPTY_BRACKETS.sub("", title).strip() or None, 10.0 ** int(exponent)
 
 
 def _lines(texts: Iterable[_Text]) -> list[_Text]:
     """Return the lines of a title, the topmost first, each as one text.
 
     The first line is the topmost text and the text level with it. Each line
-    after it lies below the one before, within ``_LINE_SPACING`` of its height,
-    centre to centre, and aligned with it, the middle of one lying within the
-    other, so text further on, such as a caption, is left out.
+    after it lies below the one before, within ``_LINE_SPACING`` times the
+    height of the taller of the two, centre to centre, as a line of short
+    letters, such as T, has a short box; and aligned with it, the middle of
+    one lying within the other, so text further on, such as a caption, is
+    left out.
     """
     remaining = list(texts)
     lines: list[_Text] = []
@@ -804,7 +1117,8 @@ def _line(texts: Sequence[_Text]) -> _Text:
 
 def _follows(line: _Text, before: _Text) -> bool:
     """Return whether a line carries on a title from the line before it."""
-    return before.y - line.y <= _LINE_SPACING * (before.top - before.bottom) and (
+    height = max(before.top - before.bottom, line.top - line.bottom)
+    return before.y - line.y <= _LINE_SPACING * height and (
         before.left <= line.x <= before.right or line.left <= before.x <= line.right
     )
 

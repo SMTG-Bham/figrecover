@@ -56,6 +56,12 @@ With the `ocr` extra, you can leave out both and let figrecover read the tick
 labels instead; see [Reading the axes](#reading-the-axes). For logarithmic
 axes, see [Logarithmic axes](#logarithmic-axes).
 
+figrecover traces the part of the image above and right of the lowest and
+leftmost reference points, so take them on the axis lines. A reversed axis,
+whose values fall from left to right or from bottom to top, starts at its
+largest value, so take the corner where the axes cross rather than the
+origin, and ticks on the axis lines.
+
 If you leave out `-l`, figrecover opens the image and asks you to click on each
 reference point in turn (press q to cancel). It then prints the matching `-l`
 options, ready to reuse for the rest of a batch of similar plots:
@@ -229,17 +235,48 @@ work as before.
 - The x-axis tick labels are the lowest row of three or more numbers, and the
   y-axis tick labels the leftmost column of three or more numbers above them.
   Labels whose values are out of line with the rest, such as misread ones, are
-  dropped. An axis with fewer than three labels in line cannot be read.
+  dropped. On a linear axis, labels must also take the even steps that
+  plotting libraries label at: at low resolution OCR misreads digits as
+  others, such as 750 as 758, close enough to their ticks to look in line,
+  and those are dropped too. An axis with fewer than three labels in line
+  cannot be read, so neither can a linear axis labelled at uneven values,
+  such as 0, 273 and 373; give `-p` instead.
   Logarithmic axes are read too; see [Logarithmic axes](#logarithmic-axes).
-- Numbers can have thousands separators (`2,000`), a percent sign (`50%`, read
-  in percent) or an exponent (`2.5e-3`). A tick mark that OCR reads as a dash
-  beside a label, as it can where no axis line joins them, is ignored.
+  So are reversed axes, whose values fall from left to right or from bottom
+  to top, as depth often does.
+- Numbers can have thousands separators (`2,000` or `2 000`), a percent sign
+  (`50%`, read in percent) or an exponent (`2.5e-3`). A tick mark that OCR
+  reads as a dash beside a label, as it can where no axis line joins them, is
+  ignored.
+- Decimal commas work too, with points or spaces as thousands separators
+  (`0,5` and `2.000`), as many European plots write them. A plot's labels
+  decide: a label such as `0,5` reads as a number only with decimal commas,
+  `0.5` only with decimal points, and `2.000` either way, so figrecover takes
+  the way more labels read only one way, decimal points if neither wins. A
+  single label misread with a comma does not outvote the rest.
+- OCR can mistake letters for digits, and dashes for minus signs. In a label
+  with a digit, O and o are read as 0, and l, I and | as 1 before a digit or
+  a point, so `1O` and `l.5` read as 10 and 1.5; after a digit, they may be a
+  unit, such as `5 l`, and are not read. Any dash before a number, such as
+  an en or em dash, is a minus sign.
 - A scale factor printed where plotting libraries put one, such as `1e-5` or
   `×10³` above the y-axis or below the x-axis, multiplies that axis's tick
   values. Text elsewhere that looks like one, such as a legend entry, does
   not. An axis offset, such as `+1e3`, cannot be read.
+- A power of ten in an axis title, after a bracket or a slash, as in
+  `Current (×10⁻³ A)`, `Count (×10³)` or `Energy / 10³ J`, says the axis is in
+  units of that power, so it multiplies the tick values too, and is left out
+  of the column's name: `Current (A)`, `Count` or `Energy / J`. Units are not
+  converted, so a column titled `Voltage (mV)` stays in millivolts.
 - Each tick lies at the middle of its label, or, for labels that end at their
   tick marks rather than centring on them, as rotated labels do, at the mark.
+  Labels written upwards, turned a quarter turn, are read as well as those
+  written across. OCR often misreads x-axis labels at a slant, such as 45°,
+  so if it misreads one and finds another's box tilted, figrecover reads the
+  labels again with the image turned 45° each way, which takes about a
+  second more, and takes their texts from the turn that reads the most of
+  them as numbers. Labels at 60° can still be missed, and those misread are
+  dropped.
 - figrecover traces the curves from the axis lines, not from the first ticks,
   so the margins that plotting libraries leave inside the axes are kept. If
   there are no axis lines, it starts just beyond the tick labels and their
@@ -248,13 +285,28 @@ work as before.
   one, cannot be read: crop the right axis out, or give `-p`.
 - The titles are the nearest text below the x-axis tick labels and left of the
   y-axis ones, centred anywhere along their axes, so a title aligned with
-  either end of its axis is read too. A title can run over several lines,
-  each within a line's height of the one before and lined up with it, so a
-  caption further below is left out. A y-axis title written upwards, as most
-  are, is read again with the text left of the tick labels turned upright,
-  which OCR reads more surely; one written across is read as it is. A column
-  without a title is named `x` or `y`. Titles of a single letter are easily
-  misread, such as `x` as `X`, or missed.
+  either end of its axis is read too. A title can run over several lines, as a
+  `\n` breaks it, each within 1.25 line heights of the one before, by the
+  taller of the two, and lined up with it, so a caption beside it, or further
+  below, is left out. Tick labels broken over lines, such as `0\ns` with units
+  under each number, are read by their first lines, and their other lines are
+  not taken for the x-axis title. A y-axis title written upwards, as most are,
+  is read again with the text left of the tick labels turned upright, which
+  OCR reads more surely; one written across is read as it is. A column without
+  a title is named `x` or `y`. Titles of a single letter are easily misread,
+  such as `x` as `X`, or missed.
+- Titles keep their Greek letters, symbols, superscripts and subscripts, such
+  as `ΔE (%)`, `Wavelength (μm)` and `CO₂ (mg L⁻¹)`, and the CSV header
+  writes them in UTF-8. OCR reads some symbols as either of two that look
+  alike, so each is written one way: the increment sign as Greek Δ, the micro
+  sign as Greek μ, and full-width signs, such as `％`, as plain ones. It can
+  also read the raised minus sign of a superscript full size, so a minus sign
+  before a superscript digit is raised, and `10−³` reads as 10⁻³, in titles
+  and tick labels alike. OCR reads symbols less surely than letters, so
+  check the printed titles. Turned upright, it has read `ΔE` as `ΔΔE`, so if
+  a title reads upright as it first did but with a character twice,
+  figrecover takes whichever reading OCR is surer of; `ΔΔG`, read alike both
+  ways, is kept.
 
 The titles of `examples/titled.png` run over two lines:
 
@@ -265,6 +317,19 @@ figrecover examples/titled.png
 ```text
 figrecover: x-axis "Photon energy (eV)" with ticks at 0, 2, 4, 6, 8, 10
 figrecover: y-axis "Absorbance (arb. units)" with ticks at 0, 0.5, 1, 1.5, 2, 2.5, 3
+```
+
+The x-axis tick labels of `examples/slanted.png` are written at 45°, which
+OCR misreads as drawn, reading 2 as a Chinese character and 6 as 9, but reads
+turned level:
+
+```bash
+figrecover examples/slanted.png
+```
+
+```text
+figrecover: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10
+figrecover: y-axis "Voltage (mV)" with ticks at 0, 0.5, 1, 1.5, 2, 2.5
 ```
 
 When a plot's labels cannot be read, give `-p` as before.
@@ -452,7 +517,9 @@ they mark, about two pixels.
   dotted lines may not be found.
 - Where curves cross, the one drawn underneath loses a few pixels, and its
   points there can be a pixel or two out.
-- The axes must be horizontal and vertical, with linear or logarithmic scales.
+- The axes must be horizontal and vertical, with linear or logarithmic scales,
+  though either may be reversed. To read the axes, the x-axis must lie below
+  the plot and the y-axis left of it.
 - Each column gives one point per branch of a curve, so steep peaks come out
   slightly lower, vertical lines in the plot area become single points, and
   the two sides of a loop merge into one point where they come within 6

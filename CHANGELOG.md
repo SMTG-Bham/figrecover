@@ -23,16 +23,28 @@ The first release.
   matching `-l` options to reuse for similar plots.
 - With the `ocr` extra, figrecover reads the axes when `-p` is left out: it
   calibrates each image from its tick labels, including thousands separators,
-  percentages and exponents, applying scale factors such as `1e-5` printed
-  beside an axis, traces from where the axis lines cross, and names the CSV
-  columns after the axis titles. Titles can run over several lines and be
-  aligned with either end of their axes, and y-axis titles written upwards
-  are read turned upright, so OCR no longer splits or misreads them. It
-  places the ticks of rotated labels at their tick marks, reads plots without
-  axis lines, and refuses a second y-axis on the right.
+  decimal commas, percentages and exponents, applying scale factors such as
+  `1e-5` printed beside an axis or `×10⁻³` written in its title, traces from
+  where the axis lines cross, and names the CSV columns after the axis titles.
+  Titles can run over several lines, as `\n` breaks them, and be aligned with
+  either end of their axes; y-axis titles written upwards are read turned
+  upright, so OCR no longer splits or misreads them; and the second lines of
+  tick labels broken over lines, such as units, are not taken for the x-axis
+  title. It reads tick labels written upwards, reads those written at a slant
+  again turned level if OCR misread them, places the ticks of rotated labels
+  at their tick marks, reads plots without axis lines, and refuses a second
+  y-axis on the right. Tick labels in which OCR mistook letters for digits,
+  such as `1O` or `l.5`, or dashes for minus signs, are read as they were
+  written, and those misread as other digits, off the even steps of a linear
+  axis, such as 758 among 250 and 500, are dropped. Titles keep their Greek
+  letters, symbols, superscripts and subscripts, such as Δ, μm, CO₂ and mg
+  L⁻¹, each written one way however OCR reads it.
 - Logarithmic axes work too. figrecover finds them itself when it reads the
   axes, including tick labels written as powers, such as 10⁻² or 2⁵, even
   where OCR misses the superscripts; and `--log` names them for `-p`.
+- Reversed axes, whose values fall from left to right or from bottom to top,
+  work too, when figrecover reads the axes or with `-p` reference points on
+  the axis lines.
 - `--preview` saves a faded copy of the image with each recovered curve drawn
   in its colour, and `--remove-grid` paints over grid lines before tracing.
 - Transparent pixels are treated as white, and plots with a dark background

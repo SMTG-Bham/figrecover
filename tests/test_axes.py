@@ -4,13 +4,14 @@ import dataclasses
 import math
 from collections.abc import Sequence
 from pathlib import Path
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
 import pytest
 
 from figrecover import Axes, Image, axes, load_image, read_axes
-from figrecover.axes import _PLAIN, _read_text, _Text
+from figrecover.axes import _PLAIN, _factor, _read_text, _Text
 
 EXAMPLES = Path(__file__).parents[1] / "examples"
 HEIGHT, WIDTH = 300, 400
@@ -140,6 +141,20 @@ def test_reads_titles_of_two_lines() -> None:
     assert found.y_title == "Absorbance (arb. units)"
 
 
+def test_reads_slanted_tick_labels() -> None:
+    found = read_axes(load_image(EXAMPLES / "slanted.png"))
+    # The pixel positions of (0, 0), (10, 0) and (0, 1) that
+    # examples/make_examples.py prints.
+    pixels = [(56, 56), (625, 56), (56, 190)]
+
+    data = found.calibration.to_data(pixels)
+
+    # As drawn, OCR reads the x-axis labels 2 as a Chinese character and 6 as
+    # 9, and the 0 of 10 lies higher than the 1, like an exponent.
+    assert [value for _, value in found.x_ticks] == [0, 2, 4, 6, 8, 10]
+    np.testing.assert_allclose(data, [(0, 0), (10, 0), (0, 1)], atol=0.03)
+
+
 @pytest.mark.parametrize("name", ["labelled", "spectrum"])
 def test_finds_where_the_axis_lines_cross(name: str) -> None:
     # The axes of labelled.png start before the first ticks, and those of
@@ -195,6 +210,74 @@ def read(
     return read_axes(plot(lines=lines))
 
 
+def ocr(monkeypatch: pytest.MonkeyPatch, texts: Sequence[_Text]) -> None:
+    """Make OCR find the texts in a plot, as RapidOCR gives them.
+
+    RapidOCR gives the corners of each text's box clockwise from the top left,
+    in pixels from the top-left corner of the image.
+    """
+    boxes = [
+        [
+            (t.left, HEIGHT - t.top),
+            (t.right, HEIGHT - t.top),
+            (t.right, HEIGHT - t.bottom),
+            (t.left, HEIGHT - t.bottom),
+        ]
+        for t in texts
+    ]
+    found = SimpleNamespace(
+        boxes=np.array(boxes, dtype=np.float32),
+        txts=[t.text for t in texts],
+        scores=[t.score for t in texts],
+    )
+    monkeypatch.setattr(axes, "_engine", lambda: lambda _image: found)
+
+
+@pytest.mark.parametrize(
+    ("misread", "written"),
+    [
+        # Symbols that OCR reads as either of two that look alike.
+        ("\N{INCREMENT}E", "\N{GREEK CAPITAL LETTER DELTA}E"),
+        ("\N{MICRO SIGN}m", "\N{GREEK SMALL LETTER MU}m"),
+        ("\N{OHM SIGN}", "\N{GREEK CAPITAL LETTER OMEGA}"),
+        ("\N{ANGSTROM SIGN}", "\N{LATIN CAPITAL LETTER A WITH RING ABOVE}"),
+        ("\N{FULLWIDTH LEFT PARENTHESIS}5\N{FULLWIDTH PERCENT SIGN} ", "(5%"),
+        # The raised signs of superscripts, read full size.
+        (
+            "10\N{MINUS SIGN}\N{SUPERSCRIPT THREE}",
+            "10\N{SUPERSCRIPT MINUS}\N{SUPERSCRIPT THREE}",
+        ),
+        ("m-\N{SUPERSCRIPT THREE}", "m\N{SUPERSCRIPT MINUS}\N{SUPERSCRIPT THREE}"),
+        ("10+\N{SUPERSCRIPT TWO}", "10\N{SUPERSCRIPT PLUS SIGN}\N{SUPERSCRIPT TWO}"),
+        # Subscripts, and signs before full-size digits, stay as they are.
+        ("CO\N{SUBSCRIPT TWO} -2", "CO\N{SUBSCRIPT TWO} -2"),
+    ],
+)
+def test_writes_symbols_read_in_several_ways_one_way(
+    monkeypatch: pytest.MonkeyPatch, misread: str, written: str
+) -> None:
+    ocr(monkeypatch, [_Text(misread, 20, 8, 380, 22, 0.9)])
+
+    assert _read_text(plot()) == [_Text(written, 20, 8, 380, 22, 0.9)]
+
+
+def test_reads_powers_whose_minus_ocr_read_full_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    minus = "\N{MINUS SIGN}"
+    powers = ["\N{SUPERSCRIPT THREE}", "\N{SUPERSCRIPT TWO}", "\N{SUPERSCRIPT ONE}"]
+    labels = [
+        *x_labels([f"10{minus}{power}" for power in powers]),
+        *y_labels(["0", "1", "2"]),
+    ]
+    ocr(monkeypatch, labels)
+
+    found = read_axes(plot())
+
+    assert [value for _, value in found.x_ticks] == [0.001, 0.01, 0.1]
+    assert found.calibration.x_log
+
+
 def test_fits_the_ticks(monkeypatch: pytest.MonkeyPatch) -> None:
     labels = [*x_labels(["0", "1", "2", "3"]), *y_labels(["0", "0.5", "1", "1.5"])]
 
@@ -213,14 +296,74 @@ def test_fits_the_ticks(monkeypatch: pytest.MonkeyPatch) -> None:
     assert found.y_title is None
 
 
-def test_reads_minus_signs(monkeypatch: pytest.MonkeyPatch) -> None:
-    minus = "\N{MINUS SIGN}"
+def test_reads_reversed_axes(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Values fall from left to right, and from bottom to top, as on a depth axis.
+    labels = [*x_labels(["3", "2", "1", "0"]), *y_labels(["100", "10", "1"])]
+
+    found = read(monkeypatch, labels)
+
+    assert list(found.x_ticks) == [(80, 3), (160, 2), (240, 1), (320, 0)]
+    assert list(found.y_ticks) == [(80, 100), (140, 10), (200, 1)]
+    assert found.calibration.y_log
+    assert found.calibration.origin == (60.5, 59.5)
+    np.testing.assert_allclose(
+        found.calibration.to_data([(80, 80), (320, 200)]),
+        [(3, 100), (0, 1)],
+        atol=1e-12,
+    )
+
+
+def test_finds_axis_lines_past_stretched_label_boxes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # OCR stretched the boxes of the labels at the corner over the axis lines,
+    # but not so far that they no longer line up with the others.
+    near = [text(value, 44, 80 + 60 * i) for i, value in enumerate("012")]
+    labels = [*x_labels(["0", "1", "2"]), *near]
+    labels[0] = dataclasses.replace(labels[0], top=64)
+    labels[3] = dataclasses.replace(labels[3], right=61)
+
+    found = read(monkeypatch, labels)
+
+    assert found.calibration.origin == (60.5, 59.5)
+
+
+@pytest.mark.parametrize(
+    "minus",
+    [
+        "\N{MINUS SIGN}",
+        # The dashes that OCR can read for a minus sign.
+        "\N{HYPHEN}",
+        "\N{NON-BREAKING HYPHEN}",
+        "\N{FIGURE DASH}",
+        "\N{EN DASH}",
+        "\N{EM DASH}",
+        "\N{HORIZONTAL BAR}",
+        "\N{SMALL HYPHEN-MINUS}",
+        "\N{FULLWIDTH HYPHEN-MINUS}",
+    ],
+)
+def test_reads_minus_signs(monkeypatch: pytest.MonkeyPatch, minus: str) -> None:
     labels = [*x_labels(["-1", "0", "1"]), *y_labels([f"{minus}1", "0", "1"])]
 
     found = read(monkeypatch, labels)
 
     assert [value for _, value in found.x_ticks] == [-1, 0, 1]
     assert [value for _, value in found.y_ticks] == [-1, 0, 1]
+
+
+def test_reads_letters_misread_for_digits(monkeypatch: pytest.MonkeyPatch) -> None:
+    # OCR read 0 as O or o, and 1 as l, I or |. A lone O has no digit to show
+    # that it is one, and l after a digit may be a unit, so both are dropped.
+    labels = [
+        *x_labels(["O", "l0", "2O", "3o", "4l"]),
+        *y_labels(["0", "0.5", "I.0", "|.5"]),
+    ]
+
+    found = read(monkeypatch, labels)
+
+    assert [value for _, value in found.x_ticks] == [10, 20, 30]
+    assert [value for _, value in found.y_ticks] == [0, 0.5, 1, 1.5]
 
 
 def test_reads_separators_percentages_and_exponents(
@@ -235,6 +378,54 @@ def test_reads_separators_percentages_and_exponents(
 
     assert [value for _, value in found.x_ticks] == [0, 1000, 2000, 3000]
     assert [value for _, value in found.y_ticks] == [0, 50, 100]
+
+
+@pytest.mark.parametrize(
+    "space",
+    [" ", "\N{NO-BREAK SPACE}", "\N{THIN SPACE}", "\N{NARROW NO-BREAK SPACE}"],
+)
+def test_reads_thousands_separators_of_spaces(
+    monkeypatch: pytest.MonkeyPatch, space: str
+) -> None:
+    labels = [
+        *x_labels(["0", f"5{space}000", f"10{space}000"]),
+        *y_labels(["0", "1", "2"]),
+    ]
+
+    found = read(monkeypatch, labels)
+
+    assert [value for _, value in found.x_ticks] == [0, 5000, 10000]
+
+
+def test_reads_decimal_commas(monkeypatch: pytest.MonkeyPatch) -> None:
+    # As German plots write them: 2.000 is two thousand on the x-axis, as the
+    # decimal commas on the y-axis show.
+    labels = [
+        *x_labels(["0", "2.000", "4.000", "6.000"]),
+        *y_labels(["-0,5", "0,0", "0,5", "1,0"]),
+        text("Länge, gesamt (m)", 200, 20, width=120),
+    ]
+
+    found = read(monkeypatch, labels)
+
+    assert [value for _, value in found.x_ticks] == [0, 2000, 4000, 6000]
+    assert [value for _, value in found.y_ticks] == [-0.5, 0, 0.5, 1]
+    assert found.x_title == "Länge, gesamt (m)"
+
+
+def test_one_misread_comma_does_not_make_decimal_commas(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The second y label, 0.5, was misread as 0,5.
+    labels = [
+        *x_labels(["0", "1,000", "2,000", "3,000"]),
+        *y_labels(["0.0", "0,5", "1.0", "1.5"]),
+    ]
+
+    found = read(monkeypatch, labels)
+
+    assert [value for _, value in found.x_ticks] == [0, 1000, 2000, 3000]
+    assert [value for _, value in found.y_ticks] == [0, 1, 1.5]
 
 
 def test_reads_scientific_notation(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -285,6 +476,30 @@ def test_drops_misread_tick_labels(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert list(found.x_ticks) == [(80, 0), (160, 1), (320, 3), (400, 4)]
     assert list(found.y_ticks) == [(80, 0), (140, 0.5), (260, 1.5)]
+
+
+def test_drops_tick_values_off_the_even_steps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 750 misread as 758, close enough to its tick to be in line.
+    labels = [
+        *x_labels(["0", "250", "500", "758", "1000"]),
+        *y_labels(["0", "1", "2"]),
+    ]
+
+    found = read(monkeypatch, labels)
+
+    assert [value for _, value in found.x_ticks] == [0, 250, 500, 1000]
+
+
+def test_needs_tick_values_at_even_steps(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 250 and 750 misread as 258 and 758: no three labels take even steps.
+    labels = [*x_labels(["0", "258", "500", "758"]), *y_labels(["0", "1", "2"])]
+
+    with pytest.raises(
+        ValueError, match="only 2 of the 4 x-axis tick labels are in line, on a"
+    ):
+        read(monkeypatch, labels)
 
 
 def test_needs_tick_labels_in_line(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -469,6 +684,105 @@ def test_reads_powers_of_the_base_most_labels_show(
     assert [label.text for label in labels] == ["20", "21", "22", "93"]
     assert [value for _, value in found.x_ticks] == [1, 2, 4]
     assert found.calibration.x_log
+
+
+def write_upwards(image: Image, x: float, y: float, content: str) -> _Text:
+    """Write text upwards, centred on a pixel position, as rotated labels are.
+
+    Returns:
+        The text as OCR reads it, and its box.
+    """
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    (width, height), baseline = cv2.getTextSize(content, font, 0.5, 1)
+    across = np.full((height + baseline + 4, width + 4, 3), 255, dtype=np.uint8)
+    cv2.putText(across, content, (2, height + 2), font, 0.5, (0, 0, 0), 1)
+    upwards = cv2.rotate(across, cv2.ROTATE_90_COUNTERCLOCKWISE)
+    tall, wide = upwards.shape[:2]
+    top, left = HEIGHT - round(y + tall / 2), round(x - wide / 2)
+    image[top : top + tall, left : left + wide] = upwards
+    return _Text(content, left, HEIGHT - top - tall, left + wide, HEIGHT - top)
+
+
+def test_reads_labels_written_upwards(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Written upwards, each label's last digit stands above the others.
+    image = plot()
+    labels = [write_upwards(image, 80 + 80 * i, 40, f"{2 * i + 2}0") for i in range(3)]
+    monkeypatch.setattr(
+        axes, "_read_text", lambda _image: [*labels, *y_labels(["0", "1", "2"])]
+    )
+
+    found = read_axes(image)
+
+    assert [value for _, value in found.x_ticks] == [20, 40, 60]
+    assert not found.calibration.x_log
+
+
+def write_slanted(image: Image, x: float, y: float, content: str) -> _Text:
+    """Write text rising at 45 degrees, centred on a pixel position.
+
+    Returns:
+        The text as OCR reads it, and its box, tilted as the text is.
+    """
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    (width, height), _ = cv2.getTextSize(content, font, 0.5, 1)
+    side = width + 8
+    across = np.full((side, side, 3), 255, dtype=np.uint8)
+    cv2.putText(across, content, (4, (side + height) // 2), font, 0.5, (0, 0, 0), 1)
+    turn = cv2.getRotationMatrix2D((side / 2, side / 2), 45, 1)
+    slanted = cv2.warpAffine(across, turn, (side, side), borderValue=(255, 255, 255))
+    top, left = HEIGHT - round(y + side / 2), round(x - side / 2)
+    image[top : top + side, left : left + side] = slanted
+    return _Text(content, left, HEIGHT - top - side, left + side, HEIGHT - top, 1, 45)
+
+
+def test_reads_slanted_labels_without_exponents(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Rising to the right, each label's last digit lies above the others.
+    image = plot()
+    labels = [write_slanted(image, 80 + 80 * i, 40, f"{2 * i + 2}0") for i in range(3)]
+    monkeypatch.setattr(
+        axes, "_read_text", lambda _image: [*labels, *y_labels(["0", "1", "2"])]
+    )
+
+    found = read_axes(image)
+
+    assert [value for _, value in found.x_ticks] == [20, 40, 60]
+
+
+def slanted_labels(values: Sequence[str]) -> list[_Text]:
+    """Return x-axis tick labels as OCR reads them written at a slant."""
+    return [dataclasses.replace(label, slant=45) for label in x_labels(values)]
+
+
+def test_reads_slanted_labels_again_turned(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Only the box of 8 shows the slant. Turned one way, OCR reads every
+    # label; the other way, fewer.
+    labels = x_labels(["0", "\N{CJK UNIFIED IDEOGRAPH-4E59}", "4", "9", "8"])
+    labels[-1] = dataclasses.replace(labels[-1], slant=45)
+    turned = {
+        -45: [
+            text(value, 80 + 80 * i, 44, width=24) for i, value in enumerate("02468")
+        ],
+        45: [text("2", 160, 46)],
+    }
+    monkeypatch.setattr(axes, "_read_turned", lambda _image, _top, angle: turned[angle])
+
+    found = read(monkeypatch, [*labels, *y_labels(["0", "1", "2"])])
+
+    assert [value for _, value in found.x_ticks] == [0, 2, 4, 6, 8]
+    assert [pixel for pixel, _ in found.x_ticks] == [80, 160, 240, 320, 400]
+
+
+def test_keeps_slanted_labels_read_no_better_turned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    labels = slanted_labels(["0", "\N{CJK UNIFIED IDEOGRAPH-4E59}", "4", "6"])
+    monkeypatch.setattr(axes, "_read_turned", lambda _image, _top, _angle: [])
+
+    found = read(monkeypatch, [*labels, *y_labels(["0", "1", "2"])])
+
+    assert [value for _, value in found.x_ticks] == [0, 4, 6]
 
 
 def right_labels(values: Sequence[str]) -> list[_Text]:
@@ -711,6 +1025,41 @@ def test_reads_titles_over_several_lines(monkeypatch: pytest.MonkeyPatch) -> Non
     assert found.y_title == "Resistance (Ohm)"
 
 
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        # A short first line, of letters without descenders.
+        (_Text("T", 155, 26, 165, 36), text("(degrees Celsius)", 160, 18, width=110)),
+        # Lines spaced widely, at 1.8 times the font size.
+        (text("Photon energy", 160, 30, width=90), text("(eV)", 160, 13, width=30)),
+    ],
+)
+def test_reads_titles_over_lines_apart_by_more_than_a_short_line(
+    monkeypatch: pytest.MonkeyPatch, first: _Text, second: _Text
+) -> None:
+    labels = [*x_labels(["0", "1", "2"]), *y_labels(["0", "1", "2"])]
+
+    found = read(monkeypatch, [*labels, first, second])
+
+    assert found.x_title == f"{first.text} {second.text}"
+
+
+def test_leaves_out_second_lines_of_tick_labels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Each label has its unit below it, and the scale factor lies beyond the
+    # last label. The title lies under the middle label, but alone.
+    labels = [*x_labels(["0", "1", "2"]), *y_labels(["0", "1", "2"])]
+    units = [text("s", 80 + 80 * i, 28) for i in range(3)]
+    scale = text("\N{MULTIPLICATION SIGN}10\N{SUPERSCRIPT THREE}", 360, 28)
+    title = text("Time", 160, 10, width=40)
+
+    found = read(monkeypatch, [*labels, *units, scale, title])
+
+    assert found.x_title == "Time"
+    assert [value for _, value in found.x_ticks] == [0, 1000, 2000]
+
+
 def test_leaves_out_lines_not_aligned_with_a_title(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -746,6 +1095,45 @@ def test_reads_titles_written_across(monkeypatch: pytest.MonkeyPatch) -> None:
     assert found.y_title == "Voltage (mV)"
 
 
+def test_applies_scale_factors_in_titles(monkeypatch: pytest.MonkeyPatch) -> None:
+    labels = [*x_labels(["0", "1", "2"]), *y_labels(["0", "1", "2"])]
+    times, minus = "\N{MULTIPLICATION SIGN}", "\N{SUPERSCRIPT MINUS}"
+    x_title = text(f"Current ({times}10{minus}\N{SUPERSCRIPT THREE} A)", 160, 25, 120)
+    y_title = text("Energy / 10\N{SUPERSCRIPT THREE} J", 14, 140, width=28)
+
+    found = read(monkeypatch, [*labels, x_title, y_title])
+
+    assert found.x_title == "Current (A)"
+    assert [value for _, value in found.x_ticks] == [0, 0.001, 0.002]
+    assert found.y_title == "Energy / J"
+    assert [value for _, value in found.y_ticks] == [0, 1000, 2000]
+    np.testing.assert_allclose(
+        found.calibration.to_data([(80, 80), (240, 200)]),
+        [(0, 0), (0.002, 2000)],
+        atol=1e-9,
+    )
+
+
+@pytest.mark.parametrize(
+    ("title", "rest", "factor"),
+    [
+        ("Count (\N{MULTIPLICATION SIGN}10\N{SUPERSCRIPT THREE})", "Count", 1e3),
+        ("Pressure (10^3 Pa)", "Pressure (Pa)", 1e3),
+        ("Signal [x10^{-2}]", "Signal", 1e-2),
+        ("Rate (10\N{SUPERSCRIPT ONE}\N{SUPERSCRIPT ZERO} Hz)", "Rate (Hz)", 1e10),
+        ("(\N{MULTIPLICATION SIGN}10\N{SUPERSCRIPT THREE})", None, 1e3),
+        # Prefixes of units, and tens that are not powers, stay.
+        ("Voltage (mV)", "Voltage (mV)", 1),
+        ("Year (10 BC)", "Year (10 BC)", 1),
+        (None, None, 1),
+    ],
+)
+def test_finds_scale_factors_in_titles(
+    title: str | None, rest: str | None, factor: float
+) -> None:
+    assert _factor(title) == (rest, factor)
+
+
 def test_reads_titles_written_upwards_turned_upright(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -762,6 +1150,37 @@ def test_reads_titles_written_upwards_turned_upright(
     found = read_turned(monkeypatch, [*labels, *pieces], turned)
 
     assert found.y_title == "Measured Voltage (mV)"
+
+
+@pytest.mark.parametrize(
+    ("first", "turned", "title"),
+    [
+        # Turned, OCR read the delta twice, less surely than as first read.
+        (
+            "\N{GREEK CAPITAL LETTER DELTA}E (%)",
+            0.85,
+            "\N{GREEK CAPITAL LETTER DELTA}E (%)",
+        ),
+        # Turned, OCR read surely what is written twice, as in delta delta G.
+        (
+            "\N{GREEK CAPITAL LETTER DELTA}G",
+            0.95,
+            "\N{GREEK CAPITAL LETTER DELTA}" * 2 + "G",
+        ),
+    ],
+)
+def test_reads_titles_with_a_character_doubled_turned_the_surer_way(
+    monkeypatch: pytest.MonkeyPatch, first: str, turned: float, title: str
+) -> None:
+    labels = [*x_labels(["0", "1", "2"]), *y_labels(["0", "1", "2"])]
+    upwards = dataclasses.replace(tall(first, 8, 150, 60), score=0.9)
+    doubled = first[0] + first
+
+    found = read_turned(
+        monkeypatch, [*labels, upwards], [upright(doubled, 8, 150, 70, turned)]
+    )
+
+    assert found.y_title == title
 
 
 @pytest.mark.parametrize(
