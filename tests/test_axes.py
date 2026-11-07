@@ -937,6 +937,31 @@ def test_applies_scale_factors(monkeypatch: pytest.MonkeyPatch) -> None:
     assert found.x_title is None
 
 
+def test_applies_scale_factors_beside_the_top_tick_label(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The topmost tick is at the top of the axis, and its label reaches
+    # above it, beside the scale factor.
+    labels = [*x_labels(["0", "1", "2"]), *y_labels(["0", "1", "2", "3"])]
+    above_y_axis = text("1e6", 75, 270)
+
+    found = read(monkeypatch, [*labels, above_y_axis])
+
+    assert [value for _, value in found.y_ticks] == [0, 1e6, 2e6, 3e6]
+
+
+def test_ignores_scale_factors_below_the_start_of_the_x_axis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # As the y-axis's scale factor of a plot below would lie.
+    labels = [*x_labels(["0", "1", "2"]), *y_labels(["0", "1", "2"])]
+    below_x_axis = text("1e5", 75, 10)
+
+    found = read(monkeypatch, [*labels, below_x_axis])
+
+    assert [value for _, value in found.x_ticks] == [0, 1, 2]
+
+
 def test_ignores_text_like_scale_factors_in_the_plot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

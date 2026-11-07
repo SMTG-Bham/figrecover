@@ -152,7 +152,7 @@ def read_axes(image: Image) -> Axes:
     the others take.
     Each tick lies at the middle of its label. A scale factor printed where
     plotting libraries put one, such as ``1e-5`` above the y-axis or below
-    the x-axis, multiplies the values of its axis's ticks.
+    the right end of the x-axis, multiplies the values of its axis's ticks.
 
     Numbers may have decimal points and thousands separators of commas or
     spaces, or decimal commas and thousands separators of points or spaces.
@@ -250,7 +250,7 @@ def read_axes(image: Image) -> Axes:
     words = _without_second_lines(
         [text for text in texts if text not in {*x_labels, *y_labels}], x_labels
     )
-    x_scale, y_scale = _scales(words, origin, y_labels)
+    x_scale, y_scale = _scales(words, origin, x_labels, y_labels)
     words = [word for word in words if not _SCALE.fullmatch(word.plain)]
     x_ticks = tuple(
         (float(pixel), value * x_scale)
@@ -945,21 +945,28 @@ def _snap(
 
 
 def _scales(
-    words: Sequence[_Text], origin: Point, y_labels: Sequence[_Text]
+    words: Sequence[_Text],
+    origin: Point,
+    x_labels: Sequence[_Text],
+    y_labels: Sequence[_Text],
 ) -> tuple[float, float]:
     """Return the scale factors printed beside the x and y axes, or 1.
 
     Plotting libraries print the y-axis's scale factor or offset above its
-    tick labels, starting at the axis, and the x-axis's below the axis. Text
-    elsewhere that looks like one, such as a legend entry of 1e-3, is not one.
+    tick labels, starting at the axis, and the x-axis's below the axis,
+    towards its right end. The y-axis's lies above the middle of the topmost
+    label, but beside its top half if that label's tick is at the top of the
+    axis. Text elsewhere that looks like one, such as a legend entry of
+    1e-3, or the y-axis's scale factor of a plot below, is not one.
     """
-    top = max(label.top for label in y_labels)
+    top = max(label.y for label in y_labels)
+    middle = (x_labels[0].x + x_labels[-1].x) / 2
     reach = origin[0] + np.median([label.top - label.bottom for label in y_labels])
     scales = [1.0, 1.0]
     for word in words:
-        if word.y < origin[1]:
+        if word.y < origin[1] and word.x > middle:
             axis = 0
-        elif word.bottom > top and word.left <= reach:
+        elif word.y > top and word.left <= reach:
             axis = 1
         else:
             continue
