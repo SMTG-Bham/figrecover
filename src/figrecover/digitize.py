@@ -30,7 +30,7 @@ _BIN_WIDTH = 32  # colour histogram bins are this many levels wide in each chann
 _SAME_COLOUR = 48  # colours closer than this are shades of one colour
 _FINE_BIN_WIDTH = 16  # a second look at each colour, in narrower bins,
 _FINE_SAME_COLOUR = 20  # can split it into colours this far apart
-_MATCH_DISTANCE = 96  # a requested colour picks a curve colour at most this far away
+_MATCH_DISTANCE = 96  # a colour, or a pixel, matches a curve colour this far away
 _MIN_CURVE_FRACTION = 0.75  # a curve has at least this many pixels per column
 _CONTRAST = 64  # a curve differs from the background by this much in some channel
 _AREA_DEPTH = 4  # a colour whose pixels lie this deep inside its shapes fills areas
@@ -187,8 +187,9 @@ def trace_curves(
     the image above and right of ``origin``. Excluding the rest removes the
     axes, their ticks and labels. Each pixel belongs to the common colour
     that it best matches when blended with the background, so the antialiased
-    edges of a curve count towards it, and specks of fewer than four pixels
-    are ignored. Each image column gives one point for each branch of a curve
+    edges of a curve count towards it, unless it matches none, as black text
+    among coloured curves does; and specks of fewer than four pixels are
+    ignored. Each image column gives one point for each branch of a curve
     that crosses it, at the median height of the branch's pixels there, so
     both sides of a loop are traced. See ``_follow`` for what a branch is.
 
@@ -493,7 +494,10 @@ def _classify(plot: Image, colours: npt.NDArray[np.float64]) -> npt.NDArray[np.i
     ``colours[0]``, and another colour, at the coverage that fits it best.
     Partial coverage costs a little, so a pixel that matches a light colour is
     not taken for a blend of a darker one. Pixels less than half-way from the
-    background to their best match are labelled 0, as background.
+    background to their best match are labelled 0, as background, as are
+    those more than ``_MATCH_DISTANCE`` from it, which show none of the
+    colours, such as black text and arrows of annotations among coloured
+    curves.
     """
     offsets = plot.astype(np.float64) - colours[0]
     directions = colours - colours[0]  # the first is zero: pure background
@@ -509,11 +513,14 @@ def _classify(plot: Image, colours: npt.NDArray[np.float64]) -> npt.NDArray[np.i
         - 2 * coverage * projections
         + (coverage * lengths) ** 2
     )
-    cost = np.sqrt(np.maximum(squared, 0)) + _COVERAGE_COST * (1 - coverage) * lengths
+    distance = np.sqrt(np.maximum(squared, 0))
+    cost = distance + _COVERAGE_COST * (1 - coverage) * lengths
 
-    best = np.argmin(cost, axis=-1)
-    best_coverage = np.take_along_axis(coverage, best[..., np.newaxis], axis=-1)
-    return np.where(best_coverage[..., 0] >= _MIN_COVERAGE, best, 0)
+    best = np.argmin(cost, axis=-1)[..., np.newaxis]
+    shown = (np.take_along_axis(coverage, best, axis=-1) >= _MIN_COVERAGE) & (
+        np.take_along_axis(distance, best, axis=-1) <= _MATCH_DISTANCE
+    )
+    return np.where(shown[..., 0], best[..., 0], 0)
 
 
 def _match(palette: npt.NDArray[np.float64], colour: Colour) -> int:

@@ -5,19 +5,21 @@ import re
 import string
 import warnings
 from collections import Counter
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, replace
+from decimal import Decimal
 
 import cv2
 import numpy as np
 import numpy.typing as npt
 
-from .axes import Axes, _read_axes, _read_text, _Text
+from .axes import Axes, _NoTicksError, _read_axes, _read_text, _Text
 from .calibration import Point
 from .digitize import AXIS_MARGIN, Image, ink_mask
 
 _LINE_LENGTH = 0.1  # axis lines span this fraction of the image's shorter side or more
 _LABEL_REACH = 0.25  # a label lies this fraction of its axes' size from their corner
+_LINED_UP = 0.05  # boxes whose ends lie this fraction of their size apart line up
 # A label, such as (a), a), a. or a, or a character or none in brackets, as
 # OCR reads some labels, such as (c) as ().
 _LABEL = re.compile(r"[(\[]?([a-z])[)\].]?|[(\[]\S?[)\]]", re.IGNORECASE)
@@ -83,6 +85,37 @@ class _Box:
         )
 
 
+@dataclass(frozen=True, slots=True, eq=False)
+class _Piece:
+    """A plot's part of an image of several, and the text read in it.
+
+    Attributes:
+        box: The box around the plot's axes, in the whole image.
+        part: The plot's part of the whole image, as ``_parts`` finds it.
+        image: The image of the part.
+        texts: The lines of text in the part, less the labels of other plots.
+        label: The plot's label, or None if it has none.
+    """
+
+    box: _Box
+    part: _Box
+    image: Image
+    texts: list[_Text]
+    label: _Text | None
+
+    @property
+    def inside(self) -> _Box:
+        """Return the box around the plot's axes, measured in its part."""
+        return self.box.within(self.part)
+
+    @property
+    def traced(self) -> Image:
+        """Return the image in which to trace the plot's curves, as ``Panel`` has it."""
+        inside = self.inside
+        painted = _painted(self.image, self.label, inside)
+        return painted[inside.top :, : inside.right]
+
+
 def read_panels(image: Image) -> list[Panel]:
     """Find the plots in an image, such as the panels of a figure, and read their axes.
 
@@ -95,12 +128,14 @@ def read_panels(image: Image) -> list[Panel]:
     image, as ``_parts`` finds it, which holds its tick labels and titles
     but no other plot's axes. Each plot's label, such as (a), is the text
     nearest the top-left corner of its axes written as a letter, as
-    ``_label`` finds it. OCR misreads labels, such as (b) as (p), or misses
+    ``_label`` finds it, and the labels of other plots in its part are not
+    read as its titles. OCR misreads labels, such as (b) as (p), or misses
     them, but plots are labelled in reading order, so the letters read are
     taken for the alphabet in that order if most of them are, as
-    ``_in_sequence`` finds. A plot whose axes cannot be read, such as a
-    colour bar, or a plot whose ticks are labelled only on a plot beside it,
-    is left out with a warning.
+    ``_in_sequence`` finds. A plot with an axis whose ticks are labelled
+    only on a plot beside it, as plots that share an axis often are, takes
+    that axis from the plot, as ``_read_sharing`` reads it. A plot whose axes
+    cannot be read, such as a colour bar, is left out with a warning.
 
     Each plot's label is painted over in the background colour, inside its
     axes, in the image of the plot in which its curves are traced, so it is
@@ -130,33 +165,191 @@ def read_panels(image: Image) -> list[Panel]:
         label = _label(texts, boxes[0], image.shape[0])
         return [Panel(_letter(label), _painted(image, label, boxes[0]), (0, 0), axes)]
 
+    pieces = [
+        _piece(image, box, part, boxes)
+        for box, part in zip(boxes, _parts(ink > 0, boxes), strict=True)
+    ]
+    # Read the plots left unread again while more are read, as a plot can
+    # share an axis with one read after it.
+    read: dict[int, Axes] = {}
+    errors: dict[int, ValueError] = {}
+    unread = list(range(len(pieces)))
+    while unread:
+        errors = {}
+        for index in unread:
+            try:
+                read[index] = _read_sharing(pieces[index], pieces, read)
+            except ValueError as error:
+                errors[index] = error
+        if len(errors) == len(unread):
+            break
+        unread = list(errors)
     height = image.shape[0]
-    read: list[tuple[_Text | None, Image, Point, Axes]] = []
-    for box, part in zip(boxes, _parts(ink > 0, boxes), strict=True):
-        piece = image[part.top : part.bottom, part.left : part.right]
-        inside = box.within(part)
-        texts = _read_text(piece)
-        label = _label(texts, inside, piece.shape[0])
-        try:
-            axes = _read_axes(piece, texts)
-        except ValueError as error:
-            named = f"({letter}) " if (letter := _letter(label)) else ""
-            msg = (
-                f"left out the panel {named}at {box.left},{height - box.bottom}, "
-                f"as its axes cannot be read: {error}"
-            )
-            warnings.warn(msg, stacklevel=2)
-            continue
-        traced = _painted(piece, label, inside)[inside.top :, : inside.right]
-        read.append((label, traced, (part.left, height - part.bottom), axes))
+    for index, problem in sorted(errors.items()):
+        box = pieces[index].box
+        named = f"({letter}) " if (letter := _letter(pieces[index].label)) else ""
+        msg = (
+            f"left out the panel {named}at {box.left},{height - box.bottom}, "
+            f"as its axes cannot be read: {problem}"
+        )
+        warnings.warn(msg, stacklevel=2)
     if not read:
         msg = f"cannot read the axes of any of the {len(boxes)} panels found"
         raise ValueError(msg)
-    letters = _in_sequence([_letter(label) for label, *_ in read])
+    found = sorted(read)
+    letters = _in_sequence([_letter(pieces[index].label) for index in found])
     return [
-        Panel(letter, traced, offset, axes)
-        for letter, (_, traced, offset, axes) in zip(letters, read, strict=True)
+        Panel(
+            letter,
+            pieces[index].traced,
+            (pieces[index].part.left, height - pieces[index].part.bottom),
+            read[index],
+        )
+        for letter, index in zip(letters, found, strict=True)
     ]
+
+
+def _piece(image: Image, box: _Box, part: _Box, boxes: Sequence[_Box]) -> _Piece:
+    """Read the text in a plot's part of an image of several, and find its label.
+
+    The labels of the other plots, by their boxes, are left out of the text:
+    the label of a plot below, above its axes, as matplotlib draws a title,
+    lies in the part, below the x-axis tick labels, where it could be taken
+    for the x-axis title.
+    """
+    piece = image[part.top : part.bottom, part.left : part.right]
+    height = piece.shape[0]
+    texts = _read_text(piece)
+    others = {
+        _label(texts, other.within(part), height) for other in boxes if other != box
+    }
+    texts = [text for text in texts if text not in others]
+    return _Piece(box, part, piece, texts, _label(texts, box.within(part), height))
+
+
+def _read_sharing(
+    piece: _Piece, pieces: Sequence[_Piece], read: Mapping[int, Axes]
+) -> Axes:
+    """Read a plot's axes, taking an axis without tick labels from a plot sharing it.
+
+    Plots that share an axis, such as a column of plots sharing the x-axis,
+    often label its ticks on only one of them, such as the lowest. An axis of
+    the plot without tick labels is taken from the plot read nearest it that
+    lines up with it along that axis, as ``_sharing`` finds it: the ticks of
+    that plot are placed beside the plot's own axis as tick labels, as
+    ``_shared_labels`` places them, and read with the plot's other labels,
+    and the axis takes that plot's title too.
+
+    Args:
+        piece: The plot's part of the image.
+        pieces: The parts of all the plots in the image.
+        read: The axes of the plots read so far, by their place in ``pieces``.
+
+    Raises:
+        ValueError: If the axes cannot be read, as for ``read_axes``, or an
+            axis without tick labels is shared with no plot read.
+    """
+    labels: list[_Text] = []
+    titles: dict[str, str | None] = {}
+    while True:
+        try:
+            axes = _read_axes(piece.image, [*piece.texts, *labels])
+        except _NoTicksError as error:
+            index = _sharing(piece, error.axis, pieces, read)
+            if index is None or error.axis in titles:
+                raise
+            shared = read[index]
+            labels += _shared_labels(piece, pieces[index], shared, error.axis)
+            titles[error.axis] = shared.x_title if error.axis == "x" else shared.y_title
+        else:
+            return replace(
+                axes,
+                x_title=titles.get("x", axes.x_title),
+                y_title=titles.get("y", axes.y_title),
+            )
+
+
+def _sharing(
+    piece: _Piece, axis: str, pieces: Sequence[_Piece], read: Mapping[int, Axes]
+) -> int | None:
+    """Return the plot read nearest a plot that lines up with it along an axis.
+
+    Along the x-axis, plots line up in a column, as plots sharing it do: the
+    left and right ends of their boxes lie within ``_LINED_UP`` of the
+    plot's width of its own, which allows for tick marks at a box's corner.
+    Along the y-axis, they line up in a row likewise.
+
+    Returns:
+        The plot's place in ``pieces``, or None if no plot read lines up.
+    """
+    box = piece.box
+    if axis == "x":
+        reach = _LINED_UP * (box.right - box.left)
+        ends = [
+            (other.box.left - box.left, other.box.right - box.right) for other in pieces
+        ]
+        distances = [abs(other.box.top - box.top) for other in pieces]
+    else:
+        reach = _LINED_UP * (box.bottom - box.top)
+        ends = [
+            (other.box.top - box.top, other.box.bottom - box.bottom) for other in pieces
+        ]
+        distances = [abs(other.box.left - box.left) for other in pieces]
+    lined_up = [
+        index
+        for index in read
+        if abs(ends[index][0]) <= reach and abs(ends[index][1]) <= reach
+    ]
+    return min(lined_up, key=distances.__getitem__, default=None)
+
+
+def _shared_labels(piece: _Piece, other: _Piece, axes: Axes, axis: str) -> list[_Text]:
+    """Return tick labels for an axis of a plot, from the ticks of a plot sharing it.
+
+    Each tick of the other plot's axis, ``axes``, gives a label, placed in
+    the plot's part of the image where the tick lies in the whole image, just
+    beyond the plot's box: below it for the x-axis, and left of it for the
+    y-axis, ending at the box. The labels are squares as tall as the other
+    plot's lines of text, by their median, and their texts are the ticks'
+    values, written as ``_written`` writes them.
+    """
+    size = float(np.median([text.top - text.bottom for text in other.texts]))
+    inside = piece.inside
+    if axis == "x":
+        shift = other.part.left - piece.part.left
+        top = piece.image.shape[0] - inside.bottom
+        return [
+            _Text(
+                _written(value),
+                x + shift - size / 2,
+                top - size,
+                x + shift + size / 2,
+                top,
+            )
+            for x, value in axes.x_ticks
+        ]
+    # Heights are measured from the bottom of each part.
+    shift = piece.part.bottom - other.part.bottom
+    return [
+        _Text(
+            _written(value),
+            inside.left - size,
+            y + shift - size / 2,
+            inside.left,
+            y + shift + size / 2,
+        )
+        for y, value in axes.y_ticks
+    ]
+
+
+def _written(value: float) -> str:
+    """Return a number written as digits and a power of ten, such as 25e-2 for 0.25.
+
+    It has neither a decimal point nor a comma, so that it reads alike with
+    either, and does not sway which a plot's labels are read with.
+    """
+    sign, digits, exponent = Decimal(repr(value)).as_tuple()
+    return f"{'-' * sign}{''.join(map(str, digits))}e{exponent}"
 
 
 def _boxes(ink: npt.NDArray[np.uint8]) -> list[_Box]:

@@ -241,6 +241,36 @@ def draw_panels(name: str) -> None:
     plt.close(figure)
 
 
+def draw_shared(name: str) -> None:
+    """Draw four plots sharing their axes, labelled (a) to (d), and print their points.
+
+    The plots share their x-axes down each column and their y-axes along
+    each row, over x from 0 to 10 and y from 0 to 3, so matplotlib labels the
+    ticks only on the outer plots: the x-axes on the lower row and the
+    y-axes on the left column. The labels are titles aligned with the left
+    of the axes, and the layout makes room for them.
+    """
+    figure, grid = plt.subplots(
+        2, 2, figsize=(8, 6), dpi=100, layout="constrained", sharex=True, sharey=True
+    )
+    x = np.linspace(0, 10, 2000)
+    for axes, curve in zip(grid.flat, (spectrum, damped, growth, decay), strict=True):
+        axes.plot(x, curve(x), color="black", linewidth=1.5)
+    grid[0, 0].set(xlim=(0, 10), ylim=(0, 3))
+    for axes in grid[1]:
+        axes.set(xlabel="Time (s)")
+    for axes in grid[:, 0]:
+        axes.set(ylabel="Voltage (mV)")
+    for label, axes in zip("abcd", grid.flat, strict=True):
+        axes.set_title(f"({label})", loc="left")
+    figure.savefig(HERE / f"{name}.png", facecolor="white")
+
+    for label, axes in zip("abcd", grid.flat, strict=True):
+        pixels = axes.transData.transform([(0, 0), (10, 0), (0, 1)]).round().astype(int)
+        print(f"{name} ({label})", " ".join(f"-l {x},{y}" for x, y in pixels))
+    plt.close(figure)
+
+
 def save(
     name: str,
     figure: Figure,
@@ -312,5 +342,6 @@ draw_titled("titled", spectrum, ("Photon energy\n(eV)", "Absorbance\n(arb. units
 draw_markers("markers", {"D": decay, "s": growth, "o": wave, "x": trend})
 draw_slanted("slanted", damped, ("Time (s)", "Voltage (mV)"))
 draw_panels("panels")
+draw_shared("shared")
 draw_rasterised("rasterised", {"tab:blue": decay, "tab:orange": growth})
 draw_scatter("scatter", decay, growth)

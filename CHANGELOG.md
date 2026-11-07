@@ -13,8 +13,9 @@ The first release.
   curves, the CSV has a `series` column.
 - A curve that crosses a column more than once, such as a loop, gives a point
   on each side, and short marks beside a curve, such as the caps of error
-  bars, are ignored. A frame around the axes, as matplotlib draws, is left
-  out.
+  bars, are ignored, as is ink of other colours, such as the black arrow of
+  an annotation among coloured curves. A frame around the axes, as
+  matplotlib draws, is left out.
 - `-m` tells series apart by the shapes of their markers, such as squares,
   diamonds, open circles and crosses, cut out of the legend, for plots whose
   series share a colour, as many spreadsheet charts do. It gives a point at
@@ -32,22 +33,27 @@ The first release.
   tick labels broken over lines, such as units, are not taken for the x-axis
   title. It reads tick labels written upwards, reads those written at a slant
   again turned level if OCR misread them, places the ticks of rotated labels
-  at their tick marks, reads plots without axis lines, and refuses a second
-  y-axis on the right. Tick labels in which OCR mistook letters for digits,
-  such as `1O` or `l.5`, or dashes for minus signs, are read as they were
-  written, and those misread as other digits, off the even steps of a linear
-  axis, such as 758 among 250 and 500, are dropped. Titles keep their Greek
-  letters, symbols, superscripts and subscripts, such as Δ, μm, CO₂ and mg
-  L⁻¹, each written one way however OCR reads it.
+  at their tick marks, whether the labels end at them or lie beside them,
+  reads plots without axis lines, and refuses a second y-axis on the right.
+  Tick labels in which OCR mistook letters for digits, such as `1O` or `l.5`,
+  or dashes for minus signs, are read as they were written, and those misread
+  as other digits, off the even steps of a linear axis, such as 758 among 250
+  and 500, are dropped. Titles keep their Greek letters, symbols, superscripts
+  and subscripts, such as Δ, μm, CO₂ and mg L⁻¹, each written one way however
+  OCR reads it.
 - With the `ocr` extra, a figure of several plots, such as panels labelled
   (a), (b), (c), is read panel by panel: each is found by its axis lines,
   read from its own part of the image, and named after its label, taking the
   letters in reading order where OCR misreads or misses some, such as (b) as
   (p). `-o` writes a CSV for each panel, such as `out_a.csv`, and standard
   output gets one with a panel column. Each label is painted over before
-  tracing, and panels that cannot be read, such as colour bars, are left out
-  with a warning. Scale factors are read only where plotting libraries print
-  them, so that of a panel below is not taken for one of the x-axis above.
+  tracing, and is not read as another panel's title. Panels that share an
+  axis, labelled only on the outer panels, as matplotlib's `sharex` and
+  `sharey` draw them, take the axis and its title from the panel beside them
+  that lines up with them. Panels that cannot be read, such as colour bars,
+  are left out with a warning. Scale factors are read only where plotting
+  libraries print them, so that of a panel below is not taken for one of the
+  x-axis above.
 - Logarithmic axes work too. figrecover finds them itself when it reads the
   axes, including tick labels written as powers, such as 10⁻² or 2⁵, even
   where OCR misses the superscripts; and `--log` names them for `-p`.

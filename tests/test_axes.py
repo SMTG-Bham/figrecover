@@ -901,8 +901,12 @@ def marked_plot(x_marks: Sequence[int], y_marks: Sequence[int], line: int = 1) -
 def test_moves_ticks_to_the_marks_drawn(
     monkeypatch: pytest.MonkeyPatch, line: int
 ) -> None:
-    # Rotated x labels end at their ticks, rather than centring on them.
-    rotated = [text(value, 65 + 80 * i, 45, width=30) for i, value in enumerate("012")]
+    # Rotated x labels end at their ticks, rather than centring on them, and
+    # are as long as their texts, so their middles lie unlike beside them.
+    rotated = [
+        text(value, 80 + 80 * i - width / 2, 45, width=width)
+        for i, (value, width) in enumerate(zip("012", (20, 30, 40), strict=True))
+    ]
     labels = [*rotated, *y_labels(["0", "1", "2"])]
     monkeypatch.setattr(axes, "_read_text", lambda _image: labels)
 
@@ -910,6 +914,35 @@ def test_moves_ticks_to_the_marks_drawn(
 
     # The centres of the marks' pixels; the y labels are centred on theirs.
     assert [pixel for pixel, _ in found.x_ticks] == [80.5, 160.5, 240.5]
+    assert [pixel for pixel, _ in found.y_ticks] == [80, 140, 200]
+
+
+def test_moves_ticks_to_marks_beside_the_labels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Rotated y labels can lie alike to one side of their ticks, here 9.5
+    # pixels below them, and as tall as wide, so their ends lie further off.
+    rotated = [
+        _Text(value, 10, 60 + 60 * i, 50, 100 + 60 * i) for i, value in enumerate("012")
+    ]
+    labels = [*x_labels(["0", "1", "2"]), *rotated]
+    monkeypatch.setattr(axes, "_read_text", lambda _image: labels)
+
+    found = read_axes(marked_plot([80, 160, 240], [90, 150, 210]))
+
+    assert [pixel for pixel, _ in found.y_ticks] == [89.5, 149.5, 209.5]
+
+
+def test_keeps_ticks_at_labels_beside_minor_marks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Minor tick marks lie alike beside the labels too, nearer than the
+    # major ones, so the labels stay rather than take the minor marks.
+    labels = [*x_labels(["0", "1", "2"]), *y_labels(["0", "1", "2"])]
+    monkeypatch.setattr(axes, "_read_text", lambda _image: labels)
+
+    found = read_axes(marked_plot([80, 160, 240], [84, 90, 144, 150, 204, 210]))
+
     assert [pixel for pixel, _ in found.y_ticks] == [80, 140, 200]
 
 

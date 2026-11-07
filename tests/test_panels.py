@@ -11,7 +11,14 @@ import pytest
 
 from figrecover import Image, Panel, load_image, panels, read_panels
 from figrecover.axes import _Text
-from figrecover.panels import _beside, _Box, _boxes, _in_order, _in_sequence
+from figrecover.panels import (
+    _beside,
+    _Box,
+    _boxes,
+    _in_order,
+    _in_sequence,
+    _written,
+)
 
 EXAMPLES = Path(__file__).parents[1] / "examples"
 HEIGHT, WIDTH = 400, 600
@@ -197,19 +204,104 @@ def test_leaves_out_panels_whose_axes_cannot_be_read(
         label(f"({letter})", box) for letter, box in zip("abcd", GRID, strict=True)
     ]
     plots = four_plots()
-    texts = [*plots[:6], *plots[12:], *labels]  # (b) has no tick labels
+    misread = ticks(GRID[1], ["0", "10", "20"], ["5", "8", "6"])  # out of line
+    texts = [*plots[:6], *misread, *plots[12:], *labels]
     image = figure(texts)
     read_parts(monkeypatch, image, texts)
 
     with pytest.warns(
         UserWarning,
         match=r"left out the panel \(b\) at 360,230, as its axes cannot be read: "
-        "found no row",
+        "only 2 of the 3 y-axis tick labels are in line",
     ):
         found = read_panels(image)
 
     # Most of the labels read are no longer in order, so are kept as read.
     assert [panel.label for panel in found] == ["a", "c", "d"]
+
+
+def test_reads_axes_shared_with_panels_beside(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The plots share both axes, labelled only on the outer panels: (a) has
+    # y-axis labels, (d) x-axis labels, (c) both and (b) none. (b) shares its
+    # x-axis with (d), and its y-axis with (a), each read only after it.
+    labels = [
+        label(f"({letter})", box) for letter, box in zip("abcd", GRID, strict=True)
+    ]
+    plots = ticks(GRID[2], ["0", "0.5", "1"], ["0", "2", "4"])
+    shared = ticks(GRID[3], ["0", "0.5", "1"], [])
+    left = ticks(GRID[0], [], ["0", "2", "4"])
+    titles = [
+        *(text("Time (s)", box.left + 110, 3, width=60) for box in GRID[2:]),
+        *(text("Voltage", 15, HEIGHT - box.bottom + 75, width=30) for box in GRID[::2]),
+    ]
+    texts = [*left, *plots, *shared, *titles, *labels]
+    image = figure(texts)
+    read_parts(monkeypatch, image, texts)
+
+    found = read_panels(image)
+
+    assert [panel.label for panel in found] == ["a", "b", "c", "d"]
+    for panel in found:
+        assert [value for _, value in panel.axes.x_ticks] == [0, 0.5, 1]
+        assert [value for _, value in panel.axes.y_ticks] == [0, 2, 4]
+        assert panel.axes.x_title == "Time (s)"
+        assert panel.axes.y_title == "Voltage"
+    # Each panel's ticks lie where those of the panel it shares them with
+    # do, in the whole image.
+    x_ticks, y_ticks = [], []
+    for panel in found:
+        x, y = panel.offset
+        x_ticks.append([pixel + x for pixel, _ in panel.axes.x_ticks])
+        y_ticks.append([pixel + y for pixel, _ in panel.axes.y_ticks])
+    assert x_ticks[0] == x_ticks[2] == [80, 140, 200]
+    assert x_ticks[1] == x_ticks[3] == [380, 440, 500]
+    assert y_ticks[0] == y_ticks[1] == [250, 290, 330]
+    assert y_ticks[2] == y_ticks[3] == [50, 90, 130]
+
+
+def test_leaves_out_panels_sharing_an_axis_with_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # (b) has no x-axis labels, and no panel below it to share them.
+    texts = [
+        *ticks(GRID[0], ["0", "1", "2"], ["0", "1", "2"]),
+        *ticks(GRID[1], [], ["5", "6", "7"]),
+        *ticks(GRID[2], ["0", "1", "2"], ["0", "1", "2"]),
+    ]
+    image = figure(texts, boxes=GRID[:3])
+    read_parts(monkeypatch, image, texts)
+
+    with pytest.warns(
+        UserWarning,
+        match=r"left out the panel at 360,230, as its axes cannot be read: "
+        "found no row of 3 or more numbers to read as x-axis ticks",
+    ):
+        found = read_panels(image)
+
+    assert len(found) == 2
+
+
+def test_reads_no_label_of_another_panel_as_a_title(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # (c)'s label lies above its axes, as matplotlib draws a title, below the
+    # x-axis tick labels of (a), which has no x-axis title of its own.
+    labels = [
+        label("(a)", GRID[0]),
+        label("(b)", GRID[1]),
+        text("(c)", GRID[2].left + 15, HEIGHT - GRID[2].top + 10),
+        label("(d)", GRID[3]),
+    ]
+    texts = [*four_plots(), *labels]
+    image = figure(texts)
+    read_parts(monkeypatch, image, texts)
+
+    found = read_panels(image)
+
+    assert found[0].axes.x_title is None
+    assert found[2].label == "c"
 
 
 def test_needs_a_panel_whose_axes_can_be_read(
@@ -258,6 +350,23 @@ def test_reads_a_plot_from_the_whole_image(
     # The label is painted over only if it is one.
     assert (found.image[HEIGHT - 168, 80] == 255).all() == (letter is not None)
     assert found.axes.calibration.origin == (60.5, 30.5)
+
+
+@pytest.mark.parametrize(
+    ("value", "written"),
+    [
+        (0.25, "25e-2"),
+        (-0.75, "-75e-2"),
+        (0.0, "0e-1"),
+        (1e-5, "1e-5"),
+        (1e3, "10000e-1"),
+    ],
+)
+def test_writes_shared_ticks_without_points_or_commas(
+    value: float, written: str
+) -> None:
+    assert _written(value) == written
+    assert float(written) == value
 
 
 def test_finds_plots_by_axis_lines_that_meet() -> None:
@@ -367,3 +476,41 @@ def test_calibrates_each_panel_of_a_figure(
         np.testing.assert_allclose(np.log10(data), np.log10(points), atol=0.02)
     else:
         np.testing.assert_allclose(data, points, atol=0.03)
+
+
+@pytest.fixture(scope="module")
+def shared() -> list[Panel]:
+    """Read the panels of the example figure whose plots share their axes, once."""
+    return read_panels(load_image(EXAMPLES / "shared.png"))
+
+
+def test_reads_the_panels_of_a_figure_sharing_axes(shared: list[Panel]) -> None:
+    assert [panel.label for panel in shared] == ["a", "b", "c", "d"]
+    for panel in shared:
+        assert [value for _, value in panel.axes.x_ticks] == [0, 2, 4, 6, 8, 10]
+        assert [value for _, value in panel.axes.y_ticks] == [
+            0.5 * step for step in range(7)
+        ]
+        assert panel.axes.x_title == "Time (s)"
+        assert panel.axes.y_title == "Voltage (mV)"
+
+
+@pytest.mark.parametrize(
+    ("index", "pixels"),
+    [
+        # The pixel positions of (0, 0), (10, 0) and (0, 1) that
+        # examples/make_examples.py prints for each panel.
+        (0, [(56, 330), (410, 330), (56, 412)]),
+        (1, [(432, 330), (787, 330), (432, 412)]),
+        (2, [(56, 48), (410, 48), (56, 129)]),
+        (3, [(432, 48), (787, 48), (432, 129)]),
+    ],
+)
+def test_calibrates_each_panel_of_a_figure_sharing_axes(
+    shared: list[Panel], index: int, pixels: list[tuple[int, int]]
+) -> None:
+    panel = shared[index]
+
+    data = panel.axes.calibration.to_data(np.subtract(pixels, panel.offset))
+
+    np.testing.assert_allclose(data, [(0, 0), (10, 0), (0, 1)], atol=0.03)

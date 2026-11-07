@@ -286,8 +286,11 @@ work as before.
   units of that power, so it multiplies the tick values too, and is left out
   of the column's name: `Current (A)`, `Count` or `Energy / J`. Units are not
   converted, so a column titled `Voltage (mV)` stays in millivolts.
-- Each tick lies at the middle of its label, or, for labels that end at their
-  tick marks rather than centring on them, as rotated labels do, at the mark.
+- Each tick lies at the middle of its label, or at a tick mark: for labels
+  that end at their tick marks rather than centring on them, as rotated
+  x-axis labels do, at the mark at that end, and for labels that lie alike
+  to one side of their marks, as matplotlib draws rotated y-axis labels, at
+  the mark beside each.
   Labels written upwards, turned a quarter turn, are read as well as those
   written across. OCR often misreads x-axis labels at a slant, such as 45°,
   so if it misreads one and finds another's box tilted, figrecover reads the
@@ -449,6 +452,23 @@ The preview draws every panel's curves and ticks on the one image:
 
 ![Four panels, each recovered with its own axes, one of them logarithmic](examples/panels.preview.png)
 
+The panels of `examples/shared.png` share their axes, so matplotlib labels
+the x-axes only on the lower panels, and the y-axes only on the left ones.
+Each panel takes the axes that it lacks from those beside it:
+
+```bash
+figrecover examples/shared.png -o shared.csv
+```
+
+```text
+figrecover: panel a: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10
+figrecover: panel a: y-axis "Voltage (mV)" with ticks at 0, 0.5, 1, 1.5, 2, 2.5, 3
+figrecover: panel b: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10
+figrecover: panel b: y-axis "Voltage (mV)" with ticks at 0, 0.5, 1, 1.5, 2, 2.5, 3
+...
+figrecover: wrote shared_a.csv, shared_b.csv, shared_c.csv, shared_d.csv
+```
+
 - The panels are found by their axes: a horizontal and a vertical axis line,
   each at least a tenth of the image's shorter side long, that meet, as
   matplotlib's frames do too. An image with one such plot, or none, such as
@@ -467,14 +487,24 @@ The preview draws every panel's curves and ticks on the one image:
   order, counting a p read for b or d, every panel takes its letter in that
   order, as capitals if most of those read are. Otherwise each panel keeps
   the letter read, and one without, or with a letter read for another panel
-  too, is named by its number in reading order.
+  too, is named by its number in reading order. The labels of other panels
+  are not read as a panel's titles, such as the label of the panel below, if
+  it lies above that panel's axes.
 - A panel's label is painted over, inside its axes, before its curves are
   traced, as it is usually drawn in a curve's colour. A label that OCR does
   not find at all is traced as part of a curve of its colour, as a legend is.
+- Plots that share an axis often label its ticks only on the outer panels:
+  an x-axis on the lowest panel of a column, and a y-axis on the leftmost of
+  a row. A panel without tick labels on an axis takes that axis, and its
+  title, from the nearest panel read that lines up with it along the axis:
+  in the same column for the x-axis, or the same row for the y-axis, with
+  the ends of its axes within 5% of their length of the panel's. Its ticks
+  lie where that panel's do, in the whole image. So a panel can take its
+  x-axis from the panel below it and its y-axis from the panel beside it.
 - A panel whose axes cannot be read, such as a colour bar with a frame, or a
-  panel whose ticks are labelled only on the panel beside it, as plots that
-  share an axis often are, is left out with a warning, as is one whose
-  curves cannot be traced. figrecover fails only if no panel is left.
+  panel without tick labels on an axis that no panel read lines up with, is
+  left out with a warning, as is one whose curves cannot be traced.
+  figrecover fails only if no panel is left.
 - `-n` and `-c` apply to each panel, and `-n` prints the colours of each.
   `-m` needs an image of one plot. With `-p`, the image is one plot, as
   before.
@@ -697,8 +727,10 @@ in an image, from the position of a marker of each series in points.
    colour, up to 96 levels away.
 6. Each pixel belongs to the common colour that it best matches when blended
    with the background, if it is at least half-way there, so a curve's
-   antialiased edges count towards it. Specks of fewer than four pixels, such
-   as where two other curves cross, are ignored.
+   antialiased edges count towards it, and within 96 levels of the blend, so
+   ink of other colours, such as the black text and arrows of annotations
+   among coloured curves, is not taken for the nearest curve. Specks of fewer
+   than four pixels, such as where two other curves cross, are ignored.
 7. In each image column, a curve's pixels form runs, split by gaps of more
    than 6 pixels, and runs that overlap one to one in neighbouring columns
    form branches. Each run of a branch across at least 5% of the plot gives a
@@ -782,8 +814,8 @@ With a PDF file, steps 1 to 7 give way to these:
 - `--remove-grid` also removes straight horizontal or vertical stretches of
   curves that are 120 pixels or longer.
 - Panels are found by axis lines that meet, so a figure of plots without
-  them, or of plots whose axes touch, as plots sharing an axis often do, is
-  read as one plot. Insets, and legends shared by several panels, are not
+  them, or of plots whose axes touch, as plots sharing an axis can, is read
+  as one plot. Insets, and legends shared by several panels, are not
   read. Panels are found in images only: in a PDF file, give `--box` to read
   one.
 - In a PDF file, the text must be text to read the axes: text drawn as
