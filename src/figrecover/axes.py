@@ -536,20 +536,22 @@ def _axis_lines(
     The y-axis line is the leftmost column, from the right of the y-axis tick
     labels to just past the first x-axis tick, with ink along ``_LINE_COVER``
     of the span of the y-axis ticks, as a flat stretch of a curve on the first
-    tick seldom has. The x-axis line is found the same way. An axis without
-    such a line gives None.
+    tick seldom has. The labels end where most of them do, as OCR can stretch
+    the box of one over the axis line, such as the label at the corner beside
+    a wide x-axis label. The x-axis line is found the same way. An axis
+    without such a line gives None.
     """
     height = ink.shape[0]
     first_x, last_x = x_labels[0].x, x_labels[-1].x
     first_y, last_y = y_labels[0].y, y_labels[-1].y
 
     # Columns run from the labels to the plot; so do rows, read bottom to top.
-    start = math.ceil(max(label.right for label in y_labels))
+    start = math.ceil(np.median([label.right for label in y_labels]))
     rows = slice(height - math.floor(last_y), height - math.ceil(first_y) + 1)
     columns = ink[rows, start : math.floor(first_x) + _AXIS_REACH + 1]
     x = _first_line(columns.sum(axis=0), last_y - first_y, start + 0.5)
 
-    start = math.ceil(max(label.top for label in x_labels))
+    start = math.ceil(np.median([label.top for label in x_labels]))
     rows = slice(height - math.floor(first_y) - _AXIS_REACH, height - start + 1)
     lines = ink[rows, math.ceil(first_x) : math.floor(last_x) + 1][::-1]
     y = _first_line(lines.sum(axis=1), last_x - first_x, start - 0.5)

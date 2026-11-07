@@ -213,6 +213,38 @@ def test_fits_the_ticks(monkeypatch: pytest.MonkeyPatch) -> None:
     assert found.y_title is None
 
 
+def test_reads_reversed_axes(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Values fall from left to right, and from bottom to top, as on a depth axis.
+    labels = [*x_labels(["3", "2", "1", "0"]), *y_labels(["100", "10", "1"])]
+
+    found = read(monkeypatch, labels)
+
+    assert list(found.x_ticks) == [(80, 3), (160, 2), (240, 1), (320, 0)]
+    assert list(found.y_ticks) == [(80, 100), (140, 10), (200, 1)]
+    assert found.calibration.y_log
+    assert found.calibration.origin == (60.5, 59.5)
+    np.testing.assert_allclose(
+        found.calibration.to_data([(80, 80), (320, 200)]),
+        [(3, 100), (0, 1)],
+        atol=1e-12,
+    )
+
+
+def test_finds_axis_lines_past_stretched_label_boxes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # OCR stretched the boxes of the labels at the corner over the axis lines,
+    # but not so far that they no longer line up with the others.
+    near = [text(value, 44, 80 + 60 * i) for i, value in enumerate("012")]
+    labels = [*x_labels(["0", "1", "2"]), *near]
+    labels[0] = dataclasses.replace(labels[0], top=64)
+    labels[3] = dataclasses.replace(labels[3], right=61)
+
+    found = read(monkeypatch, labels)
+
+    assert found.calibration.origin == (60.5, 59.5)
+
+
 def test_reads_minus_signs(monkeypatch: pytest.MonkeyPatch) -> None:
     minus = "\N{MINUS SIGN}"
     labels = [*x_labels(["-1", "0", "1"]), *y_labels([f"{minus}1", "0", "1"])]
