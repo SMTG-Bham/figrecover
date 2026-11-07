@@ -242,6 +242,11 @@ work as before.
 - Numbers can have thousands separators (`2,000`), a percent sign (`50%`, read
   in percent) or an exponent (`2.5e-3`). A tick mark that OCR reads as a dash
   beside a label, as it can where no axis line joins them, is ignored.
+- OCR can mistake letters for digits, and dashes for minus signs. In a label
+  with a digit, O and o are read as 0, and l, I and | as 1 before a digit or
+  a point, so `1O` and `l.5` read as 10 and 1.5; after a digit, they may be a
+  unit, such as `5 l`, and are not read. Any dash before a number, such as
+  an en or em dash, is a minus sign.
 - A scale factor printed where plotting libraries put one, such as `1e-5` or
   `×10³` above the y-axis or below the x-axis, multiplies that axis's tick
   values. Text elsewhere that looks like one, such as a legend entry, does

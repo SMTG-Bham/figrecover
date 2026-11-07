@@ -30,7 +30,8 @@ The first release.
   are read turned upright, so OCR no longer splits or misreads them. It reads
   tick labels written upwards, places the ticks of rotated labels at their
   tick marks, reads plots without axis lines, and refuses a second y-axis on
-  the right.
+  the right. Tick labels in which OCR mistook letters for digits, such as `1O`
+  or `l.5`, or dashes for minus signs, are read as they were written.
 - Logarithmic axes work too. figrecover finds them itself when it reads the
   axes, including tick labels written as powers, such as 10⁻² or 2⁵, even
   where OCR misses the superscripts; and `--log` names them for `-p`.
