@@ -901,8 +901,12 @@ def marked_plot(x_marks: Sequence[int], y_marks: Sequence[int], line: int = 1) -
 def test_moves_ticks_to_the_marks_drawn(
     monkeypatch: pytest.MonkeyPatch, line: int
 ) -> None:
-    # Rotated x labels end at their ticks, rather than centring on them.
-    rotated = [text(value, 65 + 80 * i, 45, width=30) for i, value in enumerate("012")]
+    # Rotated x labels end at their ticks, rather than centring on them, and
+    # are as long as their texts, so their middles lie unlike beside them.
+    rotated = [
+        text(value, 80 + 80 * i - width / 2, 45, width=width)
+        for i, (value, width) in enumerate(zip("012", (20, 30, 40), strict=True))
+    ]
     labels = [*rotated, *y_labels(["0", "1", "2"])]
     monkeypatch.setattr(axes, "_read_text", lambda _image: labels)
 

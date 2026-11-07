@@ -102,6 +102,22 @@ class Axes:
     y_title: str | None
 
 
+class _NoTicksError(ValueError):
+    """An axis of a plot has no tick labels, as one shared with another may not.
+
+    Attributes:
+        axis: The axis, ``x`` or ``y``.
+    """
+
+    def __init__(self, axis: str) -> None:
+        lines = "row" if axis == "x" else "column"
+        super().__init__(
+            f"found no {lines} of {MIN_TICKS} or more numbers to read as "
+            f"{axis}-axis ticks"
+        )
+        self.axis = axis
+
+
 @dataclass(frozen=True, slots=True)
 class _Text:
     """A line of text and its box, in pixels from the bottom-left corner.
@@ -526,8 +542,7 @@ def _lowest_row(numbers: Sequence[_Text]) -> list[_Text]:
         row for row in _groups(numbers, lambda text: text.y) if len(row) >= MIN_TICKS
     ]
     if not rows:
-        msg = f"found no row of {MIN_TICKS} or more numbers to read as x-axis ticks"
-        raise ValueError(msg)
+        raise _NoTicksError("x")
     return rows[0]
 
 
@@ -539,8 +554,7 @@ def _leftmost_column(numbers: Sequence[_Text]) -> list[_Text]:
         if len(column) >= MIN_TICKS
     ]
     if not columns:
-        msg = f"found no column of {MIN_TICKS} or more numbers to read as y-axis ticks"
-        raise ValueError(msg)
+        raise _NoTicksError("y")
     return columns[0]
 
 
