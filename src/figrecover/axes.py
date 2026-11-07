@@ -21,6 +21,7 @@ MIN_TICKS = 3
 """Fewest labelled ticks read on each axis, so that a misread label shows."""
 
 _TICK_TOLERANCE = 0.1  # a tick label this fraction of the tick spacing off is misread
+_STEP_TOLERANCE = 0.01  # a tick value this fraction of a step off the steps is misread
 _AXIS_REACH = 3  # an axis line may lie this many pixels beyond the first tick
 _TICK_GAP = 0.6  # tick marks and their padding take this many label heights
 _LINE_COVER = 0.9  # an axis line has ink along this fraction of its labels' span
@@ -133,7 +134,9 @@ def read_axes(image: Image) -> Axes:
     The x-axis tick labels are the lowest row of at least ``MIN_TICKS``
     numbers, and the y-axis tick labels the leftmost column of at least
     ``MIN_TICKS`` numbers above them, aligned on the right. Labels whose values
-    do not fall in line with the others, such as misread ones, are dropped.
+    do not fall in line with the others, such as misread ones, are dropped,
+    as are those on a linear axis whose values are off the even steps that
+    the others take.
     Each tick lies at the middle of its label. A scale factor printed where
     plotting libraries put one, such as ``1e-5`` above the y-axis or below
     the x-axis, multiplies the values of its axis's ticks.
@@ -418,9 +421,10 @@ def _in_line(
     """Return the most tick labels whose values are in line with their positions.
 
     The values are taken on a linear scale and on a logarithmic one, and the
-    scale on which more labels are in line wins, the linear one in a tie. The
-    ink shows which labels have superscripts, and ``height`` is the usual
-    height of a label.
+    scale on which more labels are in line wins, the linear one in a tie. On
+    the linear scale, labels in line count only if they take the even steps
+    that most do. The ink shows which labels have superscripts, and
+    ``height`` is the usual height of a label.
 
     Returns:
         The labels in line, by position, their values, and whether the scale
@@ -431,6 +435,8 @@ def _in_line(
     values = _values(labels, ink, height)
     tolerance = _TICK_TOLERANCE * np.median(np.diff(pixels))
     linear = _most_in_line(pixels, values, tolerance)
+    if np.count_nonzero(linear) >= MIN_TICKS:
+        linear = _evenly_stepped(pixels, values, linear)
     exponents = np.log10(values, out=np.full_like(values, np.nan), where=values > 0)
     logarithmic = _most_in_line(pixels, exponents, tolerance)
     log = bool(np.count_nonzero(logarithmic) > np.count_nonzero(linear))
@@ -438,7 +444,8 @@ def _in_line(
     if np.count_nonzero(best) < MIN_TICKS:
         msg = (
             f"only {np.count_nonzero(best)} of the {len(labels)} {name}-axis tick "
-            "labels are in line, on a linear or a logarithmic scale"
+            "labels are in line, on a linear scale at even steps or on a "
+            "logarithmic scale"
         )
         raise ValueError(msg)
     return list(itertools.compress(labels, best)), values[best].tolist(), log
@@ -598,6 +605,36 @@ def _most_in_line(
         in_line = np.abs(pixels - expected) <= tolerance
         if np.count_nonzero(in_line) > np.count_nonzero(best):
             best = in_line
+    return best
+
+
+def _evenly_stepped(
+    pixels: npt.NDArray[np.float64],
+    values: npt.NDArray[np.float64],
+    in_line: npt.NDArray[np.bool_],
+) -> npt.NDArray[np.bool_]:
+    """Return which values in line take the even steps that the most of them take.
+
+    Plotting libraries label a linear axis at even steps, such as 0, 250 and
+    500, so a value off the steps that the others take, such as 758 read for
+    750, is misread, though it may lie close enough to its tick to be in
+    line. Each pair of values in line sets a step: their difference over the
+    number of ticks between them, counted in the shortest spacing of the
+    labels in line. A value takes the steps if it lies within
+    ``_STEP_TOLERANCE`` of a step from the first value of the pair. The steps
+    that the most values take win, the longest in a tie.
+    """
+    indices = np.flatnonzero(in_line)
+    spacing = float(np.diff(pixels[indices]).min())
+    best = np.zeros_like(in_line)
+    longest = 0.0
+    for first, second in itertools.combinations(indices, 2):
+        ticks = max(round(float(pixels[second] - pixels[first]) / spacing), 1)
+        step = float(abs(values[second] - values[first])) / ticks
+        steps = (values - values[first]) / step
+        taken = in_line & (np.abs(steps - np.round(steps)) <= _STEP_TOLERANCE)
+        if (np.count_nonzero(taken), step) > (np.count_nonzero(best), longest):
+            best, longest = taken, step
     return best
 
 

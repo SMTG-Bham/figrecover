@@ -464,6 +464,30 @@ def test_drops_misread_tick_labels(monkeypatch: pytest.MonkeyPatch) -> None:
     assert list(found.y_ticks) == [(80, 0), (140, 0.5), (260, 1.5)]
 
 
+def test_drops_tick_values_off_the_even_steps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 750 misread as 758, close enough to its tick to be in line.
+    labels = [
+        *x_labels(["0", "250", "500", "758", "1000"]),
+        *y_labels(["0", "1", "2"]),
+    ]
+
+    found = read(monkeypatch, labels)
+
+    assert [value for _, value in found.x_ticks] == [0, 250, 500, 1000]
+
+
+def test_needs_tick_values_at_even_steps(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 250 and 750 misread as 258 and 758: no three labels take even steps.
+    labels = [*x_labels(["0", "258", "500", "758"]), *y_labels(["0", "1", "2"])]
+
+    with pytest.raises(
+        ValueError, match="only 2 of the 4 x-axis tick labels are in line, on a"
+    ):
+        read(monkeypatch, labels)
+
+
 def test_needs_tick_labels_in_line(monkeypatch: pytest.MonkeyPatch) -> None:
     labels = [*x_labels(["1", "3", "2", "4"]), *y_labels(["0", "1", "2"])]
 
