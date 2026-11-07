@@ -263,6 +263,11 @@ work as before.
   `×10³` above the y-axis or below the x-axis, multiplies that axis's tick
   values. Text elsewhere that looks like one, such as a legend entry, does
   not. An axis offset, such as `+1e3`, cannot be read.
+- A power of ten in an axis title, after a bracket or a slash, as in
+  `Current (×10⁻³ A)`, `Count (×10³)` or `Energy / 10³ J`, says the axis is in
+  units of that power, so it multiplies the tick values too, and is left out
+  of the column's name: `Current (A)`, `Count` or `Energy / J`. Units are not
+  converted, so a column titled `Voltage (mV)` stays in millivolts.
 - Each tick lies at the middle of its label, or, for labels that end at their
   tick marks rather than centring on them, as rotated labels do, at the mark.
   Labels written upwards, turned a quarter turn, are read as well as those

@@ -24,8 +24,9 @@ The first release.
 - With the `ocr` extra, figrecover reads the axes when `-p` is left out: it
   calibrates each image from its tick labels, including thousands separators,
   decimal commas, percentages and exponents, applying scale factors such as
-  `1e-5` printed beside an axis, traces from where the axis lines cross, and
-  names the CSV columns after the axis titles. Titles can run over several
+  `1e-5` printed beside an axis or `×10⁻³` written in its title, traces from
+  where the axis lines cross, and names the CSV columns after the axis
+  titles. Titles can run over several
   lines and be aligned with either end of their axes, and y-axis titles
   written upwards are read turned upright, so OCR no longer splits or misreads
   them. It reads tick labels written upwards, reads those written at a slant
