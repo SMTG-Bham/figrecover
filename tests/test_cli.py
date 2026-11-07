@@ -44,6 +44,19 @@ MARKERS = [str(EXAMPLES / "markers.png"), *POINTS, *MARKER_LOCATIONS]
 LOGARITHMIC = str(EXAMPLES / "logarithmic.png")
 BINARY = str(EXAMPLES / "binary.png")
 PANELS = str(EXAMPLES / "panels.png")
+LABELLED_PDF = str(EXAMPLES / "labelled.pdf")
+# The positions of POINTS in series.pdf, in points, that
+# examples/make_examples.py prints.
+PDF_LOCATIONS = ["-l", "57.6,31.68", "-l", "414.72,31.68", "-l", "57.6,105.6"]
+SERIES_PDF = [str(EXAMPLES / "series.pdf"), *POINTS, *PDF_LOCATIONS]
+MARKERS_PDF = str(EXAMPLES / "markers.pdf")
+# The positions of POINTS, and of the legend's markers, in markers.pdf, in
+# points, that examples/make_examples.py prints.
+MARKER_PDF_LOCATIONS = ["-l", "39.89,59.29", "-l", "451.44,59.29", "-l", "39.89,133.26"]
+MARKER_PDF_KEYS = [
+    *("-m", "108.45,12.91", "-m", "187.85,12.91"),
+    *("-m", "272.06,12.91", "-m", "347.51,12.91"),
+]
 
 
 def spectrum(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
@@ -481,6 +494,132 @@ def test_reports_a_missing_ocr_extra(capsys: pytest.CaptureFixture[str]) -> None
     assert "needs the ocr extra" in capsys.readouterr().err
 
 
+def test_reads_pdf_files_exactly(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    preview = tmp_path / "preview.png"
+
+    assert main([LABELLED_PDF, "--preview", str(preview)]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.err == (
+        'figrecover: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10\n'
+        'figrecover: y-axis "Voltage (mV)" with ticks at '
+        "-0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1\n"
+    )
+    data = read_csv(captured.out, header="Time (s),Voltage (mV)")
+    # As exact as the 6 significant figures of the CSV file.
+    np.testing.assert_allclose(data[:, 1], ringing(data[:, 0]), atol=1e-5)
+    image = cv2.imread(str(preview))
+    assert image is not None
+    assert image.shape[0] == 2 * 288  # the page, 2 pixels to the point
+    assert np.any(np.all(image == (255, 0, 0), axis=-1))  # the ticks, in blue
+
+
+def test_traces_the_curves_of_pdf_files_by_colour(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main([*SERIES_PDF, "-n", "4"]) == 0
+
+    captured = capsys.readouterr()
+    assert (
+        captured.err == "figrecover: colours: -c 2ca02c -c ff7f0e -c 1f77b4 -c 000000\n"
+    )
+    data = read_csv(captured.out, header="series,x,y")
+    for series, curve in enumerate([wave, growth, decay, trend], start=1):
+        x, y = data[data[:, 0] == series, 1:].T
+        np.testing.assert_allclose(y, curve(x), atol=1e-5)
+
+
+def test_traces_the_given_colours_in_a_box_of_a_page_of_a_pdf_file(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    box = ["--page", "1", "--box", "0,0,460.8,288"]
+
+    assert main([*SERIES_PDF, *box, "-c", "1f77b4"]) == 0
+
+    data = read_csv(capsys.readouterr().out)
+    np.testing.assert_allclose(data[:, 1], decay(data[:, 0]), atol=1e-5)
+
+
+def test_asks_for_missing_locations_in_pdf_files_and_prints_them(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    shown: list[Image] = []
+
+    def pick_points(image: Image, _labels: Sequence[str]) -> list[Point]:
+        shown.append(image)
+        # The page is shown 2 pixels to the point.
+        return [(115.2, 63.36), (829.44, 63.36), (115.2, 211.2)]
+
+    monkeypatch.setattr(interactive, "pick_points", pick_points)
+
+    assert main([str(EXAMPLES / "series.pdf"), *POINTS, "-c", "1f77b4"]) == 0
+    assert shown[0].shape == (576, 922, 3)
+    captured = capsys.readouterr()
+    assert captured.err == f"figrecover: locations: {' '.join(PDF_LOCATIONS)}\n"
+    data = read_csv(captured.out)
+    np.testing.assert_allclose(data[:, 1], decay(data[:, 0]), atol=1e-5)
+
+
+def test_traces_curves_drawn_as_images_in_pdf_files(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    rasterised = str(EXAMPLES / "rasterised.pdf")
+
+    assert main([rasterised, "-n", "2", "--remove-grid"]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.err.endswith("figrecover: colours: -c ff7f0e -c 1f77b4\n")
+    data = read_csv(captured.out, header="series,Time (s),Voltage (mV)")
+    for series, curve in enumerate([growth, decay], start=1):
+        assert_follows(data[data[:, 0] == series, 1:], curve)
+
+
+def test_finds_series_by_their_markers_in_pdf_files(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    preview = tmp_path / "preview.png"
+
+    assert main([MARKERS_PDF, *MARKER_PDF_KEYS, "--preview", str(preview)]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.err.endswith(
+        "figrecover: markers found in each series: 19, 19, 19, 19\n"
+    )
+    data = read_csv(captured.out, header="series,x,y")
+    for series, curve in enumerate([decay, growth, wave, trend], start=1):
+        x, y = data[data[:, 0] == series, 1:].T
+        # Every marker, every half unit from 0.5 to 9.5, even where the
+        # series cross.
+        np.testing.assert_allclose(x, np.arange(0.5, 10, 0.5), atol=1e-5)
+        np.testing.assert_allclose(y, curve(x), atol=1e-5)
+    image = cv2.imread(str(preview))
+    assert image is not None
+    for red, green, blue in cli.SERIES_COLOURS[:4]:  # each series' colour
+        assert np.any(np.all(image == (blue, green, red), axis=-1))
+
+
+def test_traces_series_of_markers_in_pdf_files_by_colour(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main([str(EXAMPLES / "scatter.pdf"), "-n", "2"]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.err.endswith("figrecover: colours: -c ff7f0e -c 1f77b4\n")
+    data = read_csv(captured.out, header="series,Time (s),Voltage (mV)")
+    for series, curve in enumerate([growth, decay], start=1):
+        x, y = data[data[:, 0] == series, 1:].T
+        np.testing.assert_allclose(x, np.arange(0.5, 10, 0.5), atol=1e-5)
+        np.testing.assert_allclose(y, curve(x), atol=1e-5)
+
+
+@pytest.mark.usefixtures("without_pdf")
+def test_reports_a_missing_pdf_extra(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main([LABELLED_PDF]) == 1
+    assert "needs the pdf extra" in capsys.readouterr().err
+
+
 def test_can_be_cancelled(monkeypatch: pytest.MonkeyPatch) -> None:
     def pick_points(_image: Image, _labels: Sequence[str]) -> list[Point]:
         raise KeyboardInterrupt
@@ -507,6 +646,26 @@ def test_can_be_cancelled(monkeypatch: pytest.MonkeyPatch) -> None:
             "the -m position 148,-1 lies outside the 640x400 image",
         ),
         ([*MARKERS, "-m", "148,18", "-m", "600,18"], "found no marker near 600,18"),
+        ([LABELLED_PDF, "--page", "2"], "'" + LABELLED_PDF + "' has no page 2"),
+        (
+            [str(EXAMPLES / "series.pdf"), *POINTS, "-l", "0,0", "-l", "999,0"],
+            "the -l location 999,0 lies outside the page read, 0,0,460.8,288",
+        ),
+        (
+            [MARKERS_PDF, "-m", "999,0"],
+            "the -m position 999,0 lies outside the page read, 0,0,460.8,288",
+        ),
+        (
+            [MARKERS_PDF, *POINTS, *MARKER_PDF_LOCATIONS, "-m", "5,280"],
+            "found no marker near 5,280",
+        ),
+        (
+            [
+                *(MARKERS_PDF, *POINTS, *MARKER_PDF_LOCATIONS),
+                *("-m", "108.45,12.91", "-m", "110,13"),
+            ],
+            "the markers near 108.45,12.91 and 110,13 belong to the same series",
+        ),
     ],
 )
 def test_reports_errors(
@@ -546,6 +705,12 @@ def test_accepts_points_with_spaces_and_exponents(
         (["plot.png", "-l", "80,44"], "give the reference points of the -l"),
         (["plot.png", "--log", "x"], "--log needs -p"),
         ([*SPECTRUM, "--log", "z"], "invalid choice: 'z'"),
+        (["plot.png", "--page", "2"], "--page and --box choose what to read in a PDF"),
+        (["plot.png", "--box", "0,0,1,1"], "--page and --box choose what to read"),
+        ([LABELLED_PDF, "--page", "0"], "expected a positive whole number, got '0'"),
+        ([LABELLED_PDF, "--box", "0,0,1"], "expected a box written as x0,y0,x1,y1"),
+        ([LABELLED_PDF, "--box", "0,0,inf,1"], "expected finite numbers in the box"),
+        ([LABELLED_PDF, "--box", "1,0,0,1"], "whose x1 and y1 exceed its x0 and y0"),
         ([], "required: image"),
     ],
 )

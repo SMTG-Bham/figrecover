@@ -5,7 +5,8 @@
 """Draw the example plots, whose curves the tests know exactly.
 
 Run from the repository root with ``uv run examples/make_examples.py``. It
-prints the pixel position of each reference point, for figrecover's -l option.
+prints the pixel position of each reference point, for figrecover's -l option,
+or in a PDF its position in points.
 """
 
 from collections.abc import Callable
@@ -21,6 +22,7 @@ from matplotlib.legend import Legend
 type Curve = Callable[[npt.NDArray[np.float64]], npt.NDArray[np.float64]]
 
 HERE = Path(__file__).parent
+ALSO_PDF = {"labelled", "logarithmic", "markers", "series"}  # also saved as PDFs
 
 
 def spectrum(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
@@ -116,6 +118,48 @@ def draw_log(
     save(name, figure, axes, points)
 
 
+def draw_rasterised(name: str, curves: dict[str, Curve]) -> None:
+    """Draw curves, keyed by colour, as an image in a PDF, and print the points.
+
+    The curves are rasterised at 100 dots per inch, as plots of many points
+    often are to keep their PDFs small, while the axes and text stay vector.
+    """
+    figure, axes = plt.subplots(figsize=(6.4, 4), dpi=100)
+    x = np.linspace(0, 10, 2000)
+    for colour, curve in curves.items():
+        axes.plot(x, curve(x), color=colour, linewidth=1.5, rasterized=True)
+    axes.set(xlabel="Time (s)", ylabel="Voltage (mV)", xlim=(0, 10), ylim=(0, 3))
+    axes.spines[["top", "right"]].set_visible(False)
+    save_pdf(name, figure, axes, [(0, 0), (10, 0), (0, 1)])
+    plt.close(figure)
+
+
+def draw_scatter(name: str, errors: Curve, scattered: Curve) -> None:
+    """Draw two series of markers in a PDF, and print the points.
+
+    The markers lie every half unit of x from 0.5 to 9.5: blue circles with
+    error bars, whose caps are markers too, and orange squares, as a scatter
+    plot draws them. The legend lies inside the axes.
+    """
+    figure, axes = plt.subplots(figsize=(6.4, 4), dpi=100)
+    x = np.arange(0.5, 10, 0.5)
+    axes.errorbar(
+        x, errors(x), yerr=0.1, fmt="o", capsize=3, label=errors.__name__.capitalize()
+    )
+    axes.scatter(
+        x,
+        scattered(x),
+        color="tab:orange",
+        marker="s",
+        label=scattered.__name__.capitalize(),
+    )
+    axes.set(xlabel="Time (s)", ylabel="Voltage (mV)", xlim=(0, 10), ylim=(0, 3))
+    axes.spines[["top", "right"]].set_visible(False)
+    axes.legend(loc="center right")
+    save_pdf(name, figure, axes, [(0, 0), (10, 0), (0, 1)])
+    plt.close(figure)
+
+
 def draw_titled(name: str, curve: Curve, titles: tuple[str, str]) -> None:
     """Draw a curve over x from 0 to 10 with titles of two lines, and print the points.
 
@@ -206,19 +250,52 @@ def save(
 ) -> None:
     """Save a plot, and print the pixel positions of reference points in it.
 
-    With a legend, also print the pixel positions of its markers.
+    With a legend, also print the pixel positions of its markers. Plots named
+    in ``ALSO_PDF`` are saved as PDFs too.
     """
     figure.savefig(HERE / f"{name}.png", facecolor="white")
-
-    # Display coordinates are pixels from the bottom-left corner.
+    # Display coordinates are pixels from the bottom-left corner, as the
+    # image was drawn, before the PDF is.
     pixels = axes.transData.transform(points).round().astype(int)
     options = [f"-l {x},{y}" for x, y in pixels]
-    for handle in legend.get_lines() if legend else []:
-        # A legend line with one marker has three points, marked in the middle.
-        x, y = handle.get_transform().transform(handle.get_xydata()[1])
-        options.append(f"-m {x:.0f},{y:.0f}")
+    options += [f"-m {x:.0f},{y:.0f}" for x, y in keys(legend)]
     print(name, " ".join(options))
+    if name in ALSO_PDF:
+        save_pdf(name, figure, axes, points, legend)
     plt.close(figure)
+
+
+def save_pdf(
+    name: str,
+    figure: Figure,
+    axes: Axes,
+    points: list[tuple[float, float]],
+    legend: Legend | None = None,
+) -> None:
+    """Save a plot as a PDF, and print the positions of reference points in points.
+
+    With a legend, also print the positions of its markers. The PDF's date is
+    left out, so that it is drawn the same each time.
+    """
+    figure.savefig(
+        HERE / f"{name}.pdf", facecolor="white", metadata={"CreationDate": None}
+    )
+    # Display coordinates are pixels, of which there are dpi to 72 points,
+    # but the legend keeps those of the PDF's drawing, at 72 to the inch.
+    positions = axes.transData.transform(points) * 72 / figure.dpi
+    options = [f"-l {x:.2f},{y:.2f}" for x, y in positions]
+    options += [f"-m {x:.2f},{y:.2f}" for x, y in keys(legend)]
+    print(f"{name}.pdf", " ".join(options))
+
+
+def keys(legend: Legend | None) -> npt.NDArray[np.float64]:
+    """Return the display coordinates of the markers in a legend's lines."""
+    found = [
+        # A legend line with one marker has three points, marked in the middle.
+        handle.get_transform().transform(handle.get_xydata()[1])
+        for handle in (legend.get_lines() if legend else [])
+    ]
+    return np.array(found, dtype=np.float64).reshape(-1, 2)
 
 
 draw("spectrum", {"black": spectrum}, 3, grid=False)
@@ -235,3 +312,5 @@ draw_titled("titled", spectrum, ("Photon energy\n(eV)", "Absorbance\n(arb. units
 draw_markers("markers", {"D": decay, "s": growth, "o": wave, "x": trend})
 draw_slanted("slanted", damped, ("Time (s)", "Voltage (mV)"))
 draw_panels("panels")
+draw_rasterised("rasterised", {"tab:blue": decay, "tab:orange": growth})
+draw_scatter("scatter", decay, growth)

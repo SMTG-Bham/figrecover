@@ -563,7 +563,7 @@ def _in_line(
     labels: Sequence[_Text],
     position: Callable[[_Text], float],
     name: str,
-    ink: npt.NDArray[np.uint8],
+    ink: npt.NDArray[np.uint8] | None,
     height: float,
 ) -> tuple[list[_Text], list[float], bool]:
     """Return the most tick labels whose values are in line with their positions.
@@ -571,8 +571,9 @@ def _in_line(
     The values are taken on a linear scale and on a logarithmic one, and the
     scale on which more labels are in line wins, the linear one in a tie. On
     the linear scale, labels in line count only if they take the even steps
-    that most do. The ink shows which labels have superscripts, and
-    ``height`` is the usual height of a label.
+    that most do. The ink shows which labels have superscripts, or None if
+    their texts show them, as those of a PDF do, and ``height`` is the usual
+    height of a label.
 
     Returns:
         The labels in line, by position, their values, and whether the scale
@@ -600,27 +601,29 @@ def _in_line(
 
 
 def _values(
-    labels: Sequence[_Text], ink: npt.NDArray[np.uint8], height: float
+    labels: Sequence[_Text], ink: npt.NDArray[np.uint8] | None, height: float
 ) -> npt.NDArray[np.float64]:
     """Return the values of tick labels, which are numbers or powers.
 
     OCR often misses superscripts, reading 2^5 as 25. A label that reads as
-    digits shows that it is a power if its last digit is drawn raised, and its
-    digits drawn full size are then its base; but not if it is slanted
-    ``_SLANT`` degrees or more, as rotated labels are, whose last digit lies
-    higher than the others if they rise to the right. The base of the axis is
-    the one most labels shown as powers have, by their text or raised digits,
-    or 10 if none are. A label that reads as that base followed by digits is a
-    power of it if its last digit is raised, or if most of the other labels
-    that read as powers of the base or as it followed by digits show that they
-    are powers. One misread label, such as 100 read with a degree sign for its
-    last 0, so does not make an axis of 100, 101 and 102 logarithmic.
+    digits shows that it is a power if its last digit is drawn raised in the
+    ink, and its digits drawn full size are then its base; but not if it is
+    slanted ``_SLANT`` degrees or more, as rotated labels are, whose last
+    digit lies higher than the others if they rise to the right, nor if the
+    ink is None, as the texts of a PDF hold their superscripts. The base of
+    the axis is the one most labels shown as powers have, by their text or
+    raised digits, or 10 if none are. A label that reads as that base followed
+    by digits is a power of it if its last digit is raised, or if most of the
+    other labels that read as powers of the base or as it followed by digits
+    show that they are powers. One misread label, such as 100 read with a
+    degree sign for its last 0, so does not make an axis of 100, 101 and 102
+    logarithmic.
     """
     readings = [_reading(label, height) for label in labels]
     written = [_POWER.fullmatch(reading) for reading in readings]
     raised = [
         _exponent(ink, label)
-        if _DIGITS.fullmatch(reading) and abs(label.slant) < _SLANT
+        if ink is not None and _DIGITS.fullmatch(reading) and abs(label.slant) < _SLANT
         else None
         for label, reading in zip(labels, readings, strict=True)
     ]
@@ -855,7 +858,7 @@ def _check_one_y_axis(
     numbers: Sequence[_Text],
     end: float,
     calibration: Calibration,
-    ink: npt.NDArray[np.uint8],
+    ink: npt.NDArray[np.uint8] | None,
     height: float,
 ) -> None:
     """Refuse a second y-axis, on the right, whose values differ from the left's.

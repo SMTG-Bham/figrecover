@@ -8,7 +8,7 @@ import os
 import re
 import sys
 import warnings
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TextIO
@@ -18,6 +18,7 @@ import numpy as np
 import numpy.typing as npt
 
 from . import __version__, interactive
+from .axes import Axes
 from .calibration import MIN_POINTS, Calibration, Point
 from .digitize import (
     Colour,
@@ -29,6 +30,18 @@ from .digitize import (
     trace_curves,
 )
 from .panels import read_panels
+from .pdf import (
+    PREVIEW_SCALE,
+    Box,
+    Drawing,
+    find_pdf_colours,
+    find_pdf_markers,
+    load_pdf,
+    read_pdf_axes,
+    remove_pdf_grid,
+    render_pdf,
+    trace_pdf_curves,
+)
 
 type Ring = tuple[Point, int, Colour]
 """A ring to draw in the preview: its centre, its radius and its colour."""
@@ -92,6 +105,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error(
             "--log needs -p; figrecover finds logarithmic axes itself when reading them"
         )
+    if not _is_pdf(arguments.image) and (arguments.page or arguments.box):
+        parser.error("--page and --box choose what to read in a PDF file")
     outputs = {"-o": arguments.output, "--preview": arguments.preview}
     for option, path in outputs.items():
         if path is not None and path.resolve() == arguments.image.resolve():
@@ -116,13 +131,32 @@ def _build_parser() -> argparse.ArgumentParser:
     """Create the command-line argument parser."""
     parser = argparse.ArgumentParser(
         prog="figrecover",
-        description="Recover the curves in an image of a plot as CSV, with "
-        "columns for x and y, and a series column if there are several curves. "
-        "An image of several plots, such as the panels of a figure, gives a CSV "
-        "for each when its axes are read.",
+        description="Recover the curves in an image of a plot, or a PDF file, as "
+        "CSV, with columns for x and y, and a series column if there are several "
+        "curves. An image of several plots, such as the panels of a figure, gives "
+        "a CSV for each when its axes are read.",
     )
     parser.add_argument("--version", action="version", version=__version__)
-    parser.add_argument("image", type=Path, help="image of the plot")
+    parser.add_argument(
+        "image",
+        type=Path,
+        help="image of the plot, or a PDF file, whose curves are read exactly "
+        "from its drawing (this needs the pdf extra); positions in a PDF are in "
+        "points from the bottom-left corner of the page",
+    )
+    parser.add_argument(
+        "--page",
+        type=_count,
+        metavar="N",
+        help="the page of the PDF file to read, from 1 (default: 1)",
+    )
+    parser.add_argument(
+        "--box",
+        type=_box,
+        metavar="X0,Y0,X1,Y1",
+        help="the left, bottom, right and top edges of the part of the PDF's page "
+        "to read, such as one figure, in points (default: the whole page)",
+    )
     parser.add_argument(
         "-p",
         "--point",
@@ -210,10 +244,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _digitize(arguments: argparse.Namespace) -> None:
-    """Write the curves in the image, or in each of its panels, as CSV.
+    """Write the curves in the image, each of its panels or the PDF file, as CSV.
 
     A panel whose curves cannot be traced is left out, with a warning.
     """
+    if _is_pdf(arguments.image):
+        _digitize_pdf(arguments)
+        return
     image = load_image(arguments.image)
     _check_locations(arguments.markers, image, "-m position")
     if arguments.points:
@@ -278,19 +315,100 @@ def _trace(
     origin = plot.calibration.origin
     rings: list[Ring] = [(pixel, 6, (0, 0, 255)) for pixel in plot.pixels]
     if arguments.markers:
-        curves = _find_markers(traced, arguments.markers, origin)
-        colours = [
-            SERIES_COLOURS[series % len(SERIES_COLOURS)]
-            for series in range(len(curves))
-        ]
-        for key, curve, colour in zip(arguments.markers, curves, colours, strict=True):
-            rings += [(key, 6, colour), *((marker, 4, colour) for marker in curve)]
+        curves = _counted(find_markers(traced, arguments.markers, origin))
+        colours = _series_colours(len(curves))
+        rings += _marker_rings(arguments.markers, curves, colours)
     else:
         colours = arguments.colours or _find_colours(
-            traced, arguments.series, origin, _prefix(plot.name)
+            lambda count: find_colours(traced, count, origin),
+            arguments.series,
+            _prefix(plot.name),
         )
         curves = trace_curves(traced, colours, origin)
     return curves, colours, rings
+
+
+def _digitize_pdf(arguments: argparse.Namespace) -> None:
+    """Write the curves in a plot on a page of the PDF file as CSV.
+
+    Positions on the page are in points, and the preview shows the part of
+    the page read, ``PREVIEW_SCALE`` pixels to the point.
+    """
+    drawing = load_pdf(arguments.image, arguments.page or 1, arguments.box)
+    _check_positions(arguments.markers, drawing.box, "-m position")
+    if arguments.remove_grid:
+        drawing = remove_pdf_grid(drawing)
+    if arguments.points:
+        _check_positions(arguments.locations, drawing.box, "-l location")
+        positions = arguments.locations or _click_positions(drawing, arguments.points)
+        calibration = Calibration.from_points(
+            arguments.points,
+            positions,
+            x_log="x" in arguments.log,
+            y_log="y" in arguments.log,
+        )
+        names = ("x", "y")
+    else:
+        calibration, positions, names = _read_axes(read_pdf_axes(drawing), None)
+    if arguments.markers:
+        curves = _counted(
+            find_pdf_markers(drawing, arguments.markers, calibration.origin)
+        )
+        colours = _series_colours(len(curves))
+    else:
+        colours = arguments.colours or _find_colours(
+            lambda count: find_pdf_colours(drawing, count, calibration.origin),
+            arguments.series,
+            "",
+        )
+        curves = trace_pdf_curves(drawing, colours, calibration.origin)
+
+    if arguments.preview:
+        corner = np.array(drawing.box[:2])
+        pixels = [(curve - corner) * PREVIEW_SCALE for curve in curves]
+        rings: list[Ring] = [
+            ((x, y), 6, (0, 0, 255))
+            for x, y in (np.array(positions) - corner) * PREVIEW_SCALE
+        ]
+        if arguments.markers:
+            keys = (np.array(arguments.markers) - corner) * PREVIEW_SCALE
+            rings += _marker_rings([(x, y) for x, y in keys], pixels, colours)
+        image = render_pdf(drawing, PREVIEW_SCALE)
+        _save_preview(arguments.preview, image, pixels, colours, rings)
+    data = [calibration.to_data(curve) for curve in curves]
+    _write_csv(arguments.output or sys.stdout, [(None, data)], names)
+
+
+def _is_pdf(path: Path) -> bool:
+    """Return whether a file is a PDF file, by its name."""
+    return path.suffix.lower() == ".pdf"
+
+
+def _check_positions(positions: Sequence[Point], box: Box, name: str) -> None:
+    """Check that each position, such as an -l location, lies on the page read."""
+    left, bottom, right, top = box
+    for x, y in positions:
+        if not (left <= x <= right and bottom <= y <= top):
+            edges = ",".join(f"{edge:g}" for edge in box)
+            msg = f"the {name} {x:g},{y:g} lies outside the page read, {edges}"
+            raise ValueError(msg)
+
+
+def _click_positions(drawing: Drawing, points: Sequence[Point]) -> list[Point]:
+    """Ask the user to click on each point on a PDF's page, and print the -l options.
+
+    The page is shown ``PREVIEW_SCALE`` pixels to the point.
+    """
+    pixels = interactive.pick_points(
+        render_pdf(drawing, PREVIEW_SCALE), [f"{x:g},{y:g}" for x, y in points]
+    )
+    left, bottom = drawing.box[:2]
+    positions = [
+        (left + x / PREVIEW_SCALE, bottom + y / PREVIEW_SCALE) for x, y in pixels
+    ]
+    options = " ".join(f"-l {x:g},{y:g}" for x, y in positions)
+    print(f"figrecover: locations: {options}", file=sys.stderr)
+    return positions
 
 
 def _check_locations(locations: Sequence[Point], image: Image, name: str) -> None:
@@ -328,26 +446,35 @@ def _read_panels(image: Image) -> list[_Plot]:
     plots = []
     for number, panel in enumerate(panels, start=1):
         name = (panel.label or str(number)) if len(panels) > 1 else None
-        axes = panel.axes
-        for axis, title, ticks, log in (
-            ("x", axes.x_title, axes.x_ticks, axes.calibration.x_log),
-            ("y", axes.y_title, axes.y_ticks, axes.calibration.y_log),
-        ):
-            values = ", ".join(f"{value:g}" for _, value in ticks)
-            scale = "logarithmic " if log else ""
-            titled = f' "{title}"' if title else ""
-            message = (
-                f"{_prefix(name)}{scale}{axis}-axis{titled} with ticks at {values}"
-            )
-            print(f"figrecover: {message}", file=sys.stderr)
-        x_origin, y_origin = axes.calibration.origin
-        pixels = [(x, y_origin) for x, _ in axes.x_ticks]
-        pixels += [(x_origin, y) for y, _ in axes.y_ticks]
-        columns = (axes.x_title or "x", axes.y_title or "y")
+        calibration, pixels, columns = _read_axes(panel.axes, name)
         plots.append(
-            _Plot(name, panel.image, panel.offset, axes.calibration, pixels, columns)
+            _Plot(name, panel.image, panel.offset, calibration, pixels, columns)
         )
     return plots
+
+
+def _read_axes(
+    axes: Axes, name: str | None
+) -> tuple[Calibration, list[Point], tuple[str, str]]:
+    """Print the axes that were read, of the panel so named, so they can be checked.
+
+    Returns:
+        The calibration, the position of each tick on its axis line, and the
+        names of the x and y columns: the axis titles, or x and y.
+    """
+    for axis, title, ticks, log in (
+        ("x", axes.x_title, axes.x_ticks, axes.calibration.x_log),
+        ("y", axes.y_title, axes.y_ticks, axes.calibration.y_log),
+    ):
+        values = ", ".join(f"{value:g}" for _, value in ticks)
+        scale = "logarithmic " if log else ""
+        titled = f' "{title}"' if title else ""
+        message = f"{_prefix(name)}{scale}{axis}-axis{titled} with ticks at {values}"
+        print(f"figrecover: {message}", file=sys.stderr)
+    x_origin, y_origin = axes.calibration.origin
+    positions = [(x, y_origin) for x, _ in axes.x_ticks]
+    positions += [(x_origin, y) for y, _ in axes.y_ticks]
+    return axes.calibration, positions, (axes.x_title or "x", axes.y_title or "y")
 
 
 def _prefix(name: str | None) -> str:
@@ -356,27 +483,42 @@ def _prefix(name: str | None) -> str:
 
 
 def _find_colours(
-    image: Image, count: int | None, origin: Point, prefix: str
+    find: Callable[[int], list[Colour]], count: int | None, prefix: str
 ) -> list[Colour]:
     """Find the curve colours, and print the -c options to reuse if -n was given.
 
-    ``prefix`` starts the message, naming the panel.
+    ``find`` finds the colours of a given number of curves, and ``prefix``
+    starts the message, naming the panel.
     """
-    colours = find_colours(image, count or 1, origin)
+    colours = find(count or 1)
     if count is not None:
         options = " ".join(f"-c {bytes(colour).hex()}" for colour in colours)
         print(f"figrecover: {prefix}colours: {options}", file=sys.stderr)
     return colours
 
 
-def _find_markers(
-    image: Image, keys: Sequence[Point], origin: Point
-) -> list[npt.NDArray[np.float64]]:
-    """Find the markers of each series, and print how many were found."""
-    markers = find_markers(image, keys, origin)
+def _counted(markers: list[npt.NDArray[np.float64]]) -> list[npt.NDArray[np.float64]]:
+    """Print how many markers were found in each series, and return them."""
     counts = ", ".join(str(len(series)) for series in markers)
     print(f"figrecover: markers found in each series: {counts}", file=sys.stderr)
     return markers
+
+
+def _series_colours(count: int) -> list[Colour]:
+    """Return a colour of its own for each of a number of series of markers."""
+    return [SERIES_COLOURS[series % len(SERIES_COLOURS)] for series in range(count)]
+
+
+def _marker_rings(
+    keys: Sequence[Point],
+    markers: Sequence[npt.NDArray[np.float64]],
+    colours: Sequence[Colour],
+) -> list[Ring]:
+    """Return rings around each series' key and markers, in its colour, to preview."""
+    rings: list[Ring] = []
+    for key, series, colour in zip(keys, markers, colours, strict=True):
+        rings += [(key, 6, colour), *((marker, 4, colour) for marker in series)]
+    return rings
 
 
 def _write(
@@ -468,6 +610,22 @@ def _point(text: str) -> Point:
         msg = f"expected finite numbers in the point {text!r}"
         raise argparse.ArgumentTypeError(msg)
     return x, y
+
+
+def _box(text: str) -> Box:
+    """Parse a box written as ``x0,y0,x1,y1``, its left, bottom, right and top."""
+    try:
+        left, bottom, right, top = (float(value) for value in text.split(","))
+    except ValueError:
+        msg = f"expected a box written as x0,y0,x1,y1, got {text!r}"
+        raise argparse.ArgumentTypeError(msg) from None
+    if not all(map(math.isfinite, (left, bottom, right, top))):
+        msg = f"expected finite numbers in the box {text!r}"
+        raise argparse.ArgumentTypeError(msg)
+    if left >= right or bottom >= top:
+        msg = f"expected a box whose x1 and y1 exceed its x0 and y0, got {text!r}"
+        raise argparse.ArgumentTypeError(msg)
+    return left, bottom, right, top
 
 
 def _count(text: str) -> int:

@@ -15,13 +15,26 @@ from .digitize import (
     trace_curves,
 )
 from .panels import Panel, read_panels
+from .pdf import (
+    Box,
+    Drawing,
+    find_pdf_colours,
+    find_pdf_markers,
+    load_pdf,
+    read_pdf_axes,
+    remove_pdf_grid,
+    render_pdf,
+    trace_pdf_curves,
+)
 
 __version__ = version("figrecover")
 
 __all__ = [
     "Axes",
+    "Box",
     "Calibration",
     "Colour",
+    "Drawing",
     "Image",
     "Panel",
     "Point",
@@ -29,10 +42,17 @@ __all__ = [
     "__version__",
     "find_colours",
     "find_markers",
+    "find_pdf_colours",
+    "find_pdf_markers",
     "load_image",
+    "load_pdf",
     "read_axes",
     "read_panels",
+    "read_pdf_axes",
     "remove_grid",
+    "remove_pdf_grid",
+    "render_pdf",
     "trace_curve",
     "trace_curves",
+    "trace_pdf_curves",
 ]

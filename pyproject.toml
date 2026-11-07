@@ -36,6 +36,9 @@ ocr = [
   # overwrites opencv-python's and so can break the window for clicking.
   "rapidocr>=3.9.0,<3.10",
 ]
+pdf = [
+  "pypdfium2>=5.0.0",
+]
 
 [project.scripts]
 figrecover = "figrecover.cli:main"
@@ -59,7 +62,7 @@ dev = [
   "ruff>=0.16.10",
 ]
 test = [
-  "figrecover[ocr]",
+  "figrecover[ocr,pdf]",
   "pytest>=9.1.1",
   "pytest-cov>=7.1.0",
 ]
@@ -162,5 +165,5 @@ enable_error_code = [
 pretty = true
 
 [[tool.mypy.overrides]]
-module = ["rapidocr"]  # untyped, and optional
+module = ["pypdfium2", "pypdfium2.*", "rapidocr"]  # untyped, and optional
 ignore_missing_imports = true

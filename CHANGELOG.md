@@ -54,6 +54,18 @@ The first release.
 - Reversed axes, whose values fall from left to right or from bottom to top,
   work too, when figrecover reads the axes or with `-p` reference points on
   the axis lines.
+- With the `pdf` extra, figrecover reads plots in PDF files exactly, from what
+  they draw rather than from pixels: the axes from the PDF's text, with its
+  superscripts and subscripts, and their ticks at their tick marks; and the
+  curves as the points their paths pass through, told apart by colour, without
+  axis lines, tick marks, grid lines, legend keys, frames, filled areas or
+  points hidden beyond the axes. Markers, as in scatter plots, give the points
+  they mark, exactly, told apart by colour, or by their shapes with `-m`,
+  given positions in points; markers in legends and the caps of error bars are
+  left out. Curves drawn as images in the PDF are traced as in an image and
+  placed on the page. `--page` and `--box` choose the page and the part of it
+  to read, such as one figure on a page of a paper, and positions on the page
+  are in points.
 - `--preview` saves a faded copy of the image with each recovered curve drawn
   in its colour, and `--remove-grid` paints over grid lines before tracing.
 - Transparent pixels are treated as white, and plots with a dark background
@@ -63,5 +75,7 @@ The first release.
 - A typed Python API: `Calibration`, with linear or logarithmic axes,
   `load_image`, `remove_grid`, `find_colours`, `trace_curves`, `trace_curve`,
   `find_markers` and, with the `ocr` extra, `read_axes`, and `read_panels`,
-  which returns a `Panel` for each plot in a figure.
+  which returns a `Panel` for each plot in a figure; and, with the `pdf`
+  extra, `load_pdf`, `read_pdf_axes`, `find_pdf_colours`, `trace_pdf_curves`,
+  `find_pdf_markers`, `render_pdf` and `remove_pdf_grid`.
 - Requires Python 3.14 on Linux, with NumPy and OpenCV.
