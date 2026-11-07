@@ -1025,6 +1025,41 @@ def test_reads_titles_over_several_lines(monkeypatch: pytest.MonkeyPatch) -> Non
     assert found.y_title == "Resistance (Ohm)"
 
 
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        # A short first line, of letters without descenders.
+        (_Text("T", 155, 26, 165, 36), text("(degrees Celsius)", 160, 18, width=110)),
+        # Lines spaced widely, at 1.8 times the font size.
+        (text("Photon energy", 160, 30, width=90), text("(eV)", 160, 13, width=30)),
+    ],
+)
+def test_reads_titles_over_lines_apart_by_more_than_a_short_line(
+    monkeypatch: pytest.MonkeyPatch, first: _Text, second: _Text
+) -> None:
+    labels = [*x_labels(["0", "1", "2"]), *y_labels(["0", "1", "2"])]
+
+    found = read(monkeypatch, [*labels, first, second])
+
+    assert found.x_title == f"{first.text} {second.text}"
+
+
+def test_leaves_out_second_lines_of_tick_labels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Each label has its unit below it, and the scale factor lies beyond the
+    # last label. The title lies under the middle label, but alone.
+    labels = [*x_labels(["0", "1", "2"]), *y_labels(["0", "1", "2"])]
+    units = [text("s", 80 + 80 * i, 28) for i in range(3)]
+    scale = text("\N{MULTIPLICATION SIGN}10\N{SUPERSCRIPT THREE}", 360, 28)
+    title = text("Time", 160, 10, width=40)
+
+    found = read(monkeypatch, [*labels, *units, scale, title])
+
+    assert found.x_title == "Time"
+    assert [value for _, value in found.x_ticks] == [0, 1000, 2000]
+
+
 def test_leaves_out_lines_not_aligned_with_a_title(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

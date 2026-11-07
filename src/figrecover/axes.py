@@ -31,7 +31,7 @@ _SNAP_SLACK = 2  # labels centred within this many pixels of the tick marks stay
 _RAISED = 0.25  # a superscript sits this fraction of its label's height up or more
 _RAISED_TICK = 1.4  # a label this many times taller than usual has a tick on top
 _WRITTEN = 1.5  # words this much wider than tall run across, or taller, upwards
-_LINE_SPACING = 1  # a title's lines lie this many line heights apart or less
+_LINE_SPACING = 1.25  # a title's lines lie this many line heights apart or less
 _TILT = 15  # labels in boxes tilted this many degrees or more may be slanted
 _SLANT = 30  # text tilted this many degrees or more is slanted, not raised
 _TURN = 45  # slanted labels are read again turned this many degrees each way
@@ -187,8 +187,10 @@ def read_axes(image: Image) -> Axes:
     The titles are the nearest lines of text beyond the tick labels, centred
     along their axes, from where the axes cross to the far end of the axis
     line or labels, so a title may be aligned with either end. A title runs
-    on over the lines that follow, each within a line's height of the one
-    before and aligned with it. A y-axis title written upwards, as most are,
+    on over the lines that follow, each within ``_LINE_SPACING`` line heights
+    of the one before and aligned with it. Texts below the x-axis tick labels
+    that are their second lines, such as units under each, are not the
+    title. A y-axis title written upwards, as most are,
     is read again turned upright, as OCR reads text written across more
     surely; one whose words are about as wide as tall, such as a single
     letter, is read whichever way OCR is surer of. A power of ten after a
@@ -242,7 +244,9 @@ def read_axes(image: Image) -> Axes:
         else _beyond([t.top for t in x_labels], y_pixels[0], height),
     )
 
-    words = [text for text in texts if text not in {*x_labels, *y_labels}]
+    words = _without_second_lines(
+        [text for text in texts if text not in {*x_labels, *y_labels}], x_labels
+    )
     x_scale, y_scale = _scales(words, origin, y_labels)
     words = [word for word in words if not _SCALE.fullmatch(word.plain)]
     x_ticks = tuple(
@@ -964,6 +968,33 @@ def _scales(
     return scales[0], scales[1]
 
 
+def _without_second_lines(
+    words: Sequence[_Text], x_labels: Sequence[_Text]
+) -> list[_Text]:
+    """Return words without those that are second lines of the x-axis tick labels.
+
+    Tick labels can run over two lines or more, as in 2 above (120), or 0
+    above s. Words in the row nearest below the labels whose middles lie
+    within the box of a label are its second lines if at least ``MIN_TICKS``
+    labels have one, as a title, centred along the axis, does not. So are
+    those of each row below that likewise. Other words in such a row, such
+    as a scale factor beyond the last label, are kept.
+    """
+    words = list(words)
+    bottom = min(label.bottom for label in x_labels)
+    for row in _groups([word for word in words if word.y < bottom], lambda w: -w.y):
+        under = {
+            word: label
+            for word in row
+            for label in x_labels
+            if label.left <= word.x <= label.right
+        }
+        if len(set(under.values())) < MIN_TICKS:
+            break
+        words = [word for word in words if word not in under]
+    return words
+
+
 def _x_title(
     words: Sequence[_Text], x_labels: Sequence[_Text], span: tuple[float, float]
 ) -> str | None:
@@ -1053,9 +1084,11 @@ def _lines(texts: Iterable[_Text]) -> list[_Text]:
     """Return the lines of a title, the topmost first, each as one text.
 
     The first line is the topmost text and the text level with it. Each line
-    after it lies below the one before, within ``_LINE_SPACING`` of its height,
-    centre to centre, and aligned with it, the middle of one lying within the
-    other, so text further on, such as a caption, is left out.
+    after it lies below the one before, within ``_LINE_SPACING`` times the
+    height of the taller of the two, centre to centre, as a line of short
+    letters, such as T, has a short box; and aligned with it, the middle of
+    one lying within the other, so text further on, such as a caption, is
+    left out.
     """
     remaining = list(texts)
     lines: list[_Text] = []
@@ -1084,7 +1117,8 @@ def _line(texts: Sequence[_Text]) -> _Text:
 
 def _follows(line: _Text, before: _Text) -> bool:
     """Return whether a line carries on a title from the line before it."""
-    return before.y - line.y <= _LINE_SPACING * (before.top - before.bottom) and (
+    height = max(before.top - before.bottom, line.top - line.bottom)
+    return before.y - line.y <= _LINE_SPACING * height and (
         before.left <= line.x <= before.right or line.left <= before.x <= line.right
     )
 
