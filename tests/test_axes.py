@@ -127,6 +127,19 @@ def test_reads_powers_of_two() -> None:
     assert found.y_title == "Time (ms)"
 
 
+def test_reads_titles_of_two_lines() -> None:
+    found = read_axes(load_image(EXAMPLES / "titled.png"))
+    # The pixel positions of (0, 0), (10, 0) and (0, 1) that
+    # examples/make_examples.py prints.
+    pixels = [(76, 68), (627, 68), (76, 175)]
+
+    data = found.calibration.to_data(pixels)
+
+    np.testing.assert_allclose(data, [(0, 0), (10, 0), (0, 1)], atol=0.03)
+    assert found.x_title == "Photon energy (eV)"
+    assert found.y_title == "Absorbance (arb. units)"
+
+
 @pytest.mark.parametrize("name", ["labelled", "spectrum"])
 def test_finds_where_the_axis_lines_cross(name: str) -> None:
     # The axes of labelled.png start before the first ticks, and those of
@@ -639,8 +652,132 @@ def test_reads_the_nearest_titles(monkeypatch: pytest.MonkeyPatch) -> None:
         text("(a)", 10, 290),  # a panel label above the y-axis
         text("Legend", 300, 250),  # in the plot
     ]
+    monkeypatch.setattr(
+        axes, "_read_text", lambda _image: [*labels, *x_title, *y_title, *others]
+    )
+    image = plot()
+    image[:30, AXIS_LINES[0]] = 255  # the y-axis line ends at y = 270
 
-    found = read(monkeypatch, [*labels, *x_title, *y_title, *others])
+    found = read_axes(image)
 
     assert found.x_title == "Time (s)"
     assert found.y_title == "Voltage (mV)"
+
+
+def tall(content: str, x: float, y: float, height: float) -> _Text:
+    """Return a line of text written upwards, 14 pixels wide, centred on a pixel."""
+    return _Text(content, x - 7, y - height / 2, x + 7, y + height / 2)
+
+
+def upright(content: str, x: float, y: float, height: float, score: float = 1) -> _Text:
+    """Return a line of text written upwards as OCR reads it turned upright.
+
+    The text is 14 pixels wide and centred on a pixel position of the plot.
+    Turned a quarter turn clockwise, the plot's left side runs along the top
+    of a square as tall as the plot, which OCR reads.
+    """
+    return _Text(
+        content, y - height / 2, HEIGHT - x - 7, y + height / 2, HEIGHT - x + 7, score
+    )
+
+
+def read_turned(
+    monkeypatch: pytest.MonkeyPatch, texts: Sequence[_Text], turned: Sequence[_Text]
+) -> Axes:
+    """Read the axes of a plot with ink left of the y labels, as OCR read the texts.
+
+    Turned upright, OCR reads the turned texts left of the y-axis tick labels.
+    """
+    image = plot()
+    image[100:200, :20] = 0
+
+    def read_text(image: Image) -> list[_Text]:
+        return list(turned if image.shape[0] == image.shape[1] else texts)
+
+    monkeypatch.setattr(axes, "_read_text", read_text)
+    return read_axes(image)
+
+
+def test_reads_titles_over_several_lines(monkeypatch: pytest.MonkeyPatch) -> None:
+    labels = [*x_labels(["0", "1", "2"]), *y_labels(["0", "1", "2"])]
+    # Each line lies within a line's height of the one before, aligned with
+    # it; the first line of a title written upwards is the leftmost.
+    x_title = [text("Temperature", 160, 28, width=80), text("(K)", 160, 15)]
+    y_title = [tall("Resistance", 8, 140, 80), tall("(Ohm)", 22, 140, 40)]
+
+    found = read(monkeypatch, [*labels, *x_title, *y_title])
+
+    assert found.x_title == "Temperature (K)"
+    assert found.y_title == "Resistance (Ohm)"
+
+
+def test_leaves_out_lines_not_aligned_with_a_title(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    labels = [*x_labels(["0", "1", "2"]), *y_labels(["0", "1", "2"])]
+    x_title = text("Time (s)", 140, 28, width=60)
+    note = text("Source: lab", 320, 15, width=60)  # under the plot's right end
+
+    found = read(monkeypatch, [*labels, x_title, note])
+
+    assert found.x_title == "Time (s)"
+
+
+def test_reads_titles_aligned_with_an_end_of_their_axis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    labels = [*x_labels(["0", "1", "2"]), *y_labels(["0", "1", "2"])]
+    # Beyond the last tick labels, but alongside the axis lines.
+    x_title = text("Distance (km)", 340, 25, width=100)
+    y_title = tall("Height (m)", 10, 250, 70)
+
+    found = read(monkeypatch, [*labels, x_title, y_title])
+
+    assert found.x_title == "Distance (km)"
+    assert found.y_title == "Height (m)"
+
+
+def test_reads_titles_written_across(monkeypatch: pytest.MonkeyPatch) -> None:
+    labels = [*x_labels(["0", "1", "2"]), *y_labels(["0", "1", "2"])]
+    y_title = [text("Voltage", 14, 150, width=24), text("(mV)", 14, 137, width=24)]
+
+    found = read(monkeypatch, [*labels, *y_title])
+
+    assert found.y_title == "Voltage (mV)"
+
+
+def test_reads_titles_written_upwards_turned_upright(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    labels = [*x_labels(["0", "1", "2"]), *y_labels(["0", "1", "2"])]
+    # OCR split the title into pieces, and missed its first line, until the
+    # text was turned upright.
+    pieces = [
+        tall("Volt", 22, 115, 30),
+        tall("e", 22, 137, 10),
+        tall("age (mV)", 22, 170, 50),
+    ]
+    turned = [upright("Measured", 8, 150, 60), upright("Voltage (mV)", 22, 150, 100)]
+
+    found = read_turned(monkeypatch, [*labels, *pieces], turned)
+
+    assert found.y_title == "Measured Voltage (mV)"
+
+
+@pytest.mark.parametrize(
+    ("across", "turned", "title"),
+    [
+        # A V written upwards, read as > until turned upright.
+        (_Text(">", 1, 133, 15, 147, 0.9), upright("V", 8, 140, 14, 0.98), "V"),
+        # A y written across, misread when turned.
+        (_Text("y", 1, 133, 15, 147), upright("A", 8, 140, 14, 0.6), "y"),
+    ],
+)
+def test_reads_single_letters_whichever_way_ocr_is_surer_of(
+    monkeypatch: pytest.MonkeyPatch, across: _Text, turned: _Text, title: str
+) -> None:
+    labels = [*x_labels(["0", "1", "2"]), *y_labels(["0", "1", "2"])]
+
+    found = read_turned(monkeypatch, [*labels, across], [turned])
+
+    assert found.y_title == title

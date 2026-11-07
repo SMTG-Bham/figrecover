@@ -116,6 +116,19 @@ def draw_log(
     save(name, figure, axes, points)
 
 
+def draw_titled(name: str, curve: Curve, titles: tuple[str, str]) -> None:
+    """Draw a curve over x from 0 to 10 with titles of two lines, and print the points.
+
+    The layout makes room for the titles.
+    """
+    figure, axes = plt.subplots(figsize=(6.4, 4), dpi=100, layout="constrained")
+    x = np.linspace(0, 10, 2000)
+    axes.plot(x, curve(x), color="black", linewidth=1.5)
+    axes.set(xlabel=titles[0], ylabel=titles[1], xlim=(0, 10), ylim=(0, 3))
+    axes.spines[["top", "right"]].set_visible(False)
+    save(name, figure, axes, [(0, 0), (10, 0), (0, 1)])
+
+
 def draw_markers(name: str, curves: dict[str, Curve]) -> None:
     """Draw black lines through markers, keyed by marker, and print the points.
 
@@ -172,4 +185,5 @@ titles = ("Frequency (Hz)", "Power (mW)")
 draw_log("logarithmic", lowpass, titles, [(1, 0.1), (1e4, 0.1), (1, 1e3)])
 titles = ("Size (KiB)", "Time (ms)")
 draw_log("binary", quadratic, titles, [(1, 0.25), (16, 0.25), (1, 64)], base=2)
+draw_titled("titled", spectrum, ("Photon energy\n(eV)", "Absorbance\n(arb. units)"))
 draw_markers("markers", {"D": decay, "s": growth, "o": wave, "x": trend})

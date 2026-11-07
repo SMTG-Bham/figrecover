@@ -247,8 +247,25 @@ work as before.
 - A plot with a second y-axis on the right, with other values than the left
   one, cannot be read: crop the right axis out, or give `-p`.
 - The titles are the nearest text below the x-axis tick labels and left of the
-  y-axis ones. A column without a title is named `x` or `y`. Titles of a single
-  letter are easily misread, such as `x` as `X`, or missed.
+  y-axis ones, centred anywhere along their axes, so a title aligned with
+  either end of its axis is read too. A title can run over several lines,
+  each within a line's height of the one before and lined up with it, so a
+  caption further below is left out. A y-axis title written upwards, as most
+  are, is read again with the text left of the tick labels turned upright,
+  which OCR reads more surely; one written across is read as it is. A column
+  without a title is named `x` or `y`. Titles of a single letter are easily
+  misread, such as `x` as `X`, or missed.
+
+The titles of `examples/titled.png` run over two lines:
+
+```bash
+figrecover examples/titled.png
+```
+
+```text
+figrecover: x-axis "Photon energy (eV)" with ticks at 0, 2, 4, 6, 8, 10
+figrecover: y-axis "Absorbance (arb. units)" with ticks at 0, 0.5, 1, 1.5, 2, 2.5, 3
+```
 
 When a plot's labels cannot be read, give `-p` as before.
 
