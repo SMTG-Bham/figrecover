@@ -30,6 +30,7 @@ MARKER_LOCATIONS = ["-l", "55,83", "-l", "627,83", "-l", "55,185"]
 MARKER_KEYS = ["-m", "148,18", "-m", "260,18", "-m", "377,18", "-m", "483,18"]
 MARKERS = [str(EXAMPLES / "markers.png"), *POINTS, *MARKER_LOCATIONS]
 LOGARITHMIC = str(EXAMPLES / "logarithmic.png")
+BINARY = str(EXAMPLES / "binary.png")
 
 
 def spectrum(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
@@ -65,6 +66,11 @@ def ringing(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
 def lowpass(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
     """Return the curve that examples/make_examples.py draws in logarithmic.png."""
     return 1e3 / (1 + (x / 100) ** 2)
+
+
+def quadratic(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return the curve that examples/make_examples.py draws in binary.png."""
+    return x**2 / 4
 
 
 def trend(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
@@ -258,6 +264,24 @@ def test_reads_logarithmic_axes(capsys: pytest.CaptureFixture[str]) -> None:
         "0.1, 1, 10, 100, 1000\n"
     )
     assert_follows_lowpass(read_csv(captured.out, "Frequency (Hz),Power (mW)"))
+
+
+def test_reads_powers_of_two(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main([BINARY]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.err == (
+        'figrecover: logarithmic x-axis "Size (KiB)" with ticks at 1, 2, 4, 8, 16\n'
+        'figrecover: logarithmic y-axis "Time (ms)" with ticks at '
+        "0.25, 0.5, 1, 2, 4, 8, 16, 32, 64\n"
+    )
+    data = read_csv(captured.out, "Size (KiB),Time (ms)")
+    assert data[:, 0].min() < 1.1
+    assert data[:, 0].max() > 15
+    # Within 0.03 doublings, or 2 percent, of the true values.
+    np.testing.assert_allclose(
+        np.log2(data[:, 1]), np.log2(quadratic(data[:, 0])), atol=0.03
+    )
 
 
 def test_calibrates_logarithmic_axes_from_reference_points(

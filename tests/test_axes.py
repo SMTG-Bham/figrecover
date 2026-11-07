@@ -107,6 +107,26 @@ def test_reads_negative_exponents_whose_minus_ocr_missed(
     assert [value for _, value in found.y_ticks] == [0.1, 1, 10, 100, 1000]
 
 
+def test_reads_powers_of_two() -> None:
+    found = read_axes(load_image(EXAMPLES / "binary.png"))
+    # The pixel positions of (1, 1/4), (16, 1/4) and (1, 64) that
+    # examples/make_examples.py prints.
+    pixels = [(84, 66), (610, 66), (84, 380)]
+
+    data = found.calibration.to_data(pixels)
+
+    # OCR misses the superscripts of the x-axis labels, reading 2 to the 0
+    # to 4 as 20 to 24, and of some of the y-axis labels.
+    assert [value for _, value in found.x_ticks] == [1, 2, 4, 8, 16]
+    assert [value for _, value in found.y_ticks] == [2**n for n in range(-2, 7)]
+    assert found.calibration.x_log
+    assert found.calibration.y_log
+    expected = [(1, 0.25), (16, 0.25), (1, 64)]
+    np.testing.assert_allclose(np.log2(data), np.log2(expected), atol=0.02)
+    assert found.x_title == "Size (KiB)"
+    assert found.y_title == "Time (ms)"
+
+
 @pytest.mark.parametrize("name", ["labelled", "spectrum"])
 def test_finds_where_the_axis_lines_cross(name: str) -> None:
     # The axes of labelled.png start before the first ticks, and those of

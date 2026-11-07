@@ -63,6 +63,11 @@ def lowpass(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
     return 1e3 / (1 + (x / 100) ** 2)
 
 
+def quadratic(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return a quarter of the square, rising fourfold each time x doubles."""
+    return x**2 / 4
+
+
 def draw(
     name: str,
     curves: dict[str, Curve],
@@ -90,19 +95,25 @@ def draw(
     save(name, figure, axes, [(0, 0), (10, 0), (0, 1)])
 
 
-def draw_log(name: str, curve: Curve, titles: tuple[str, str]) -> None:
-    """Draw a curve on logarithmic axes over x from 1 to 10^4, and print the points.
+def draw_log(
+    name: str,
+    curve: Curve,
+    titles: tuple[str, str],
+    points: list[tuple[float, float]],
+    base: int = 10,
+) -> None:
+    """Draw a curve on logarithmic axes over x from 1 to base^4, and print the points.
 
-    matplotlib labels the ticks with powers of ten, and leaves a margin around
-    the curve, so the axes do not start at a labelled tick. The layout makes
-    room for the taller tick labels.
+    matplotlib labels the ticks with powers of the base, and leaves a margin
+    around the curve, so the axes do not start at a labelled tick. The layout
+    makes room for the taller tick labels.
     """
     figure, axes = plt.subplots(figsize=(6.4, 4), dpi=100, layout="constrained")
-    x = np.logspace(0, 4, 2000)
-    axes.loglog(x, curve(x), color="black", linewidth=1.5)
+    x = np.logspace(0, 4, 2000, base=base)
+    axes.loglog(x, curve(x), color="black", linewidth=1.5, base=base)
     axes.set(xlabel=titles[0], ylabel=titles[1])
     axes.spines[["top", "right"]].set_visible(False)
-    save(name, figure, axes, [(1, 0.1), (1e4, 0.1), (1, 1e3)])
+    save(name, figure, axes, points)
 
 
 def draw_markers(name: str, curves: dict[str, Curve]) -> None:
@@ -157,5 +168,8 @@ series = {"tab:blue": decay, "tab:orange": growth, "tab:green": wave, "black": t
 draw("series", series, 3, grid=False)
 titles = ("Time (s)", "Voltage (mV)")
 draw("labelled", {"black": ringing}, None, grid=False, titles=titles)
-draw_log("logarithmic", lowpass, ("Frequency (Hz)", "Power (mW)"))
+titles = ("Frequency (Hz)", "Power (mW)")
+draw_log("logarithmic", lowpass, titles, [(1, 0.1), (1e4, 0.1), (1, 1e3)])
+titles = ("Size (KiB)", "Time (ms)")
+draw_log("binary", quadratic, titles, [(1, 0.25), (16, 0.25), (1, 64)], base=2)
 draw_markers("markers", {"D": decay, "s": growth, "o": wave, "x": trend})
