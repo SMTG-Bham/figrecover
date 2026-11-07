@@ -63,6 +63,11 @@ _RISE = 0.15  # this many font sizes above or below it, are superscripts or subs
 _MARK_REACH = 0.1  # a tick mark reaches to within this many label heights of its axis
 _CENTRED = 0.5  # labels this many label heights or less from their marks centre on them
 _SLACK = 0.01  # a point this many points beyond the axes or a clip lies on them
+_MARKER_SIZE = 36  # a marker is at most this many points across
+_SAME_SHAPE = 0.01  # outlines whose points lie this many points apart are the same
+_LABEL_REACH = 4  # a legend's label lies within this many of its heights of its key
+_KEY_REACH = 10  # a key lies within this many points of the marker it picks
+_WHITE: Colour = (255, 255, 255)
 _SUPERSCRIPTS = str.maketrans(
     "0123456789+-\u2212=()ni",
     "\u2070\u00b9\u00b2\u00b3\u2074\u2075\u2076\u2077\u2078\u2079"
@@ -85,7 +90,10 @@ class _Path:
     closed. ``segments`` holds the ends of each straight piece, as rows of x
     and y at one end and x and y at the other. ``stroke`` and ``fill`` are
     the colours of the path's outline and inside, or None if it has none,
-    and ``clip`` is the box beyond which it is hidden.
+    and ``clip`` is the box beyond which it is hidden. ``anchor`` is where
+    the origin of the form that holds the path lies, or None if the page
+    holds it; a form drawn as a marker is placed with its origin at the
+    point it marks.
     """
 
     subpaths: tuple[npt.NDArray[np.float64], ...]
@@ -94,6 +102,35 @@ class _Path:
     stroke: Colour | None
     fill: Colour | None
     clip: Box
+    anchor: Point | None
+
+
+@dataclass(frozen=True, slots=True)
+class _Marker:
+    """A marker drawn on a page, in points from the bottom-left corner of the page.
+
+    ``centre`` is the point it marks, and ``outline`` the points its paths
+    pass through, and the middles of their straight pieces, less the middle
+    of their box, the same for markers of one shape wherever they lie.
+    ``stroke``, ``fill`` and ``clip`` are those of its paths, as ``_Path``
+    gives them.
+    """
+
+    centre: Point
+    outline: npt.NDArray[np.float64]
+    stroke: Colour | None
+    fill: Colour | None
+    clip: Box
+
+    @property
+    def colour(self) -> Colour:
+        """Return the colour that tells its series apart.
+
+        That is its fill, or its outline's colour if it has no fill or a
+        white one, as open markers have.
+        """
+        shown = [c for c in (self.fill, self.stroke) if c is not None and c != _WHITE]
+        return shown[0] if shown else _WHITE
 
 
 @dataclass(frozen=True, slots=True)
@@ -223,9 +260,9 @@ def load_pdf(
     texts = [text for text in _texts(sheet) if _holds(area, (text.x, text.y))]
     paths: list[_Path] = []
     pictures: list[_Picture] = []
-    for drawn, matrix, clip in _objects(sheet, area):
+    for drawn, matrix, clip, anchor in _objects(sheet, area):
         if drawn.type == pdfium.raw.FPDF_PAGEOBJ_PATH:
-            paths += _path(drawn.raw, matrix, clip)
+            paths += _path(drawn.raw, matrix, clip, anchor)
         elif drawn.type == pdfium.raw.FPDF_PAGEOBJ_IMAGE:
             pictures += _picture(drawn, matrix, clip)
     return Drawing(
@@ -376,8 +413,8 @@ def find_pdf_colours(
 ) -> list[Colour]:
     """Find the colours of the curves in a plot on a page of a PDF.
 
-    The curves are told apart by colour; see ``trace_pdf_curves`` for which
-    paths and images make them.
+    The curves, and series of markers, are told apart by colour; see
+    ``trace_pdf_curves`` for which paths, markers and images make them.
 
     Args:
         drawing: What is drawn on the page, as ``load_pdf`` returns it.
@@ -414,6 +451,21 @@ def trace_pdf_curves(
     traced as ``trace_curves`` traces them, from where the axes cross, if
     they cross the image, and placed on the page where the image is shown.
 
+    A colour drawn as markers, as in a scatter plot or a line with markers,
+    gives the points that its markers mark instead, in the order they are
+    drawn, and its lines are left out, as a line through markers passes
+    through the same points. A marker is a shape at most ``_MARKER_SIZE``
+    points across, other than a straight horizontal or vertical line, such
+    as the cap of an error bar, drawn at least twice. A form holding it, as
+    matplotlib draws markers, marks the point where the form's origin lies,
+    if within the shape; otherwise the shape must be filled or closed, as a
+    piece of a curve is not, and marks the middle of its box. Paths drawn
+    one after another that mark the same point, such as the inside and the
+    outline of a marker drawn apart, make one marker. Its colour is its
+    fill, or its outline's colour if it has no fill or a white one, as open
+    markers have. Markers in a legend are left out; see
+    ``find_pdf_markers``.
+
     Each colour picks the curve whose colour is nearest, up to 96 levels
     away.
 
@@ -425,8 +477,9 @@ def trace_pdf_curves(
 
     Returns:
         One ``(n, 2)`` array per colour, of the ``(x, y)`` positions in points
-        of the points the curve passes through. Those of curves traced in
-        images are those of pixel centres, sorted by x, then y.
+        of the points the curve passes through, or that the markers mark.
+        Those of curves traced in images are those of pixel centres, sorted
+        by x, then y.
 
     Raises:
         ValueError: If no curve has one of the colours, or two of them match
@@ -444,6 +497,62 @@ def trace_pdf_curves(
             )
             raise ValueError(msg)
     return [series[index].points for index in indices]
+
+
+def find_pdf_markers(
+    drawing: Drawing, keys: Sequence[Point], origin: Point = (0, 0)
+) -> list[npt.NDArray[np.float64]]:
+    """Find the markers of each series in a plot on a page of a PDF, by their shapes.
+
+    Each key is the position of a series' marker in the legend, or of any of
+    its markers. The marker nearest it, within ``_KEY_REACH`` points, picks
+    the series: the markers of the same shape, whose outlines lie within
+    ``_SAME_SHAPE`` of one another, and the same colours inside and out. See
+    ``trace_pdf_curves`` for which shapes are markers and what they mark.
+
+    Markers in a legend are left out: those with a label beside them, a
+    text right of and above the axes whose middle lies within half its
+    height of the marker's centre heightwise, and whose nearer end lies
+    within ``_LABEL_REACH`` of its heights of it. So are markers left of or
+    below the axes, or hidden by a clip.
+
+    Args:
+        drawing: What is drawn on the page, as ``load_pdf`` returns it.
+        keys: The position of a marker of each series, such as that in its
+            legend key, in points.
+        origin: Position where the axes cross, in points.
+
+    Returns:
+        One ``(n, 2)`` array per key, of the ``(x, y)`` positions in points
+        of the points that the markers mark, in the order they are drawn. A
+        series whose markers are all hidden gives an empty array.
+
+    Raises:
+        ValueError: If there is no marker near a key, or two keys pick
+            markers of the same series.
+    """
+    markers = _markers(drawing)
+    picked = [_picked(markers, key) for key in keys]
+    for (first, marker), (second, other) in itertools.combinations(
+        zip(keys, picked, strict=True), 2
+    ):
+        if _same_style(marker, other):
+            msg = (
+                f"the markers near {first[0]:g},{first[1]:g} and "
+                f"{second[0]:g},{second[1]:g} belong to the same series"
+            )
+            raise ValueError(msg)
+    plotted = [
+        marker for marker in markers if not _in_legend(marker, drawing.texts, origin)
+    ]
+    return [
+        _dots(
+            key.colour,
+            [marker for marker in plotted if _same_style(marker, key)],
+            origin,
+        ).points
+        for key in picked
+    ]
 
 
 def _texts(sheet: Any) -> list[_Text]:
@@ -588,14 +697,16 @@ def _directions(
 
 def _objects(
     sheet: Any, area: Box
-) -> Iterator[tuple[Any, npt.NDArray[np.float64], Box | None]]:
-    """Yield each object drawn on a page, its matrix, and the box it is shown in.
+) -> Iterator[tuple[Any, npt.NDArray[np.float64], Box | None, Point | None]]:
+    """Yield each object drawn on a page, its matrix, its box, and its form's origin.
 
     The matrix maps from the object's own space to the page's. The box is
     where ``area`` and the boxes around the object's clip and those of the
-    forms that hold it overlap, or None if the object is hidden. Forms hold
-    the figures that documents take in from other PDF files, and PDFium
-    gives an object's clip in the space of the form that holds it.
+    forms that hold it overlap, or None if the object is hidden. The origin
+    is where that of the form that holds the object lies on the page, or
+    None if the page holds it. Forms hold the figures that documents take in
+    from other PDF files, and markers drawn many times, and PDFium gives an
+    object's clip in the space of the form that holds it.
     """
     forms: list[tuple[npt.NDArray[np.float64], Box | None]] = [(np.eye(3), area)]
     for drawn in sheet.get_objects():
@@ -604,17 +715,21 @@ def _objects(
         a, b, c, d, e, f = drawn.get_matrix().get()
         matrix = outer @ np.array([[a, c, e], [b, d, f], [0, 0, 1]])
         clip = None if shown is None else _clip(drawn.raw, outer, shown)
-        yield drawn, matrix, clip
+        yield drawn, matrix, clip, _mapped(outer, (0, 0)) if drawn.level else None
         forms.append((matrix, clip))  # a form's objects come next, a level deeper
 
 
 def _path(
-    handle: Any, matrix: npt.NDArray[np.float64], clip: Box | None
+    handle: Any,
+    matrix: npt.NDArray[np.float64],
+    clip: Box | None,
+    anchor: Point | None,
 ) -> list[_Path]:
     """Return a path drawn on a page, or none if it is not shown.
 
-    ``matrix`` maps from the path's own space to the page's, and ``clip`` is
-    the box it is shown in, or None if it is hidden.
+    ``matrix`` maps from the path's own space to the page's, ``clip`` is the
+    box it is shown in, or None if it is hidden, and ``anchor`` where the
+    origin of the form that holds it lies, as ``_Path`` has it.
     """
     raw = _pdfium().raw
     fill, stroke = ctypes.c_int(), ctypes.c_int()
@@ -631,7 +746,7 @@ def _path(
         or _overlap(clip, (*points.min(axis=0), *points.max(axis=0))) is None
     ):
         return []
-    return [_Path(subpaths, closed, segments, stroke_colour, fill_colour, clip)]
+    return [_Path(subpaths, closed, segments, stroke_colour, fill_colour, clip, anchor)]
 
 
 def _outline(
@@ -823,12 +938,16 @@ def _y_title(
 def _series(drawing: Drawing, origin: Point) -> list[_Series]:
     """Return the curves in a plot on a page, longest first, by colour.
 
-    See ``trace_pdf_curves`` for which paths and points make the curves.
-    Curves in a colour with no points shown are left out.
+    See ``trace_pdf_curves`` for which paths, markers and points make the
+    curves. Curves in a colour with no points shown are left out.
     """
+    marked: dict[Colour, list[_Marker]] = {}
+    for marker in _markers(drawing):
+        if not _in_legend(marker, drawing.texts, origin):
+            marked.setdefault(marker.colour, []).append(marker)
     parts: dict[Colour, list[tuple[npt.NDArray[np.float64], float]]] = {}
     for path in drawing.paths:
-        if path.stroke is None or path.fill is not None:
+        if path.stroke is None or path.fill is not None or path.stroke in marked:
             continue
         for points, closed in zip(path.subpaths, path.closed, strict=True):
             if closed or np.ptp(points, axis=0).min() <= _FLAT:
@@ -845,6 +964,7 @@ def _series(drawing: Drawing, origin: Point) -> list[_Series]:
         )
         for colour, pieces in parts.items()
     ]
+    series += [_dots(colour, markers, origin) for colour, markers in marked.items()]
     series += _traced(drawing, origin)
     return sorted(
         (curve for curve in series if len(curve.points)),
@@ -882,12 +1002,136 @@ def _traced(drawing: Drawing, origin: Point) -> list[_Series]:
     return found
 
 
+def _markers(drawing: Drawing) -> list[_Marker]:
+    """Return the markers drawn on a page, in the order they are drawn.
+
+    See ``trace_pdf_curves`` for which shapes are markers and which points
+    they mark.
+    """
+    markers: list[_Marker] = []
+    last = -1  # the index of the path that gave the last marker
+    for index, path in enumerate(drawing.paths):
+        marker = _marker(path)
+        if marker is None:
+            continue
+        if last == index - 1 and markers[-1].centre == marker.centre:
+            first = markers.pop()  # one marker, drawn in two paths
+            marker = _Marker(
+                marker.centre,
+                np.vstack([first.outline, marker.outline]),
+                first.stroke or marker.stroke,
+                first.fill or marker.fill,
+                first.clip,
+            )
+        markers.append(marker)
+        last = index
+    shapes: list[list[int]] = []  # the indices of the markers of each shape
+    for index, marker in enumerate(markers):
+        for shape in shapes:
+            if _same_shape(markers[shape[0]].outline, marker.outline):
+                shape.append(index)
+                break
+        else:
+            shapes.append([index])
+    repeated = sorted(index for shape in shapes if len(shape) > 1 for index in shape)
+    return [markers[index] for index in repeated]
+
+
+def _marker(path: _Path) -> _Marker | None:
+    """Return the marker that a path draws, or None if it is not one.
+
+    See ``trace_pdf_curves`` for which shapes are markers, leaving aside
+    whether they are drawn more than once, and which points they mark.
+    """
+    points = np.vstack(path.subpaths)
+    low, high = points.min(axis=0), points.max(axis=0)
+    if (high - low).max() > _MARKER_SIZE or (high - low).min() <= _FLAT:
+        return None
+    middle = (low + high) / 2
+    if path.anchor is not None and _holds((*low, *high), path.anchor):
+        centre = path.anchor
+    elif path.fill is not None or any(path.closed):
+        centre = (float(middle[0]), float(middle[1]))
+    else:
+        return None
+    # With the middles of its straight pieces, a square's outline is not a cross's.
+    outline = np.vstack([points, (path.segments[:, :2] + path.segments[:, 2:]) / 2])
+    return _Marker(centre, outline - middle, path.stroke, path.fill, path.clip)
+
+
+def _same_shape(
+    first: npt.NDArray[np.float64], second: npt.NDArray[np.float64]
+) -> bool:
+    """Return whether each point of two outlines lies near one of the other's.
+
+    Near is within ``_SAME_SHAPE`` points across and along. Outlines whose
+    widths or heights differ by more than that twice over are not compared
+    point by point, which is slower.
+    """
+    if np.abs(np.ptp(first, axis=0) - np.ptp(second, axis=0)).max() > 2 * _SAME_SHAPE:
+        return False
+    apart = np.abs(first[:, np.newaxis] - second).max(axis=2)
+    return bool(max(apart.min(axis=0).max(), apart.min(axis=1).max()) <= _SAME_SHAPE)
+
+
+def _same_style(first: _Marker, second: _Marker) -> bool:
+    """Return whether two markers have the same shape and colours."""
+    return (
+        first.fill == second.fill
+        and first.stroke == second.stroke
+        and _same_shape(first.outline, second.outline)
+    )
+
+
+def _in_legend(marker: _Marker, texts: Sequence[_Text], origin: Point) -> bool:
+    """Return whether a marker is a legend's key, with its label beside it.
+
+    See ``find_pdf_markers`` for where the label lies.
+    """
+    x, y = marker.centre
+    for text in texts:
+        height = text.top - text.bottom
+        gap = text.left - x if text.x > x else x - text.right
+        if (
+            text.x >= origin[0]
+            and text.y >= origin[1]
+            and abs(text.y - y) <= height / 2
+            and 0 <= gap <= _LABEL_REACH * height
+        ):
+            return True
+    return False
+
+
+def _picked(markers: Sequence[_Marker], key: Point) -> _Marker:
+    """Return the marker nearest a key, within ``_KEY_REACH`` points."""
+    distances = [math.dist(marker.centre, key) for marker in markers]
+    if not distances or min(distances) > _KEY_REACH:
+        msg = f"found no marker near {key[0]:g},{key[1]:g}"
+        raise ValueError(msg)
+    return markers[int(np.argmin(distances))]
+
+
+def _dots(colour: Colour, markers: Sequence[_Marker], origin: Point) -> _Series:
+    """Return the points that markers mark, those shown, as a series of a colour."""
+    points = np.array([marker.centre for marker in markers], dtype=np.float64)
+    clips = np.array([marker.clip for marker in markers], dtype=np.float64)
+    points, clips = points.reshape(-1, 2), clips.reshape(-1, 4)
+    shown = _shown(points, clips, origin)
+    return _Series(colour, points[shown], _length(points, shown))
+
+
 def _shown(
-    points: npt.NDArray[np.float64], clip: Box, origin: Point
+    points: npt.NDArray[np.float64],
+    clip: Box | npt.NDArray[np.float64],
+    origin: Point,
 ) -> npt.NDArray[np.bool_]:
-    """Return which points are shown within a clip, and right of and above the axes."""
-    low = np.maximum(origin, clip[:2]) - _SLACK
-    high = np.array(clip[2:]) + _SLACK
+    """Return which points are shown within a clip, and right of and above the axes.
+
+    ``clip`` is one box for all the points, or a row of edges for each.
+    """
+    edges = np.asarray(clip, dtype=np.float64)
+    low = np.maximum(origin, edges[..., :2]) - _SLACK
+    high = edges[..., 2:] + _SLACK
     return np.all((low <= points) & (points <= high), axis=1)
 
 

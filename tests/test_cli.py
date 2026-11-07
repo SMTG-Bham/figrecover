@@ -36,6 +36,14 @@ LABELLED_PDF = str(EXAMPLES / "labelled.pdf")
 # examples/make_examples.py prints.
 PDF_LOCATIONS = ["-l", "57.6,31.68", "-l", "414.72,31.68", "-l", "57.6,105.6"]
 SERIES_PDF = [str(EXAMPLES / "series.pdf"), *POINTS, *PDF_LOCATIONS]
+MARKERS_PDF = str(EXAMPLES / "markers.pdf")
+# The positions of POINTS, and of the legend's markers, in markers.pdf, in
+# points, that examples/make_examples.py prints.
+MARKER_PDF_LOCATIONS = ["-l", "39.89,59.29", "-l", "451.44,59.29", "-l", "39.89,133.26"]
+MARKER_PDF_KEYS = [
+    *("-m", "108.45,12.91", "-m", "187.85,12.91"),
+    *("-m", "272.06,12.91", "-m", "347.51,12.91"),
+]
 
 
 def spectrum(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
@@ -407,6 +415,44 @@ def test_traces_curves_drawn_as_images_in_pdf_files(
         assert_follows(data[data[:, 0] == series, 1:], curve)
 
 
+def test_finds_series_by_their_markers_in_pdf_files(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    preview = tmp_path / "preview.png"
+
+    assert main([MARKERS_PDF, *MARKER_PDF_KEYS, "--preview", str(preview)]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.err.endswith(
+        "figrecover: markers found in each series: 19, 19, 19, 19\n"
+    )
+    data = read_csv(captured.out, header="series,x,y")
+    for series, curve in enumerate([decay, growth, wave, trend], start=1):
+        x, y = data[data[:, 0] == series, 1:].T
+        # Every marker, every half unit from 0.5 to 9.5, even where the
+        # series cross.
+        np.testing.assert_allclose(x, np.arange(0.5, 10, 0.5), atol=1e-5)
+        np.testing.assert_allclose(y, curve(x), atol=1e-5)
+    image = cv2.imread(str(preview))
+    assert image is not None
+    for red, green, blue in cli.SERIES_COLOURS[:4]:  # each series' colour
+        assert np.any(np.all(image == (blue, green, red), axis=-1))
+
+
+def test_traces_series_of_markers_in_pdf_files_by_colour(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main([str(EXAMPLES / "scatter.pdf"), "-n", "2"]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.err.endswith("figrecover: colours: -c ff7f0e -c 1f77b4\n")
+    data = read_csv(captured.out, header="series,Time (s),Voltage (mV)")
+    for series, curve in enumerate([growth, decay], start=1):
+        x, y = data[data[:, 0] == series, 1:].T
+        np.testing.assert_allclose(x, np.arange(0.5, 10, 0.5), atol=1e-5)
+        np.testing.assert_allclose(y, curve(x), atol=1e-5)
+
+
 @pytest.mark.usefixtures("without_pdf")
 def test_reports_a_missing_pdf_extra(capsys: pytest.CaptureFixture[str]) -> None:
     assert main([LABELLED_PDF]) == 1
@@ -443,6 +489,21 @@ def test_can_be_cancelled(monkeypatch: pytest.MonkeyPatch) -> None:
         (
             [str(EXAMPLES / "series.pdf"), *POINTS, "-l", "0,0", "-l", "999,0"],
             "the -l location 999,0 lies outside the page read, 0,0,460.8,288",
+        ),
+        (
+            [MARKERS_PDF, "-m", "999,0"],
+            "the -m position 999,0 lies outside the page read, 0,0,460.8,288",
+        ),
+        (
+            [MARKERS_PDF, *POINTS, *MARKER_PDF_LOCATIONS, "-m", "5,280"],
+            "found no marker near 5,280",
+        ),
+        (
+            [
+                *(MARKERS_PDF, *POINTS, *MARKER_PDF_LOCATIONS),
+                *("-m", "108.45,12.91", "-m", "110,13"),
+            ],
+            "the markers near 108.45,12.91 and 110,13 belong to the same series",
         ),
     ],
 )
@@ -485,7 +546,6 @@ def test_accepts_points_with_spaces_and_exponents(
         ([*SPECTRUM, "--log", "z"], "invalid choice: 'z'"),
         (["plot.png", "--page", "2"], "--page and --box choose what to read in a PDF"),
         (["plot.png", "--box", "0,0,1,1"], "--page and --box choose what to read"),
-        ([LABELLED_PDF, "-m", "1,1"], "-m finds markers in images, not in PDF files"),
         ([LABELLED_PDF, "--page", "0"], "expected a positive whole number, got '0'"),
         ([LABELLED_PDF, "--box", "0,0,1"], "expected a box written as x0,y0,x1,y1"),
         ([LABELLED_PDF, "--box", "0,0,inf,1"], "expected finite numbers in the box"),

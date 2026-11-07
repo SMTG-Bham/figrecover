@@ -12,6 +12,7 @@ import pytest
 from figrecover import (
     Drawing,
     find_pdf_colours,
+    find_pdf_markers,
     load_pdf,
     read_pdf_axes,
     remove_pdf_grid,
@@ -28,6 +29,8 @@ Y_TICKS = {60: "0", 160: "10", 260: "20"}  # y in points, and label
 # (2, 15) and (3, 20).
 CURVE = "1 0 0 RG 60 60 m 160 110 l 260 210 l 360 260 l S"
 DIGIT = 5.56  # the width of a digit of Helvetica at 10 points
+# Where examples/make_examples.py draws markers, in markers.pdf and scatter.pdf.
+MARKED = np.arange(0.5, 10, 0.5)
 
 
 def ringing(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
@@ -164,6 +167,14 @@ def image(width: int, height: int, rows: Sequence[int]) -> str:
     )
 
 
+def squares(y: float, paint: str) -> str:
+    """Return content that draws squares of side 4 around x of 100, 200 and 300 at y.
+
+    Each is painted by the given operator, such as f to fill it.
+    """
+    return " ".join(f"{x - 2} {y - 2} 4 4 re {paint}" for x in (100, 200, 300))
+
+
 def drawing(tmp_path: Path, content: str, forms: Sequence[str] = ()) -> Drawing:
     """Read a page drawn with the given content and forms."""
     return load_pdf(write_pdf(tmp_path / "plot.pdf", content, forms))
@@ -266,7 +277,161 @@ def test_reads_the_colours_of_the_example_pdfs_exactly() -> None:
     assert colours == [(44, 160, 44), (255, 127, 14), (31, 119, 180), (0, 0, 0)]
 
 
-def test_traces_curves_drawn_as_images() -> None:
+def test_reads_the_markers_of_the_example_pdfs_exactly() -> None:
+    found = load_pdf(EXAMPLES / "scatter.pdf")
+
+    data = curves(found, 2)
+
+    # The caps of the error bars, and the markers in the legend, which lies
+    # inside the axes, are left out.
+    with pytest.raises(ValueError, match="found only 2 of 3 curves"):
+        find_pdf_colours(found, 3, read_pdf_axes(found).calibration.origin)
+    # The markers mark the points they are drawn at, to within the precision
+    # with which PDFium reads where they are placed.
+    for curve, function in zip(data, [growth, decay], strict=True):
+        x, y = curve.T
+        np.testing.assert_allclose(x, MARKED, atol=1e-5)
+        np.testing.assert_allclose(y, function(x), atol=1e-5)
+
+
+def test_finds_series_by_their_markers_in_the_example_pdf() -> None:
+    found = load_pdf(EXAMPLES / "markers.pdf")
+    calibration = read_pdf_axes(found).calibration
+    origin = calibration.origin
+    # The positions of the legend's markers that examples/make_examples.py
+    # prints.
+    keys = [(108.45, 12.91), (187.85, 12.91), (272.06, 12.91), (347.51, 12.91)]
+
+    series = find_pdf_markers(found, keys, origin)
+
+    for markers, function in zip(series, [decay, growth, wave, trend], strict=True):
+        x, y = calibration.to_data(markers).T
+        np.testing.assert_allclose(x, MARKED, atol=1e-5)
+        np.testing.assert_allclose(y, function(x), atol=1e-5)
+    # A marker in the plot picks its series as its legend's marker does.
+    picked = find_pdf_markers(found, [(series[2][5, 0], series[2][5, 1])], origin)
+    np.testing.assert_array_equal(picked[0], series[2])
+    # By colour, the series are the black markers of all four, and the lines
+    # through them are left out.
+    assert find_pdf_colours(found, 1, origin) == [(0, 0, 0)]
+    assert len(trace_pdf_curves(found, [(0, 0, 0)], origin)[0]) == 4 * len(MARKED)
+
+
+def test_reads_markers_drawn_one_by_one_at_their_middles(tmp_path: Path) -> None:
+    content = plot(
+        "0 0 1 rg",
+        *(f"{x - 2} {y - 2} 4 4 re f" for x, y in [(60, 60), (160, 110), (260, 210)]),
+        "q 1 0 0 1 360 260 cm 0 -3 m 3 0 l 0 3 l -3 0 l h f Q",  # a diamond
+        "q 1 0 0 1 60 160 cm -3 -3 6 6 re f Q",  # beside a tick label
+        "0 0 1 RG 60 60 m 360 260 l S",  # a line through them
+        "q 1 0 0 1 200 282 cm -3 -3 6 6 re f Q",  # a legend's marker
+        text("Squares", 210, 279),  # and its label
+        text("Diamonds", 300, 279),  # a label before its marker
+        "q 1 0 0 1 353 282 cm 0 -3 m 3 0 l 0 3 l -3 0 l h f Q",
+        "q 1 0 0 1 300 100 cm 0 0 m 6 0 l 3 6 l h f Q",  # a shape drawn once
+    )
+    found = drawing(tmp_path, content)
+
+    data = curves(found)[0]
+
+    np.testing.assert_allclose(
+        data, [(0, 0), (1, 5), (2, 15), (3, 20), (0, 10)], atol=1e-6
+    )
+    with pytest.raises(ValueError, match="found only 1 of 2"):
+        find_pdf_colours(found, 2, (60, 60))
+
+
+def test_reads_markers_drawn_as_forms_at_their_origins(tmp_path: Path) -> None:
+    forms = [
+        "0 0 1 rg 0 0 m 6 0 l 0 6 l h f",  # a triangle, its corner at the origin
+        "1 0 0 rg 100 100 4 4 re f",  # a square far from the origin
+    ]
+    content = plot(
+        *(f"q 1 0 0 1 {x} {y} cm /X1 Do Q" for x, y in [(60, 60), (160, 110)]),
+        "q /X2 Do Q q 1 0 0 1 100 50 cm /X2 Do Q",
+    )
+    found = drawing(tmp_path, content, forms)
+
+    blue, red = trace_pdf_curves(found, [(0, 0, 255), (255, 0, 0)], (60, 60))
+
+    np.testing.assert_allclose(blue, [(60, 60), (160, 110)], atol=1e-6)
+    np.testing.assert_allclose(red, [(102, 102), (202, 152)], atol=1e-6)
+
+
+def test_tells_series_of_markers_apart_by_colour(tmp_path: Path) -> None:
+    content = plot(
+        "1 1 1 rg 0 0 0 RG " + squares(80, "B"),  # open
+        "0 1 0 rg 0 0 0 RG " + squares(120, "B"),
+        "1 1 1 rg " + squares(160, "f"),  # white
+        # Filled, then outlined apart.
+        "0 0 1 rg 1 0 0 RG "
+        + " ".join(f"{x - 2} 198 4 4 re f {x - 2} 198 4 4 re S" for x in (100, 200)),
+        *(f"q 1 0 0 1 {x} 240 cm /X1 Do Q" for x in (100, 200, 300)),
+    )
+    forms = ["1 0 1 RG -3 -3 m 3 3 l -3 3 m 3 -3 l S"]  # crosses
+    found = drawing(tmp_path, content, forms)
+
+    colours = find_pdf_colours(found, 5, (60, 60))
+
+    assert sorted(colours) == [
+        (0, 0, 0),
+        (0, 0, 255),
+        (0, 255, 0),
+        (255, 0, 255),
+        (255, 255, 255),
+    ]
+    # The squares filled in blue and outlined in red apart are one series.
+    with pytest.raises(ValueError, match="found only 5 of 6"):
+        find_pdf_colours(found, 6, (60, 60))
+
+
+def test_leaves_out_shapes_that_are_not_markers(tmp_path: Path) -> None:
+    content = plot(
+        "1 0 0 rg 100 100 40 40 re f 200 100 40 40 re f",  # too large
+        *(f"q 1 0 0 1 {x} 200 cm /X1 Do Q" for x in (100, 200, 300)),
+        "0 0 1 RG 100 100 m 104 104 l S 120 120 m 124 124 l S",  # dashes
+    )
+    forms = ["0 1 0 RG -3 0 m 3 0 l S"]  # the caps of error bars
+    found = drawing(tmp_path, content, forms)
+
+    colours = find_pdf_colours(found, 1, (60, 60))
+
+    # The dashes, drawn one by one, are pieces of a curve.
+    assert colours == [(0, 0, 255)]
+    np.testing.assert_allclose(
+        trace_pdf_curves(found, colours, (60, 60))[0],
+        [(100, 100), (104, 104), (120, 120), (124, 124)],
+        atol=1e-6,
+    )
+    with pytest.raises(ValueError, match="found only 1 of 2"):
+        find_pdf_colours(found, 2, (60, 60))
+
+
+def test_finds_series_by_the_shapes_and_colours_of_markers(tmp_path: Path) -> None:
+    diamond = "0 -3 m 3 0 l 0 3 l -3 0 l h f"
+    content = plot(
+        "0 0 1 rg " + squares(100, "f"),
+        "1 0 0 rg " + squares(150, "f"),
+        "0 0 1 rg",
+        *(f"q 1 0 0 1 {x} 200 cm {diamond} Q" for x in (100, 200, 300)),
+        "30 30 4 4 re f",  # left of and below the axes
+        "228 278 4 4 re f",  # a legend's marker
+        text("Squares", 240, 277),
+    )
+    found = drawing(tmp_path, content)
+
+    blue, diamonds = find_pdf_markers(found, [(230, 280), (200, 201)], (60, 60))
+
+    np.testing.assert_allclose(blue, [(100, 100), (200, 100), (300, 100)])
+    np.testing.assert_allclose(diamonds, [(100, 200), (200, 200), (300, 200)])
+    with pytest.raises(ValueError, match="found no marker near 10,290"):
+        find_pdf_markers(found, [(10, 290)], (60, 60))
+    with pytest.raises(
+        ValueError,
+        match="the markers near 230,280 and 100,100 belong to the same series",
+    ):
+        find_pdf_markers(found, [(230, 280), (100, 100)], (60, 60))
+
     found = load_pdf(EXAMPLES / "rasterised.pdf")
     read = read_pdf_axes(found)
 

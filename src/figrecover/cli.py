@@ -32,6 +32,7 @@ from .pdf import (
     Box,
     Drawing,
     find_pdf_colours,
+    find_pdf_markers,
     load_pdf,
     read_pdf_axes,
     remove_pdf_grid,
@@ -73,8 +74,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error(
             "--log needs -p; figrecover finds logarithmic axes itself when reading them"
         )
-    if _is_pdf(arguments.image) and arguments.markers:
-        parser.error("-m finds markers in images, not in PDF files")
     if not _is_pdf(arguments.image) and (arguments.page or arguments.box):
         parser.error("--page and --box choose what to read in a PDF file")
     outputs = {"-o": arguments.output, "--preview": arguments.preview}
@@ -234,13 +233,9 @@ def _digitize(arguments: argparse.Namespace) -> None:
         (pixel, 6, (0, 0, 255)) for pixel in pixels
     ]
     if arguments.markers:
-        curves = _find_markers(traced, arguments.markers, calibration.origin)
-        colours = [
-            SERIES_COLOURS[series % len(SERIES_COLOURS)]
-            for series in range(len(curves))
-        ]
-        for key, curve, colour in zip(arguments.markers, curves, colours, strict=True):
-            rings += [(key, 6, colour), *((marker, 4, colour) for marker in curve)]
+        curves = _counted(find_markers(traced, arguments.markers, calibration.origin))
+        colours = _series_colours(len(curves))
+        rings += _marker_rings(arguments.markers, curves, colours)
     else:
         colours = arguments.colours or _find_colours(
             lambda count: find_colours(traced, count, calibration.origin),
@@ -261,10 +256,11 @@ def _digitize_pdf(arguments: argparse.Namespace) -> None:
     the page read, ``PREVIEW_SCALE`` pixels to the point.
     """
     drawing = load_pdf(arguments.image, arguments.page or 1, arguments.box)
+    _check_positions(arguments.markers, drawing.box, "-m position")
     if arguments.remove_grid:
         drawing = remove_pdf_grid(drawing)
     if arguments.points:
-        _check_positions(arguments.locations, drawing.box)
+        _check_positions(arguments.locations, drawing.box, "-l location")
         positions = arguments.locations or _click_positions(drawing, arguments.points)
         calibration = Calibration.from_points(
             arguments.points,
@@ -275,11 +271,17 @@ def _digitize_pdf(arguments: argparse.Namespace) -> None:
         names = ("x", "y")
     else:
         calibration, positions, names = _read_axes(read_pdf_axes(drawing))
-    colours = arguments.colours or _find_colours(
-        lambda count: find_pdf_colours(drawing, count, calibration.origin),
-        arguments.series,
-    )
-    curves = trace_pdf_curves(drawing, colours, calibration.origin)
+    if arguments.markers:
+        curves = _counted(
+            find_pdf_markers(drawing, arguments.markers, calibration.origin)
+        )
+        colours = _series_colours(len(curves))
+    else:
+        colours = arguments.colours or _find_colours(
+            lambda count: find_pdf_colours(drawing, count, calibration.origin),
+            arguments.series,
+        )
+        curves = trace_pdf_curves(drawing, colours, calibration.origin)
 
     if arguments.preview:
         corner = np.array(drawing.box[:2])
@@ -288,6 +290,9 @@ def _digitize_pdf(arguments: argparse.Namespace) -> None:
             ((x, y), 6, (0, 0, 255))
             for x, y in (np.array(positions) - corner) * PREVIEW_SCALE
         ]
+        if arguments.markers:
+            keys = (np.array(arguments.markers) - corner) * PREVIEW_SCALE
+            rings += _marker_rings([(x, y) for x, y in keys], pixels, colours)
         image = render_pdf(drawing, PREVIEW_SCALE)
         _save_preview(arguments.preview, image, pixels, colours, rings)
     data = [calibration.to_data(curve) for curve in curves]
@@ -299,13 +304,13 @@ def _is_pdf(path: Path) -> bool:
     return path.suffix.lower() == ".pdf"
 
 
-def _check_positions(positions: Sequence[Point], box: Box) -> None:
-    """Check that each -l position lies on the part of a PDF's page that is read."""
+def _check_positions(positions: Sequence[Point], box: Box, name: str) -> None:
+    """Check that each position, such as an -l location, lies on the page read."""
     left, bottom, right, top = box
     for x, y in positions:
         if not (left <= x <= right and bottom <= y <= top):
             edges = ",".join(f"{edge:g}" for edge in box)
-            msg = f"the -l location {x:g},{y:g} lies outside the page read, {edges}"
+            msg = f"the {name} {x:g},{y:g} lies outside the page read, {edges}"
             raise ValueError(msg)
 
 
@@ -379,14 +384,28 @@ def _find_colours(
     return colours
 
 
-def _find_markers(
-    image: Image, keys: Sequence[Point], origin: Point
-) -> list[npt.NDArray[np.float64]]:
-    """Find the markers of each series, and print how many were found."""
-    markers = find_markers(image, keys, origin)
+def _counted(markers: list[npt.NDArray[np.float64]]) -> list[npt.NDArray[np.float64]]:
+    """Print how many markers were found in each series, and return them."""
     counts = ", ".join(str(len(series)) for series in markers)
     print(f"figrecover: markers found in each series: {counts}", file=sys.stderr)
     return markers
+
+
+def _series_colours(count: int) -> list[Colour]:
+    """Return a colour of its own for each of a number of series of markers."""
+    return [SERIES_COLOURS[series % len(SERIES_COLOURS)] for series in range(count)]
+
+
+def _marker_rings(
+    keys: Sequence[Point],
+    markers: Sequence[npt.NDArray[np.float64]],
+    colours: Sequence[Colour],
+) -> list[tuple[Point, int, Colour]]:
+    """Return rings around each series' key and markers, in its colour, to preview."""
+    rings: list[tuple[Point, int, Colour]] = []
+    for key, series, colour in zip(keys, markers, colours, strict=True):
+        rings += [(key, 6, colour), *((marker, 4, colour) for marker in series)]
+    return rings
 
 
 def _write_csv(
