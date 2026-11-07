@@ -278,6 +278,15 @@ work as before.
   which OCR reads more surely; one written across is read as it is. A column
   without a title is named `x` or `y`. Titles of a single letter are easily
   misread, such as `x` as `X`, or missed.
+- Titles keep their Greek letters, symbols, superscripts and subscripts, such
+  as `ΔE (%)`, `Wavelength (μm)` and `CO₂ (mg L⁻¹)`, and the CSV header
+  writes them in UTF-8. OCR reads some symbols as either of two that look
+  alike, so each is written one way: the increment sign as Greek Δ, the micro
+  sign as Greek μ, and full-width signs, such as `％`, as plain ones. It can
+  also read the raised minus sign of a superscript full size, so a minus sign
+  before a superscript digit is raised, and `10−³` reads as 10⁻³, in titles
+  and tick labels alike. OCR reads symbols less surely than letters, and has
+  read `ΔE` written upwards as `ΔΔE`, so check the printed titles.
 
 The titles of `examples/titled.png` run over two lines:
 
