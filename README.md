@@ -248,7 +248,8 @@ different axes. The other options, such as `-n`, `-c` and `--remove-grid`,
 work as before.
 
 - The x-axis tick labels are the lowest row of three or more numbers, and the
-  y-axis tick labels the leftmost column of three or more numbers above them.
+  y-axis tick labels the leftmost column of three or more numbers above them,
+  though the lowest may reach down beside them, as rotated labels can.
   Labels whose values are out of line with the rest, such as misread ones, are
   dropped. On a linear axis, labels must also take the even steps that
   plotting libraries label at: at low resolution OCR misreads digits as
@@ -291,13 +292,20 @@ work as before.
   x-axis labels do, at the mark at that end, and for labels that lie alike
   to one side of their marks, as matplotlib draws rotated y-axis labels, at
   the mark beside each.
-  Labels written upwards, turned a quarter turn, are read as well as those
-  written across. OCR often misreads x-axis labels at a slant, such as 45°,
-  so if it misreads one and finds another's box tilted, figrecover reads the
-  labels again with the image turned 45° each way, which takes about a
-  second more, and takes their texts from the turn that reads the most of
-  them as numbers. Labels at 60° can still be missed, and those misread are
-  dropped.
+  Labels written upwards on the x-axis, turned a quarter turn, are read as
+  well as those written across. On the y-axis, labels written upwards or
+  downwards are read too, though OCR runs them together, as in
+  `1.25 1.50 1.75`, and misreads some, such as `2.5` as `25`: when most of
+  them are taller than wide, figrecover reads them again with the image left
+  of them turned a quarter turn each way, which takes about a second more,
+  and takes the turn that OCR reads more surely, as it reads them less surely
+  upside down. Labels of a single digit are read as they are. OCR often
+  misreads x-axis labels at a slant, such as 45°, so if it misreads one and
+  finds another's box tilted, figrecover reads the labels again with the
+  image turned 45° each way, which takes about a second more, and takes their
+  texts from the turn that reads the most of them as numbers. Labels at 60°
+  can still be missed, and those misread, such as a 6 written downwards or
+  at a slant on the y-axis, are dropped.
 - figrecover traces the curves from the axis lines, not from the first ticks,
   so the margins that plotting libraries leave inside the axes are kept. If
   there are no axis lines, it starts just beyond the tick labels and their

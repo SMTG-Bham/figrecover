@@ -31,16 +31,18 @@ The first release.
   either end of their axes; y-axis titles written upwards are read turned
   upright, so OCR no longer splits or misreads them; and the second lines of
   tick labels broken over lines, such as units, are not taken for the x-axis
-  title. It reads tick labels written upwards, reads those written at a slant
-  again turned level if OCR misread them, places the ticks of rotated labels
-  at their tick marks, whether the labels end at them or lie beside them,
-  reads plots without axis lines, and refuses a second y-axis on the right.
-  Tick labels in which OCR mistook letters for digits, such as `1O` or `l.5`,
-  or dashes for minus signs, are read as they were written, and those misread
-  as other digits, off the even steps of a linear axis, such as 758 among 250
-  and 500, are dropped. Titles keep their Greek letters, symbols, superscripts
-  and subscripts, such as Δ, μm, CO₂ and mg L⁻¹, each written one way however
-  OCR reads it.
+  title. It reads tick labels written upwards, reads y-axis tick labels
+  written upwards or downwards, which OCR runs together and misreads, again
+  turned a quarter turn whichever way it reads them more surely, reads those
+  written at a slant again turned level if OCR misread them, places the ticks
+  of rotated labels at their tick marks, whether the labels end at them or
+  lie beside them, reads plots without axis lines, and refuses a second
+  y-axis on the right. Tick labels in which OCR mistook letters for digits,
+  such as `1O` or `l.5`, or dashes for minus signs, are read as they were
+  written, and those misread as other digits, off the even steps of a linear
+  axis, such as 758 among 250 and 500, are dropped. Titles keep their Greek
+  letters, symbols, superscripts and subscripts, such as Δ, μm, CO₂ and mg
+  L⁻¹, each written one way however OCR reads it.
 - With the `ocr` extra, a figure of several plots, such as panels labelled
   (a), (b), (c), is read panel by panel: each is found by its axis lines,
   read from its own part of the image, and named after its label, taking the
