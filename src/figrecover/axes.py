@@ -32,6 +32,7 @@ _RAISED = 0.25  # a superscript sits this fraction of its label's height up or m
 _RAISED_TICK = 1.4  # a label this many times taller than usual has a tick on top
 _WRITTEN = 1.5  # words this much wider than tall run across, or taller, upwards
 _LINE_SPACING = 1.25  # a title's lines lie this many line heights apart or less
+_WORD_SPACING = 1  # the words of a line lie this many line heights apart or less
 _TILT = 15  # labels in boxes tilted this many degrees or more may be slanted
 _SLANT = 30  # text tilted this many degrees or more is slanted, not raised
 _TURN = 45  # slanted labels are read again turned this many degrees each way
@@ -188,9 +189,11 @@ def read_axes(image: Image) -> Axes:
     along their axes, from where the axes cross to the far end of the axis
     line or labels, so a title may be aligned with either end. A title runs
     on over the lines that follow, each within ``_LINE_SPACING`` line heights
-    of the one before and aligned with it. Texts below the x-axis tick labels
-    that are their second lines, such as units under each, are not the
-    title. A y-axis title written upwards, as most are,
+    of the one before and aligned with it, and the words of each line lie
+    within ``_WORD_SPACING`` line heights of each other, so text further
+    along, such as another plot's label, is left out. Texts below the x-axis
+    tick labels that are their second lines, such as units under each, are
+    not the title. A y-axis title written upwards, as most are,
     is read again turned upright, as OCR reads text written across more
     surely; one whose words are about as wide as tall, such as a single
     letter, is read whichever way OCR is surer of. A power of ten after a
@@ -1083,24 +1086,43 @@ def _factor(title: str | None) -> tuple[str | None, float]:
 def _lines(texts: Iterable[_Text]) -> list[_Text]:
     """Return the lines of a title, the topmost first, each as one text.
 
-    The first line is the topmost text and the text level with it. Each line
-    after it lies below the one before, within ``_LINE_SPACING`` times the
-    height of the taller of the two, centre to centre, as a line of short
-    letters, such as T, has a short box; and aligned with it, the middle of
-    one lying within the other, so text further on, such as a caption, is
-    left out.
+    The first line is the topmost text and the words level with it, as
+    ``_words`` finds them. Each line after it lies below the one before,
+    within ``_LINE_SPACING`` times the height of the taller of the two,
+    centre to centre, as a line of short letters, such as T, has a short
+    box; and aligned with it, the middle of one lying within the other, so
+    text further on, such as a caption, is left out.
     """
     remaining = list(texts)
     lines: list[_Text] = []
     while remaining:
         nearest = max(remaining, key=lambda text: text.top)
         half = nearest.top - nearest.y
-        line = _line([text for text in remaining if abs(text.y - nearest.y) < half])
+        level = [text for text in remaining if abs(text.y - nearest.y) < half]
+        line = _line(_words(level, nearest))
         if lines and not _follows(line, lines[-1]):
             break
         lines.append(line)
         remaining = [text for text in remaining if text.y <= nearest.y - half]
     return lines
+
+
+def _words(level: Sequence[_Text], first: _Text) -> list[_Text]:
+    """Return the words of the line of a text, among the texts level with it.
+
+    The words run on from the text, each within ``_WORD_SPACING`` times its
+    height of the next, so texts further along the same level, such as the
+    labels of other plots below a wide one's title, are not words of it.
+    """
+    gap = _WORD_SPACING * (first.top - first.bottom)
+    runs: list[list[_Text]] = []
+    end = -math.inf
+    for text in sorted(level, key=lambda text: text.left):
+        if text.left - end > gap:
+            runs.append([])
+        runs[-1].append(text)
+        end = max(end, text.right)
+    return next(run for run in runs if first in run)
 
 
 def _line(texts: Sequence[_Text]) -> _Text:
