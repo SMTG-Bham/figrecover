@@ -239,9 +239,16 @@ work as before.
   Logarithmic axes are read too; see [Logarithmic axes](#logarithmic-axes).
   So are reversed axes, whose values fall from left to right or from bottom
   to top, as depth often does.
-- Numbers can have thousands separators (`2,000`), a percent sign (`50%`, read
-  in percent) or an exponent (`2.5e-3`). A tick mark that OCR reads as a dash
-  beside a label, as it can where no axis line joins them, is ignored.
+- Numbers can have thousands separators (`2,000` or `2 000`), a percent sign
+  (`50%`, read in percent) or an exponent (`2.5e-3`). A tick mark that OCR
+  reads as a dash beside a label, as it can where no axis line joins them, is
+  ignored.
+- Decimal commas work too, with points or spaces as thousands separators
+  (`0,5` and `2.000`), as many European plots write them. A plot's labels
+  decide: a label such as `0,5` reads as a number only with decimal commas,
+  `0.5` only with decimal points, and `2.000` either way, so figrecover takes
+  the way more labels read only one way, decimal points if neither wins. A
+  single label misread with a comma does not outvote the rest.
 - OCR can mistake letters for digits, and dashes for minus signs. In a label
   with a digit, O and o are read as 0, and l, I and | as 1 before a digit or
   a point, so `1O` and `l.5` read as 10 and 1.5; after a digit, they may be a

@@ -23,15 +23,16 @@ The first release.
   matching `-l` options to reuse for similar plots.
 - With the `ocr` extra, figrecover reads the axes when `-p` is left out: it
   calibrates each image from its tick labels, including thousands separators,
-  percentages and exponents, applying scale factors such as `1e-5` printed
-  beside an axis, traces from where the axis lines cross, and names the CSV
-  columns after the axis titles. Titles can run over several lines and be
-  aligned with either end of their axes, and y-axis titles written upwards
-  are read turned upright, so OCR no longer splits or misreads them. It reads
-  tick labels written upwards, places the ticks of rotated labels at their
-  tick marks, reads plots without axis lines, and refuses a second y-axis on
-  the right. Tick labels in which OCR mistook letters for digits, such as `1O`
-  or `l.5`, or dashes for minus signs, are read as they were written.
+  decimal commas, percentages and exponents, applying scale factors such as
+  `1e-5` printed beside an axis, traces from where the axis lines cross, and
+  names the CSV columns after the axis titles. Titles can run over several
+  lines and be aligned with either end of their axes, and y-axis titles
+  written upwards are read turned upright, so OCR no longer splits or misreads
+  them. It reads tick labels written upwards, places the ticks of rotated
+  labels at their tick marks, reads plots without axis lines, and refuses a
+  second y-axis on the right. Tick labels in which OCR mistook letters for
+  digits, such as `1O` or `l.5`, or dashes for minus signs, are read as they
+  were written.
 - Logarithmic axes work too. figrecover finds them itself when it reads the
   axes, including tick labels written as powers, such as 10⁻² or 2⁵, even
   where OCR misses the superscripts; and `--log` names them for `-p`.
