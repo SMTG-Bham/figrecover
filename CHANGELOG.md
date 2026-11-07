@@ -15,7 +15,11 @@ The first release.
   on each side, and short marks beside a curve, such as the caps of error
   bars, are ignored, as is ink of other colours, such as the black arrow of
   an annotation among coloured curves. A frame around the axes, as
-  matplotlib draws, is left out.
+  matplotlib draws, is left out. Insets and legends inside a frame of their
+  own are painted out with all they hold, so an inset's curve or a legend's
+  key in a curve's colour is not traced as part of that curve, and an
+  inset's markers are not taken for a series' with `-m`; step plots, bars,
+  shaded spans, grid lines and boxes drawn around part of a curve are kept.
 - `-m` tells series apart by the shapes of their markers, such as squares,
   diamonds, open circles and crosses, cut out of the legend, for plots whose
   series share a colour, as many spreadsheet charts do. It gives a point at
@@ -53,7 +57,13 @@ The first release.
   axis, labelled only on the outer panels, as matplotlib's `sharex` and
   `sharey` draw them, take the axis and its title from the panel beside them
   that lines up with them. Panels that cannot be read, such as colour bars,
-  are left out with a warning. Scale factors are read only where plotting
+  are left out with a warning. An inset inside a frame in a panel's axes is
+  read as a panel of its own, with its own axes, from the text around it,
+  while the panel is traced with it painted out: `-o out.csv` writes a plot
+  with an inset to `out.csv` and `out_inset.csv`, and an inset of panel (b)
+  to `out_b_inset.csv`. Frames whose axes cannot be read, such as legends,
+  stay painted out, without a warning. `read_panels` gives each inset after
+  its panel, as its `inset_of`. Scale factors are read only where plotting
   libraries print them, so that of a panel below is not taken for one of the
   x-axis above.
 - Logarithmic axes work too. figrecover finds them itself when it reads the

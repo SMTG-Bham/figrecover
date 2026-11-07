@@ -175,6 +175,113 @@ def test_a_line_along_the_top_is_not_a_frame() -> None:
     assert np.all(pixels[:, 1] > HEIGHT - 12)
 
 
+def boxed(image: Image, rows: slice, columns: slice, colour: Colour = BLACK) -> None:
+    """Paint part of a synthetic plot white, and draw a line around it."""
+    image[rows, columns] = 255
+    corners = (columns.start, rows.start), (columns.stop - 1, rows.stop - 1)
+    cv2.rectangle(image, *corners, colour, 1)
+
+
+def test_trace_curves_leaves_out_an_inset() -> None:
+    image, calibration = synthetic_plot(curves=[(BLUE, curve)])
+    boxed(image, slice(10, 61), slice(230, 371))  # above the curve
+    for row in (20, 35, 50):  # tick marks, left of the inset
+        cv2.line(image, (225, row), (229, row), BLACK, 1)
+    # The inset's curve, in the same colour, meets the frame at a tick mark.
+    columns = np.arange(231, 370)
+    rows = 35 - 20 * np.sin((columns - 231) / 8)
+    points = np.column_stack((columns, rows)).round().astype(np.int32)
+    cv2.polylines(image, [points], isClosed=False, color=BLUE, thickness=2)
+
+    (pixels,) = trace_curves(image, [BLUE], calibration.origin)
+
+    assert_follows(pixels, calibration, curve)
+
+
+@pytest.mark.parametrize(
+    ("top", "left", "right"),
+    [(15, 280, 380), (0, 300, WIDTH)],  # inside the plot, and at its corner
+)
+def test_trace_curves_leaves_out_a_legend(top: int, left: int, right: int) -> None:
+    # A light grey frame, as matplotlib draws, around a key and its text.
+    image, calibration = synthetic_plot(curves=[(BLUE, curve)])
+    boxed(image, slice(top, top + 31), slice(left, right), (214,) * 3)
+    cv2.line(image, (left + 10, top + 15), (left + 35, top + 15), BLUE, 2)
+    image[top + 11 : top + 20, left + 42 : left + 80] = 0
+
+    (pixels,) = trace_curves(image, [BLUE], calibration.origin)
+
+    assert_follows(pixels, calibration, curve)
+
+
+def test_trace_curves_keeps_a_curve_in_a_box_drawn_around_it() -> None:
+    image, calibration = synthetic_plot(curves=[(BLUE, curve)])
+    cv2.rectangle(image, (150, 60), (250, 140), BLACK, 1)
+
+    (pixels,) = trace_curves(image, [BLUE], calibration.origin)
+
+    assert_follows(pixels, calibration, curve)
+    assert np.count_nonzero((pixels[:, 0] > 150) & (pixels[:, 0] < 250)) > 90
+
+
+def test_trace_curves_keeps_a_curve_in_a_shaded_box() -> None:
+    image, calibration = synthetic_plot(curves=[(BLUE, curve)], x_range=(2.5, 7.5))
+    shaded = image[60:161, 110:321]
+    shaded[np.all(shaded == 255, axis=-1)] = 220
+    cv2.rectangle(image, (110, 60), (320, 160), BLACK, 1)
+
+    (pixels,) = trace_curves(image, [BLUE], calibration.origin)
+
+    data = calibration.to_data(pixels)
+    np.testing.assert_allclose(data[:, 1], curve(data[:, 0]), atol=0.05)
+    assert data[:, 0].min() < 2.6
+    assert data[:, 0].max() > 7.4
+
+
+def pulses(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return a step curve that rises from 1 to 2.5 over x from 3 to 5, and 7 to 9."""
+    return np.where(((x >= 3) & (x < 5)) | ((x >= 7) & (x < 9)), 2.5, 1.0)
+
+
+def test_trace_curve_keeps_the_stretches_of_a_step_curve() -> None:
+    image, calibration = synthetic_plot(curves=[(BLUE, pulses)])
+
+    data = calibration.to_data(trace_curve(image, calibration.origin))
+
+    flat = np.all(np.abs(data[:, :1] - [3, 5, 7, 9]) > 0.1, axis=1)
+    assert np.count_nonzero(flat) > 300
+    np.testing.assert_allclose(data[flat, 1], pulses(data[flat, 0]), atol=0.05)
+
+
+def test_trace_curves_keeps_a_curve_between_grid_lines() -> None:
+    # The grid lines around the curve close a box, but run on past it.
+    image, calibration = synthetic_plot(
+        grid=200, curves=[(BLUE, lambda x: 2.1 + 0.3 * np.sin(x))], x_range=(1, 8.5)
+    )
+
+    (pixels,) = trace_curves(image, [BLUE], calibration.origin)
+
+    assert len(pixels) > 250
+
+
+def test_trace_curves_keeps_a_box_closed_by_two_curves() -> None:
+    # The blue curve's pulse stands on a stretch of the orange one.
+    def under(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+        return np.where((x >= 3) & (x < 6), 1.8, 0.8)
+
+    def over(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+        return np.where((x >= 3) & (x < 6), 2.5, 1.0)
+
+    image, calibration = synthetic_plot(curves=[(ORANGE, under), (BLUE, over)])
+
+    (pixels,) = trace_curves(image, [BLUE], calibration.origin)
+
+    data = calibration.to_data(pixels)
+    pulse = data[(data[:, 0] > 3.2) & (data[:, 0] < 5.8)]
+    assert len(pulse) > 80
+    np.testing.assert_allclose(pulse[:, 1], 2.5, atol=0.05)
+
+
 def test_trace_curve_ignores_a_light_grid() -> None:
     assert_traces_curve(*synthetic_plot(grid=200))
 
@@ -474,6 +581,15 @@ def test_find_markers_reads_keys_without_lines() -> None:
 
 def test_find_markers_skips_a_legend_in_the_plot_area() -> None:
     image, calibration, keys, markers = marker_plot(SHAPES[:3], legend_row=12)
+    assert_finds_markers(find_markers(image, keys, calibration.origin), markers)
+
+
+def test_find_markers_skips_markers_in_an_inset() -> None:
+    image, calibration, keys, markers = marker_plot(SHAPES[:2])
+    boxed(image, slice(10, 81), slice(230, 371))  # above the series
+    for column in range(250, 360, 25):
+        draw_marker(image, SHAPES[0], column, 45)
+
     assert_finds_markers(find_markers(image, keys, calibration.origin), markers)
 
 

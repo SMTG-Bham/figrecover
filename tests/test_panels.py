@@ -9,11 +9,11 @@ import cv2
 import numpy as np
 import pytest
 
-from figrecover import Image, Panel, load_image, panels, read_panels
+from figrecover import Axes, Calibration, Image, Panel, load_image, panels, read_panels
 from figrecover.axes import _Text
+from figrecover.digitize import _Box
 from figrecover.panels import (
     _beside,
-    _Box,
     _boxes,
     _in_order,
     _in_sequence,
@@ -29,6 +29,13 @@ GRID = [
     _Box(220, 370, 60, 280),
     _Box(220, 370, 360, 580),
 ]
+# The frames of the axes of a plot filling the image, of an inset in its top
+# right, and of a legend below that.
+PLOT, INSET, LEGEND = (
+    _Box(20, 370, 60, 580),
+    _Box(60, 200, 340, 540),
+    _Box(250, 300, 420, 540),
+)
 
 
 def text(content: str, x: float, y: float, width: float = 20) -> _Text:
@@ -336,7 +343,7 @@ def test_reads_a_plot_without_axis_lines_from_the_whole_image(
 def test_reads_a_plot_from_the_whole_image(
     monkeypatch: pytest.MonkeyPatch, content: str, letter: str | None
 ) -> None:
-    # An inset, inside the axes, is not a plot of its own.
+    # An inset without tick labels, inside the axes, is not a plot of its own.
     box, inset = GRID[2], _Box(260, 330, 180, 270)
     texts = [*ticks(box, ["0", "1", "2"], ["0", "1", "2"]), label(content, box)]
     image = figure(texts, boxes=[box, inset])
@@ -350,6 +357,75 @@ def test_reads_a_plot_from_the_whole_image(
     # The label is painted over only if it is one.
     assert (found.image[HEIGHT - 168, 80] == 255).all() == (letter is not None)
     assert found.axes.calibration.origin == (60.5, 30.5)
+
+
+def test_reads_an_inset_as_a_plot_of_its_own(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The inset's tick labels and titles lie inside the plot's axes, and the
+    # legend's text inside its frame.
+    texts = [
+        *ticks(PLOT, ["0", "1", "2"], ["0", "1", "2"]),
+        *ticks(INSET, ["5", "6", "7"], ["10", "20", "30"]),
+        text("Time", 440, HEIGHT - 235, width=40),
+        text("damped", 480, HEIGHT - 275, width=60),
+        label("(a)", PLOT),
+    ]
+    image = figure(texts, boxes=[PLOT, INSET, LEGEND])
+    read_parts(monkeypatch, image, texts)
+
+    plot, inset = read_panels(image)  # and no warning about the legend
+
+    assert (plot.label, plot.inset_of) == ("a", None)
+    assert plot.image.shape == image.shape
+    assert [value for _, value in plot.axes.x_ticks] == [0, 1, 2]
+    assert (inset.label, inset.inset_of) == (None, plot)
+    assert [value for _, value in inset.axes.x_ticks] == [5, 6, 7]
+    assert [value for _, value in inset.axes.y_ticks] == [10, 20, 30]
+    assert (inset.axes.x_title, inset.axes.y_title) == ("Time", None)
+    # The inset's image runs from the top of its frame down to the legend,
+    # and from the plot's y-axis to the right of its frame, each less the
+    # three pixels beside them.
+    assert inset.offset == (63.0, 153.0)
+    assert inset.image.shape[:2] == (187, 477)
+    assert tuple(np.add(inset.axes.calibration.origin, inset.offset)) == (340.5, 200.5)
+
+
+def test_reads_an_inset_of_a_panel(monkeypatch: pytest.MonkeyPatch) -> None:
+    inset = _Box(32, 142, 420, 570)
+    labels = [
+        label(f"({letter})", box) for letter, box in zip("abcd", GRID, strict=True)
+    ]
+    texts = [*four_plots(), *ticks(inset, ["5", "6", "7"], ["10", "20", "30"]), *labels]
+    image = figure(texts, boxes=[*GRID, inset])
+    read_parts(monkeypatch, image, texts)
+
+    found = read_panels(image)
+
+    assert [panel.label for panel in found] == ["a", "b", None, "c", "d"]
+    assert [panel.inset_of for panel in found] == [None, None, found[1], None, None]
+    assert [value for _, value in found[1].axes.y_ticks] == [5, 6, 7]
+    assert [value for _, value in found[2].axes.y_ticks] == [10, 20, 30]
+    origin = np.add(found[2].axes.calibration.origin, found[2].offset)
+    assert tuple(origin) == (420.5, 258.5)
+
+
+def test_finds_no_insets_without_a_plot_area(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Axes read as crossing at the top-right corner of the image leave no
+    # plot area to find insets in.
+    image = figure([], boxes=[PLOT, INSET])
+    read_parts(monkeypatch, image, [])
+    calibration = Calibration.from_ticks(
+        ((0, 0), (WIDTH, 1)), ((0, 0), (HEIGHT, 1)), (WIDTH, HEIGHT)
+    )
+    axes = Axes(calibration, (), (), None, None)
+    monkeypatch.setattr(panels, "_read_axes", lambda _image, _texts: axes)
+
+    (found,) = read_panels(image)
+
+    assert found.axes is axes
 
 
 @pytest.mark.parametrize(
@@ -514,3 +590,43 @@ def test_calibrates_each_panel_of_a_figure_sharing_axes(
     data = panel.axes.calibration.to_data(np.subtract(pixels, panel.offset))
 
     np.testing.assert_allclose(data, [(0, 0), (10, 0), (0, 1)], atol=0.03)
+
+
+@pytest.fixture(scope="module")
+def inset() -> list[Panel]:
+    """Read the plots of the example with an inset, once."""
+    return read_panels(load_image(EXAMPLES / "inset.png"))
+
+
+def test_reads_the_inset_of_a_plot(inset: list[Panel]) -> None:
+    plot, magnified = inset
+    assert (plot.inset_of, magnified.inset_of) == (None, plot)
+    assert [value for _, value in plot.axes.x_ticks] == [0, 2, 4, 6, 8, 10]
+    assert [value for _, value in magnified.axes.x_ticks] == [6, 7, 8, 9, 10]
+    assert [value for _, value in magnified.axes.y_ticks] == [0.1, 0.2, 0.3]
+
+
+@pytest.mark.parametrize(
+    ("index", "pixels", "points"),
+    [
+        # The pixel positions of the points that examples/make_examples.py
+        # prints for the plot and its inset.
+        (0, [(80, 44), (576, 44), (80, 147)], [(0, 0), (10, 0), (0, 1)]),
+        (1, [(353, 224), (551, 224), (353, 314)], [(6, 0.1), (10, 0.1), (6, 0.3)]),
+    ],
+)
+def test_calibrates_the_inset_of_a_plot(
+    inset: list[Panel],
+    index: int,
+    pixels: list[tuple[int, int]],
+    points: list[tuple[float, float]],
+) -> None:
+    panel = inset[index]
+
+    data = panel.axes.calibration.to_data(np.subtract(pixels, panel.offset))
+
+    # Within a pixel and a half along each axis: the second point lies along
+    # the x-axis from the first, and the third along the y-axis.
+    steps = np.diagonal(np.subtract(points[1:], points[0]))
+    pixel = steps / np.diagonal(np.subtract(pixels[1:], pixels[0]))
+    assert np.all(np.abs(data - points) <= 1.5 * pixel)
