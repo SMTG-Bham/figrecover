@@ -22,7 +22,7 @@ from matplotlib.legend import Legend
 type Curve = Callable[[npt.NDArray[np.float64]], npt.NDArray[np.float64]]
 
 HERE = Path(__file__).parent
-ALSO_PDF = {"labelled", "logarithmic", "series"}  # also saved as vector PDFs
+ALSO_PDF = {"labelled", "logarithmic", "markers", "series"}  # also saved as PDFs
 
 
 def spectrum(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
@@ -134,6 +134,32 @@ def draw_rasterised(name: str, curves: dict[str, Curve]) -> None:
     plt.close(figure)
 
 
+def draw_scatter(name: str, errors: Curve, scattered: Curve) -> None:
+    """Draw two series of markers in a PDF, and print the points.
+
+    The markers lie every half unit of x from 0.5 to 9.5: blue circles with
+    error bars, whose caps are markers too, and orange squares, as a scatter
+    plot draws them. The legend lies inside the axes.
+    """
+    figure, axes = plt.subplots(figsize=(6.4, 4), dpi=100)
+    x = np.arange(0.5, 10, 0.5)
+    axes.errorbar(
+        x, errors(x), yerr=0.1, fmt="o", capsize=3, label=errors.__name__.capitalize()
+    )
+    axes.scatter(
+        x,
+        scattered(x),
+        color="tab:orange",
+        marker="s",
+        label=scattered.__name__.capitalize(),
+    )
+    axes.set(xlabel="Time (s)", ylabel="Voltage (mV)", xlim=(0, 10), ylim=(0, 3))
+    axes.spines[["top", "right"]].set_visible(False)
+    axes.legend(loc="center right")
+    save_pdf(name, figure, axes, [(0, 0), (10, 0), (0, 1)])
+    plt.close(figure)
+
+
 def draw_titled(name: str, curve: Curve, titles: tuple[str, str]) -> None:
     """Draw a curve over x from 0 to 10 with titles of two lines, and print the points.
 
@@ -196,33 +222,48 @@ def save(
     in ``ALSO_PDF`` are saved as PDFs too.
     """
     figure.savefig(HERE / f"{name}.png", facecolor="white")
-    if name in ALSO_PDF:
-        save_pdf(name, figure, axes, points)
-
-    # Display coordinates are pixels from the bottom-left corner.
+    # Display coordinates are pixels from the bottom-left corner, as the
+    # image was drawn, before the PDF is.
     pixels = axes.transData.transform(points).round().astype(int)
     options = [f"-l {x},{y}" for x, y in pixels]
-    for handle in legend.get_lines() if legend else []:
-        # A legend line with one marker has three points, marked in the middle.
-        x, y = handle.get_transform().transform(handle.get_xydata()[1])
-        options.append(f"-m {x:.0f},{y:.0f}")
+    options += [f"-m {x:.0f},{y:.0f}" for x, y in keys(legend)]
     print(name, " ".join(options))
+    if name in ALSO_PDF:
+        save_pdf(name, figure, axes, points, legend)
     plt.close(figure)
 
 
 def save_pdf(
-    name: str, figure: Figure, axes: Axes, points: list[tuple[float, float]]
+    name: str,
+    figure: Figure,
+    axes: Axes,
+    points: list[tuple[float, float]],
+    legend: Legend | None = None,
 ) -> None:
     """Save a plot as a PDF, and print the positions of reference points in points.
 
-    The PDF's date is left out, so that it is drawn the same each time.
+    With a legend, also print the positions of its markers. The PDF's date is
+    left out, so that it is drawn the same each time.
     """
     figure.savefig(
         HERE / f"{name}.pdf", facecolor="white", metadata={"CreationDate": None}
     )
-    # Display coordinates are pixels, of which there are dpi to 72 points.
+    # Display coordinates are pixels, of which there are dpi to 72 points,
+    # but the legend keeps those of the PDF's drawing, at 72 to the inch.
     positions = axes.transData.transform(points) * 72 / figure.dpi
-    print(f"{name}.pdf", " ".join(f"-l {x:.2f},{y:.2f}" for x, y in positions))
+    options = [f"-l {x:.2f},{y:.2f}" for x, y in positions]
+    options += [f"-m {x:.2f},{y:.2f}" for x, y in keys(legend)]
+    print(f"{name}.pdf", " ".join(options))
+
+
+def keys(legend: Legend | None) -> npt.NDArray[np.float64]:
+    """Return the display coordinates of the markers in a legend's lines."""
+    found = [
+        # A legend line with one marker has three points, marked in the middle.
+        handle.get_transform().transform(handle.get_xydata()[1])
+        for handle in (legend.get_lines() if legend else [])
+    ]
+    return np.array(found, dtype=np.float64).reshape(-1, 2)
 
 
 draw("spectrum", {"black": spectrum}, 3, grid=False)
@@ -239,3 +280,4 @@ draw_titled("titled", spectrum, ("Photon energy\n(eV)", "Absorbance\n(arb. units
 draw_markers("markers", {"D": decay, "s": growth, "o": wave, "x": trend})
 draw_slanted("slanted", damped, ("Time (s)", "Voltage (mV)"))
 draw_rasterised("rasterised", {"tab:blue": decay, "tab:orange": growth})
+draw_scatter("scatter", decay, growth)
