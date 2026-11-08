@@ -137,10 +137,11 @@ figrecover examples/series.png \
 ```
 
 figrecover traces the four most common colours that stand out from the
-background, longest curve first, and prints their colours as `-c` options:
+background, the curve with the most pixels first, and prints their colours as
+`-c` options:
 
 ```text
-figrecover: colours: -c 2ea12e -c ff7f0e -c 1f77b4 -c 040404
+figrecover: colours: -c 2ca02c -c 1f77b4 -c ff7f0e -c 000000
 ```
 
 The CSV gains a `series` column that numbers the curves in that order:
@@ -154,15 +155,25 @@ series,x,y
 
 ![Four crossing curves, each recovered in its own colour](examples/series.preview.png)
 
-Which curve is longest can change from one plot to the next, so for a batch,
-pass the printed `-c` options instead of `-n`. They fix the order of the
-series, and each picks the curve whose colour is nearest, so they also work on
-similar plots whose colours differ slightly, such as JPEG files. Give only the
-`-c` options of the curves you want. The colours of plotting libraries work
-too, such as `-c 1f77b4` for matplotlib's first colour.
+Which curve has the most pixels can change from one plot to the next, so for
+a batch, pass the printed `-c` options instead of `-n`. They fix the order of
+the series, and each picks the curve whose colour is nearest, so they also
+work on similar plots whose colours differ slightly, such as JPEG files. Give
+only the `-c` options of the curves you want. The colours of plotting
+libraries work too, such as `-c 1f77b4` for matplotlib's first colour.
+
+Lines thinner than a pixel never show their full colour, as antialiasing
+blends them with the background, nor do lines drawn translucent: a
+`tab:blue` line at half opacity shows as `#8ebad9`. figrecover finds such
+lines by the direction of their colour from the background, which their
+blends share, and prints the strongest colour each shows, such as `eda2a3`
+for a `tab:red` line a quarter of a point wide at 100 dots per inch. A `-c`
+colour picks such a line too, as the line shows part of it: `-c d62728` picks
+that line, and `-c 1f77b4` the translucent one.
 
 `-n` skips colours that fill areas, those drawn mostly as straight lines
-across the plot, such as grid lines, and very pale ones, less than 64 levels
+across the plot, such as grid lines, those where two translucent colours
+overlap, such as two shaded bands, and very pale ones, less than 64 levels
 from the background; trace a pale curve with `-c` instead. Curves in
 neighbouring colours of a colour map, such as viridis, are told apart, and two
 `-c` colours that match the same curve are an error.
@@ -240,7 +251,7 @@ and names the CSV columns after the axis titles:
 
 ```text
 Time (s),Voltage (mV)
-0.00688239,0.996743
+0.00688239,0.999744
 ...
 ```
 
@@ -790,20 +801,36 @@ in an image, from the position of a marker of each series in points.
    then the most common colour is a filled area. Antialiasing blends the edges
    of each curve with the background, and a blend can be common too, so a
    colour whose pixels mostly touch those of a colour further from the
-   background is dropped.
-5. The curves are the common colours that differ from the background by at
-   least 64 levels in some channel, most pixels first, except those whose
-   pixels lie mostly more than 4 pixels inside their shapes, which fill areas,
-   and those drawn mostly as straight lines across 60% of the plot, as grid
-   lines are. `-c` instead picks the common colour nearest to each given
-   colour, up to 96 levels away.
-6. Each pixel belongs to the common colour that it best matches when blended
+   background is dropped. So is a colour whose pixels show several inks along
+   separate lines, as the pale blends of thin lines of several colours do
+   when counted as one: a pixel's ink is its direction from the background,
+   which antialiasing and transparency leave as it is, and directions less
+   than 6 degrees apart are one ink's.
+5. A thin line never reaches its full colour, and its shades are each too
+   rare to count. So the pixels that show some ink, 16 levels or more from
+   the background, that no common colour claims, other than the pale edges
+   of its own pixels, are taken by their inks, and an ink whose pixels,
+   weighted by their strength, add up to half a pixel for each column of the
+   plot at full strength is a colour too. Each colour is then the strongest
+   its pixels show along its direction, but for a fiftieth of them, so an
+   opaque line gives its own colour, and a thinner one its strongest shade.
+6. The curves are the colours that differ from the background by at least
+   64 levels in some channel, most pixels first, except those whose pixels
+   lie mostly more than 4 pixels inside their shapes, which fill areas; those
+   drawn mostly as straight lines across 60% of the plot, as grid lines are;
+   and those that blend two other colours, a tenth of each or more, half of
+   whose surrounding pixels show those two, as where translucent bands
+   overlap. `-c` instead picks the colour nearest to each given colour, up to
+   96 levels away, or failing that the nearest whose direction lies within
+   12 degrees of its own, no further from the background: a thin or
+   translucent line of that colour.
+7. Each pixel belongs to the colour that it best matches when blended
    with the background, if it is at least half-way there, so a curve's
    antialiased edges count towards it, and within 96 levels of the blend, so
    ink of other colours, such as the black text and arrows of annotations
    among coloured curves, is not taken for the nearest curve. Specks of fewer
    than four pixels, such as where two other curves cross, are ignored.
-7. In each image column, a curve's pixels form runs, split by gaps of more
+8. In each image column, a curve's pixels form runs, split by gaps of more
    than 6 pixels, and runs that overlap one to one in neighbouring columns
    form branches. Each run of a branch across at least 5% of the plot gives a
    point at its median height, so both sides of a loop are traced, and shorter
@@ -811,7 +838,7 @@ in an image, from the position of a marker of each series in points.
    A column without such a run gives one point at the median height of all
    its pixels.
 
-With `-m`, steps 4 to 7 give way to these:
+With `-m`, steps 4 to 8 give way to these:
 
 1. Each key's marker is the piece of ink, 64 levels or more from the
    background, nearest the key's position. A key at least twice as wide as
@@ -827,7 +854,7 @@ On the examples, the recovered values are within 0.03 of the true curves, about
 three pixels at the steepest point, and the markers within 0.02 of the points
 they mark, about two pixels.
 
-With a PDF file, steps 1 to 7 give way to these:
+With a PDF file, steps 1 to 8 give way to these:
 
 1. [PDFium](https://pdfium.googlesource.com/pdfium/), through pypdfium2, reads
    the characters, paths and images that the page draws, each with the matrix

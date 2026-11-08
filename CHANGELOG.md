@@ -6,7 +6,12 @@ The first release.
 
 - The `figrecover` command writes the curves in an image of a plot as CSV, in
   the plot's own units, from three or more reference points.
-- Curves are told apart by colour, even neighbouring colours of a colour map.
+- Curves are told apart by colour, even neighbouring colours of a colour map,
+  and found by the direction of their ink from the background, so lines
+  thinner than a pixel and translucent lines are found too, and picked by
+  their full colours with `-c`. Colours are printed as their inks' full
+  strength, such as `2ca02c` for matplotlib's green, and ranked by pixels.
+  Where translucent bands overlap is not taken for a curve.
   `-n` traces the most common curve colours and prints the matching `-c`
   options to reuse for similar plots, skipping filled areas and grid lines of
   any shade, and `-c` traces the curves nearest to given colours. With several
