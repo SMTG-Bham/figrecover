@@ -427,23 +427,35 @@ work as before.
   converted, so a column titled `Voltage (mV)` stays in millivolts.
 - Each tick lies at the middle of its label, or at a tick mark: for labels
   that end at their tick marks rather than centring on them, as rotated
-  x-axis labels do, at the mark at that end, and for labels that lie alike
-  to one side of their marks, as matplotlib draws rotated y-axis labels, at
-  the mark beside each.
-  Labels written upwards on the x-axis, turned a quarter turn, are read as
-  well as those written across. On the y-axis, labels written upwards or
-  downwards are read too, though OCR runs them together, as in
-  `1.25 1.50 1.75`, and misreads some, such as `2.5` as `25`: when most of
-  them are taller than wide, figrecover reads them again with the image left
-  of them turned a quarter turn each way, which takes about a second more,
-  and takes the turn that OCR reads more surely, as it reads them less surely
-  upside down. Labels of a single digit are read as they are. OCR often
-  misreads x-axis labels at a slant, such as 45°, so if it misreads one and
-  finds another's box tilted, figrecover reads the labels again with the
-  image turned 45° each way, which takes about a second more, and takes their
-  texts from the turn that reads the most of them as numbers. Labels at 60°
-  can still be missed, and those misread, such as a 6 written downwards or
-  at a slant on the y-axis, are dropped.
+  x-axis labels do, at the mark at that end; for labels that lie alike to
+  one side of their marks, as matplotlib draws rotated y-axis labels, at the
+  mark beside each; and for rotated labels centred on their marks, at the
+  mark, as OCR's boxes put the middles of rotated text up to 2.4 pixels off.
+  Labels written across stay at their middles, which OCR finds to about a
+  pixel: matplotlib draws its marks on whole pixels, on average half a pixel
+  from where it draws the curves, so they are no surer.
+- Tick labels can be rotated to any angle, on either axis. figrecover finds
+  how far the labels slant from their ink, from the long axis of each
+  character, and if OCR misread a slanted label, missed one, or lost
+  characters of one, it reads the labels again with the image turned to lay
+  them level, which takes one more OCR pass, about half a second. Labels
+  written upwards or downwards are read again turned a quarter turn each
+  way, two passes, about a second, and the turn that puts more of them in
+  line wins, or that OCR reads more surely, as it reads them less surely
+  upside down. On the y-axis, OCR runs such labels together, as in
+  `1.25 1.50 1.75` or `-0.25-0.50`, and misreads some, such as `2.5` as `25`
+  or a 6 as 9, so they are read again whenever most are taller than wide,
+  or OCR did not read them well. On test plots with labels at 30°, 45°, 60°
+  and 90° either way, on axes from 0 to 1, 10 or 1000, -1 to 1 and of years,
+  every tick was read, but for one at the end of an axis that OCR missed,
+  and placed at its mark, and the curves lay within 0.0023 of the y-axis's
+  range by the median. Labels that OCR misreads even turned are dropped.
+- OCR can lose characters of a label, such as its decimal point, reading
+  0.5, 1.0 and 1.5 as `5`, `10` and `15`: values in line, but ten times too
+  large. So a label read as fewer characters than there are pieces of ink
+  wholly inside its box is dropped, and an axis left with fewer than three
+  labels is not read: figrecover stops with `OCR lost characters, such as
+  decimal points, of 3 of the 5 y-axis tick labels`.
 - figrecover traces the curves from the axis lines, not from the first ticks,
   so the margins that plotting libraries leave inside the axes are kept. If
   there are no axis lines, it starts just beyond the tick labels and their
@@ -461,7 +473,11 @@ work as before.
   under each number, are read by their first lines, and their other lines are
   not taken for the x-axis title. A y-axis title written upwards, as most are,
   is read again with the text left of the tick labels turned upright, which
-  OCR reads more surely; one written across is read as it is. A column without
+  OCR reads more surely, and so is one written downwards, as titles of
+  right-hand axes are, as OCR turns it the right way up; one written across
+  is read as it is. A title drawn over the tick labels, as matplotlib draws
+  one turned to 270° without more padding, cannot be read, nor can the
+  labels it covers. A column without
   a title is named `x` or `y`. Titles of a single letter are easily misread,
   such as `x` as `X`, or missed.
 - Titles keep their Greek letters, symbols, superscripts and subscripts, such
@@ -494,6 +510,20 @@ turned level:
 
 ```bash
 figrecover examples/slanted.png
+```
+
+```text
+figrecover: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10
+figrecover: y-axis "Voltage (mV)" with ticks at 0, 0.5, 1, 1.5, 2, 2.5
+```
+
+So are those of `examples/tilted.png`, at 30° on the x-axis and 45° on the
+y-axis, and `examples/steep.png`, at 60° on the x-axis and upwards on the
+y-axis. Those of `examples/downwards.png` are written downwards on both
+axes, as is its y-axis title:
+
+```bash
+figrecover examples/downwards.png
 ```
 
 ```text
