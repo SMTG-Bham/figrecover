@@ -538,6 +538,20 @@ def test_trace_series_keeps_crossing_curves_of_one_colour_apart() -> None:
         assert_on(series, calibration, function)
 
 
+def test_find_series_ranks_the_curves_of_a_colour_among_others_by_pixels() -> None:
+    curves = [(BLACK, rising), (BLACK, falling), (BLUE, curve)]
+    image, calibration = synthetic_plot(curves=curves)
+
+    found = find_series(image, calibration.origin)
+
+    # Black has the most pixels, but each black line fewer than the blue curve.
+    np.testing.assert_allclose(
+        find_colours(image, 1, calibration.origin)[0], BLACK, atol=8
+    )
+    blue = [np.allclose(series.colour, BLUE, atol=8) for series in found]
+    assert blue == [True, False, False]
+
+
 def test_trace_series_joins_the_pieces_of_a_curve_hidden_in_places() -> None:
     image, calibration = synthetic_plot(curves=[(BLACK, rising), (BLACK, falling)])
     image[70:95, 320:370] = 255  # hides the rising line, 50 pixels wide

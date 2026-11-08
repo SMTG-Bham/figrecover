@@ -355,7 +355,7 @@ def trace_series(
     masks, found, left, top = _masks(image, colours, origin)
     height = image.shape[0]
     return [
-        _styled(in_colour, colour, left, top, height)
+        [series for series, _ in _styled(in_colour, colour, left, top, height)]
         for in_colour, colour in zip(masks, found, strict=True)
     ]
 
@@ -372,13 +372,26 @@ def find_series(image: Image, origin: Point = (0, 0)) -> list[Series]:
             bottom-left corner.
 
     Returns:
-        Every curve, by colour, the colours in the order ``find_colours``
-        gives them, and the curves of a colour most pixels first.
+        Every curve. Colours of one curve each come in the order that
+        ``find_colours`` gives them, and the curves of colours of several,
+        each colour's in the order ``trace_series`` gives them, come in among
+        them by their pixels, counting those of a run of pixels that curves
+        share a share each, the most first.
     """
     colours = _curve_colours(image, origin)
-    return [
-        series for found in trace_series(image, colours, origin) for series in found
+    masks, found, left, top = _masks(image, colours, origin)
+    height = image.shape[0]
+    styled = [
+        _styled(in_colour, colour, left, top, height)
+        for in_colour, colour in zip(masks, found, strict=True)
     ]
+    queues = [[pairs[0] for pairs in styled if len(pairs) == 1]]
+    queues += [pairs for pairs in styled if len(pairs) > 1]
+    every: list[Series] = []
+    while any(queues):
+        first = max((queue for queue in queues if queue), key=lambda queue: queue[0][1])
+        every.append(first.pop(0)[0])
+    return every
 
 
 def trace_curve(image: Image, origin: Point = (0, 0)) -> npt.NDArray[np.float64]:
@@ -1271,8 +1284,8 @@ def _place(
 
 def _styled(
     in_colour: npt.NDArray[np.bool_], colour: Colour, left: int, top: int, height: int
-) -> list[Series]:
-    """Return the curves of a colour as series, most pixels first.
+) -> list[tuple[Series, float]]:
+    """Return the curves of a colour as series, most pixels first, with their pixels.
 
     See ``trace_series`` for what the curves are. Markers, by ``_blobs``,
     taking the line to be as wide as ``_THIN`` of the runs of the colour's
@@ -1298,14 +1311,19 @@ def _styled(
         # The centre of the pixel in column c and row r is at
         # (c + 0.5, height - r - 0.5).
         points = centres * (1, -1) + (left + 0.5, height - top - 0.5)
-        found.append(Series(colour, "markers", size, points[np.argsort(points[:, 0])]))
+        series = Series(colour, "markers", size, points[np.argsort(points[:, 0])])
+        found.append((series, float(np.count_nonzero(marked))))
     if len(found) + len(curves) > 1:
         return found + [
-            Series(colour, style, width, _points(curve, at, left, top, height))
+            (
+                Series(colour, style, width, _points(curve, at, left, top, height)),
+                sum(track.pixels for track in curve),
+            )
             for curve, (style, width) in zip(curves, described, strict=True)
         ]
     alone: tuple[Style, float] = described[0] if described else ("markers", 0.0)
-    return [Series(colour, *alone, _follow(in_colour, left, top, height))]
+    series = Series(colour, *alone, _follow(in_colour, left, top, height))
+    return [(series, float(np.count_nonzero(in_curve)))]
 
 
 def _blobs(
