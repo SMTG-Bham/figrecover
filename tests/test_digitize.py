@@ -496,6 +496,47 @@ def test_find_colours_finds_a_curve_inside_its_own_band() -> None:
     assert find_colours(image, 1, calibration.origin) == [BLUE]
 
 
+def test_find_colours_leaves_out_a_thin_lines_fringe() -> None:
+    # A fainter ink alongside a thin line, as compression gives one, is the
+    # line's fringe, not a curve of its own.
+    image, calibration = thin_plot(
+        [(RED, curve), (PINK, lambda x: curve(x) + 1.5 / PIXELS_PER_UNIT[1])], 0.5
+    )
+
+    (found,) = find_colours(image, 1, calibration.origin)
+
+    assert ray_angle(found, RED) < 3
+    with pytest.raises(ValueError, match="found only 1 of 2 curves"):
+        find_colours(image, 2, calibration.origin)
+
+
+def test_find_colours_finds_a_thin_line_beside_a_paler_one() -> None:
+    # The red line runs 2 pixels from the pink one, but is stronger, so it
+    # is no fringe of it.
+    pink = (218, 139, 195)
+    image, calibration = thin_plot(
+        [(RED, curve), (pink, lambda x: curve(x) + 2 / PIXELS_PER_UNIT[1])], 0.5
+    )
+
+    found = find_colours(image, 2, calibration.origin)
+
+    assert sorted(min(ray_angle(c, ink) for c in found) for ink in (RED, pink)) == [
+        pytest.approx(0, abs=3),
+        pytest.approx(0, abs=3),
+    ]
+
+
+def test_find_colours_skips_dashed_lines_across_the_plot() -> None:
+    # A dashed horizontal line, as a threshold is drawn, is grid-like.
+    image, calibration = synthetic_plot(curves=[(BLUE, curve)])
+    row = to_row(ORIGIN[1] + 2.5 * PIXELS_PER_UNIT[1])
+    for column in range(ORIGIN[0], WIDTH, 13):
+        cv2.line(image, (column, row), (column + 7, row), ORANGE, 2)
+
+    with pytest.raises(ValueError, match=r"#ff7f0e .* as it is drawn in lines across"):
+        find_colours(image, 2, calibration.origin)
+
+
 def test_find_colours_says_what_it_found_and_what_it_left_out() -> None:
     image, calibration = synthetic_plot(
         grid=100, curves=[(PALE_BLUE, curve), (BLACK, rising)]

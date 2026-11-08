@@ -45,6 +45,7 @@ _MIN_INK_FRACTION = 0.5  # or a thin one this much ink per column, at full stren
 _CONTRAST = 64  # a curve differs from the background by this much in some channel
 _AREA_DEPTH = 4  # a colour whose pixels lie this deep inside its shapes fills areas
 _LINE_SPAN = 0.6  # straight lines across this fraction of the plot are grid lines
+_LINE_GAP = 13  # and their gaps, such as dashes or curves over them, are this short
 _BACKGROUND_SHARE = 1 / 3  # a background has this many pixels of a fill's, or more
 _COVERAGE_COST = 0.25  # how much a pixel's distance from full coverage counts
 _MIN_COVERAGE = 0.5  # less covered pixels belong to the background
@@ -812,15 +813,20 @@ def _faint_inks(
     A thin antialiased line never reaches its full colour: its pixels spread
     over many shades, each too rare to be a common colour, but all lie on the
     ray from the background towards its ink. So the pixels that show some
-    ink, at least ``_FAINT`` from the background, but are labelled with no
-    colour, other than the pale edges of a colour's own pixels, within
-    ``_MIXED`` degrees of it, are taken by their inks, as ``_ink_groups``
-    numbers them. An ink is a curve's if its pixels, each weighted by its
-    strength as a fraction of the strongest's, add up to ``_MIN_INK_FRACTION``
-    of the plot's width or more, as a line half a pixel wide across it does,
-    and it stands out from the background by ``_CONTRAST``. Its colour is the
-    background plus its direction at the strength that only a fiftieth of its
-    pixels exceed.
+    ink, at least ``_FAINT`` from the background, but that no colour claims,
+    being labelled with none or with one more than ``_MIXED`` degrees off
+    their own direction, are taken by their inks, as ``_ink_groups`` numbers
+    them, but for the pale edges of a colour's pixels, within 2 pixels of
+    them and ``_MIXED`` degrees of their direction.
+
+    An ink is a curve's if its pixels, each weighted by its strength as a
+    fraction of the strongest's, add up to ``_MIN_INK_FRACTION`` of the
+    plot's width or more, as a line half a pixel wide across it does, and it
+    stands out from the background by ``_CONTRAST``; but not if most of its
+    pixels lie within 2 pixels of those of a stronger ink, a colour's or
+    another such, as the fringes that compression gives a line do. Its colour
+    is the background plus its direction at the strength that only a
+    fiftieth of its pixels exceed.
 
     Args:
         colours: The background and the common colours.
@@ -833,13 +839,19 @@ def _faint_inks(
         The colours of the inks found, one per row.
     """
     background = colours[0]
-    free = (labels == 0) & (groups >= 0)
-    inks, _ = _inks(colours - background)
-    edges = math.cos(math.radians(_MIXED))
+    inks, strengths = _inks(colours - background)
+    alike = math.cos(math.radians(_MIXED))
+    claimed = (labels > 0) & (np.sum(directions * inks[labels], axis=-1) >= alike)
+    free = ~claimed & (groups >= 0)
+    # Each ink: its strength, its pixels and its colour, or None for a colour's.
+    found: list[
+        tuple[float, npt.NDArray[np.bool_], npt.NDArray[np.float64] | None]
+    ] = []
     for index in range(1, len(colours)):
-        near = cv2.dilate((labels == index).astype(np.uint8), np.ones((5, 5)))
-        free &= ~((near > 0) & (directions @ inks[index] >= edges))
-    found = []
+        own = claimed & (labels == index)
+        near = cv2.dilate(own.astype(np.uint8), np.ones((5, 5)))
+        free &= ~((near > 0) & (directions @ inks[index] >= alike))
+        found.append((float(strengths[index]), own, None))
     width = labels.shape[1]
     for group in np.unique(groups[free]):
         own = free & (groups == group)
@@ -851,8 +863,19 @@ def _faint_inks(
             )
             colour = np.clip(background + full * direction, 0, 255)
             if np.abs(colour - background).max() >= _CONTRAST:
-                found.append(colour)
-    return np.array(found).reshape(-1, 3)
+                found.append((full, own, colour))
+    kept: list[npt.NDArray[np.float64]] = []
+    for full, own, colour in found:
+        stronger = np.zeros(own.shape, dtype=np.uint8)
+        for other, pixels, _ in found:
+            if other > full:
+                stronger[pixels] = 1
+        beside = cv2.dilate(stronger, np.ones((5, 5)))
+        if colour is not None and (
+            2 * np.count_nonzero(own & (beside > 0)) < np.count_nonzero(own)
+        ):
+            kept.append(colour)
+    return np.array(kept).reshape(-1, 3)
 
 
 def _at_full_strength(
@@ -930,17 +953,26 @@ def _draws_grid(in_colour: npt.NDArray[np.bool_]) -> bool:
     """Return whether most of a colour's pixels lie on lines across the plot.
 
     The lines are horizontal or vertical, and run across at least
-    ``_LINE_SPAN`` of the plot area, as grid lines do.
+    ``_LINE_SPAN`` of the plot area, as grid lines do, with gaps of up to
+    ``_LINE_GAP`` pixels, where curves drawn over them break them or they
+    are dashed.
     """
     height, width = in_colour.shape
     mask = in_colour.astype(np.uint8)
-    lines = [
-        cv2.morphologyEx(
-            mask, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, shape)
+    lines = []
+    for gap, span in (
+        ((_LINE_GAP, 1), (round(width * _LINE_SPAN), 1)),
+        ((1, _LINE_GAP), (1, round(height * _LINE_SPAN))),
+    ):
+        closed = cv2.morphologyEx(
+            mask, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, gap)
         )
-        for shape in ((round(width * _LINE_SPAN), 1), (1, round(height * _LINE_SPAN)))
-    ]
-    on_lines = np.count_nonzero(cv2.bitwise_or(*lines))
+        lines.append(
+            cv2.morphologyEx(
+                closed, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, span)
+            )
+        )
+    on_lines = np.count_nonzero(in_colour & (cv2.bitwise_or(*lines) > 0))
     return bool(2 * on_lines > np.count_nonzero(mask))
 
 
