@@ -53,7 +53,9 @@ filled areas and grid lines. Insets and legends inside a frame, as matplotlib
 draws them, are painted out first, with all they hold; a legend without one
 is traced too if it is the same colour as a curve, so crop or paint it out,
 unless the series are told apart by their [markers](#markers). Dark
-backgrounds work as well as light ones. To have figrecover read the axes,
+backgrounds work as well as light ones, and an image turned by a few
+degrees, as scans often are, is levelled first; see
+[Turned images](#turned-images). To have figrecover read the axes,
 keep their tick labels and titles in the image. A figure of several plots,
 such as panels labelled (a) and (b), or a plot with an inset, needs no
 cropping when figrecover reads the axes; see [Several panels](#several-panels).
@@ -120,6 +122,8 @@ in blue, so you can check the result at a glance:
 | `-o`, `--output FILE` | CSV file to write. Default: standard output. |
 | `--preview IMAGE` | Also save a faded copy of the image with the recovered curves drawn on it. |
 | `--remove-grid` | Paint over grid lines before tracing. |
+| `--level DEGREES` | The angle by which the image's axes are turned anticlockwise, or clockwise if negative, to turn it back by. Default: find it; see [Turned images](#turned-images). |
+| `--no-level` | Read the image as it is, without levelling it. |
 | `--page N` | The page of a PDF file to read, from 1. Default: 1. |
 | `--box X0,Y0,X1,Y1` | The part of a PDF file's page to read, such as one figure, as its left, bottom, right and top edges in points. Default: the whole page. |
 
@@ -557,6 +561,57 @@ reading order, such as `inset1` and `inset2`.
   before.
 - Each panel takes about as long to read as a plot, about two seconds.
 
+### Turned images
+
+A scanned or photocopied plot is seldom quite level, and a turn of a quarter
+of a degree, two pixels across a plot, is enough for its axis lines or frame
+to be traced as part of a curve. So figrecover finds the angle by which an
+image's axes are turned, and turns the image back before reading it:
+
+```bash
+figrecover examples/skewed.png --preview skewed.preview.png
+```
+
+```text
+figrecover: turned the image 1.00° clockwise to level its axes
+figrecover: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10
+figrecover: y-axis "Voltage (mV)" with ticks at 0, 0.5, 1, 1.5, 2, 2.5, 3
+```
+
+The preview is drawn on the image as given, with the curves and the ticks
+turned back onto it:
+
+![A damped oscillation recovered from a plot turned by 1°](examples/skewed.preview.png)
+
+- The angle is that of the image's long straight lines, within 10° of
+  horizontal or vertical, such as the axis lines, a frame and grid lines,
+  each measured to a fraction of a pixel along its length. The straight
+  stretches of curves are lines too, so it is the angle that most of the
+  lines' length agrees on, and only if horizontal and vertical lines agree
+  on it, as the axis lines do. On plots turned by 0.25° to 5°, it is found
+  within 0.01°.
+- An image turned less than 0.1° is read as it is, as it reads as well as
+  it would levelled, so the results for level images are as they were. So
+  is an image without both a horizontal and a vertical line that agree,
+  such as a plot without axis lines; give `--level` for it.
+- The image is turned about its middle, onto an image large enough to hold
+  all of it, its corners filled in its background colour, and moved by up
+  to half a pixel so that the axis lines run along rows and columns of
+  pixels, as they were drawn, rather than blurred across two.
+- `-l` and `-m` positions are those in the image as given, as are those
+  printed when you click, and are turned with it.
+- On a framed plot and one with only a left and a bottom axis line, turned
+  by 0.25° to 5° either way, no axis line or frame is traced, and the curves
+  are as close as in the plots drawn level: within 0.002 of the y-axis's
+  span by the median, both from `-p` and `-l` and with the axes read, and
+  0.009 at most.
+- `--level DEGREES` sets the angle by hand: the angle by which the axes are
+  turned anticlockwise, or clockwise if negative. `--no-level` reads the
+  image as it is, for a plot drawn turned on purpose.
+- Finding the angle takes about 0.02 s for an image of 640 × 400 pixels,
+  and 0.1 s for one of 1920 × 1200, as a plot scanned at 300 dpi is; turning
+  the image takes about half as long again.
+
 ### PDF files
 
 With the `pdf` extra installed, give a PDF file instead of an image, and
@@ -727,6 +782,24 @@ data = [calibration.to_data(series) for series in markers]
 `load_image` returns an RGB array, and `remove_grid(image)` paints over grid
 lines first, if needed.
 
+`level_image` levels an image whose axes are turned, as the command does. It
+returns the levelled image, and a `Levelling`, whose `angle` is the angle the
+image was turned back by, or 0 if it was left as it is, and whose `points`
+and `back` methods find where pixel positions lie in the levelled image, and
+back:
+
+```python
+from figrecover import Calibration, level_image, load_image, trace_curve
+
+image, levelling = level_image(load_image("examples/skewed.png"))
+pixels = levelling.points([(82.8, 39.8), (578.7, 48.5), (81.0, 142.5)])
+calibration = Calibration.from_points([(0, 0), (10, 0), (0, 1)], pixels)
+data = calibration.to_data(trace_curve(image, calibration.origin))
+```
+
+`level_image(image, angle)` turns the image back by a given angle, and
+`find_skew(image)` returns the angle alone.
+
 With the `pdf` extra, `load_pdf` reads what a page of a PDF file draws, and
 the same steps work on it, in points from the page's bottom-left corner:
 
@@ -750,7 +823,17 @@ in an image, from the position of a marker of each series in points.
 ## How it works
 
 1. The image is read in colour and stretched to the full 0–255 range.
-   Transparent pixels become white.
+   Transparent pixels become white. If its axes are turned, it is levelled:
+   lines at least a fifth of the image's shorter side long, within 10° of
+   horizontal or vertical and at most 8 pixels thick, are found in its ink
+   with a probabilistic Hough transform. In each column across a line close
+   to horizontal, or each row across one close to vertical, the line's middle
+   is the mean position of the ink within 4 pixels of it, weighted by its
+   darkness, and the line's angle that of the straight line through its
+   middles by least squares, leaving out those where other ink meets it. The
+   angle that most of the lines' length agrees on, within 0.05°, is the
+   image's, if both horizontal and vertical lines agree on it, and if it is
+   0.1° or more, the image is turned back by it with Lanczos interpolation.
 2. A least-squares fit through the reference points gives a linear map from
    pixels to data for each axis, or to the logarithm of the data for a
    logarithmic axis. The leftmost and lowest reference points mark the axes.
@@ -871,9 +954,22 @@ With a PDF file, steps 1 to 7 give way to these:
   dotted lines may not be found.
 - Where curves cross, the one drawn underneath loses a few pixels, and its
   points there can be a pixel or two out.
-- The axes must be horizontal and vertical, with linear or logarithmic scales,
-  though either may be reversed. To read the axes, the x-axis must lie below
-  the plot and the y-axis left of it.
+- The axes must be horizontal and vertical, or turned alike by up to 10°, as
+  in a scan, which figrecover levels (see [Turned images](#turned-images)),
+  with linear or logarithmic scales, though either may be reversed. To read
+  the axes, the x-axis must lie below the plot and the y-axis left of it. A
+  photo of a page or a screen, in perspective, is not made square, nor is a
+  page scanned sideways turned upright.
+- An image is levelled only if it has long straight lines both horizontal
+  and vertical that agree on its angle, such as the two axis lines: a plot
+  without axis lines, or one with only an x-axis line and horizontal grid
+  lines, as many spreadsheet charts draw, is read as it is, unless given
+  `--level`. Images in PDF files are not levelled.
+- Levelling an image blurs its lines a little, as each pixel is made from
+  several. A dark grid's lines then vary in shade along their length, and
+  can be traced as a curve: give `--remove-grid`. Markers drawn in thin
+  lines, such as crosses, can be missed with `-m`, or found a pixel or two
+  off.
 - Each column gives one point per branch of a curve, so steep peaks come out
   slightly lower, vertical lines in the plot area become single points, and
   the two sides of a loop merge into one point where they come within 6
@@ -976,6 +1072,7 @@ protection.
 │   ├── panels.py            # finding the panels of a figure and their insets, and reading each
 │   ├── calibration.py       # pixel-to-data mapping
 │   ├── digitize.py          # image loading, grid removal, curve colours and tracing
+│   ├── level.py             # levelling images whose axes are turned
 │   ├── interactive.py       # window for clicking on reference points
 │   ├── pdf.py               # reading plots from PDF files, from their drawing
 │   └── cli.py               # the figrecover command
