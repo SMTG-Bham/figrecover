@@ -384,6 +384,75 @@ def test_pale_curves_can_be_traced_but_are_not_found() -> None:
     assert_follows(pixels, calibration, curve, atol=0.075)
 
 
+def thin_plot(
+    curves: Sequence[tuple[Colour, Function]], thickness: float
+) -> tuple[Image, Calibration]:
+    """Draw curves as antialiased lines a fraction of a pixel wide.
+
+    The lines are drawn four times as large, ``thickness`` pixels wide at
+    the plot's size, which is then shrunk to that size, averaging the pixels
+    each covers, as a plotting library's antialiasing does.
+    """
+    image, calibration = synthetic_plot(curves=[])
+    large = cv2.resize(image, None, fx=4, fy=4, interpolation=cv2.INTER_NEAREST)
+    x = np.linspace(0.5, 10, 500)
+    for colour, function in curves:
+        points = np.column_stack(
+            (
+                ORIGIN[0] + x * PIXELS_PER_UNIT[0],
+                HEIGHT - ORIGIN[1] - function(x) * PIXELS_PER_UNIT[1],
+            )
+        )
+        cv2.polylines(
+            large,
+            [(points * 4 * 16).round().astype(np.int32)],
+            isClosed=False,
+            color=colour,
+            thickness=round(4 * thickness),
+            lineType=cv2.LINE_AA,
+            shift=4,
+        )
+    shrunk = cv2.resize(large, (WIDTH, HEIGHT), interpolation=cv2.INTER_AREA)
+    return shrunk.astype(np.uint8), calibration
+
+
+RED, GREEN = (214, 39, 40), (44, 160, 44)
+
+
+def ray_angle(colour: Colour, other: Colour) -> float:
+    """Return the angle in degrees between two colours' directions from white."""
+    first, second = (np.subtract(c, 255) for c in (colour, other))
+    cosine = first @ second / np.linalg.norm(first) / np.linalg.norm(second)
+    return float(np.degrees(np.arccos(min(cosine, 1))))
+
+
+def test_find_colours_finds_lines_thinner_than_a_pixel() -> None:
+    # Their pixels spread over many pale shades, none common on its own,
+    # but all on the ray from the background towards each line's ink.
+    inks, functions = [RED, BLUE, GREEN], [curve, rising, falling]
+    image, calibration = thin_plot(list(zip(inks, functions, strict=True)), 0.5)
+
+    found = find_colours(image, 3, calibration.origin)
+
+    nearest = [min(inks, key=lambda ink: ray_angle(colour, ink)) for colour in found]
+    assert sorted(nearest) == sorted(inks)
+    assert max(map(ray_angle, found, nearest, strict=True)) < 3
+    traced = trace_curves(image, inks, calibration.origin)
+    for pixels, function in zip(traced, functions, strict=True):
+        assert_follows(pixels, calibration, function, atol=0.075)
+
+
+def test_trace_curves_matches_a_translucent_line_by_its_colour() -> None:
+    # Drawn at half opacity, the line shows a pale blue far from BLUE, but
+    # on its ray from the background.
+    image, calibration = synthetic_plot(curves=[(BLUE, curve)])
+    faded = ((image.astype(np.float64) + 255) / 2).astype(np.uint8)
+
+    (pixels,) = trace_curves(faded, [BLUE], calibration.origin)
+
+    assert_follows(pixels, calibration, curve)
+
+
 def test_find_colours_finds_mid_tones_on_a_grey_background() -> None:
     image, calibration = synthetic_plot(grid=254, curves=[(PINK, curve)])
     image[np.all(image == 255, axis=-1)] = GREY

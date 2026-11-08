@@ -32,7 +32,13 @@ _SAME_COLOUR = 48  # colours closer than this are shades of one colour
 _FINE_BIN_WIDTH = 16  # a second look at each colour, in narrower bins,
 _FINE_SAME_COLOUR = 20  # can split it into colours this far apart
 _MATCH_DISTANCE = 96  # a colour, or a pixel, matches a curve colour this far away
+_FAINT = 16  # a pixel this far from the background shows some ink
+_SAME_INK = 6  # inks whose directions from the background are this many degrees apart
+_INK_BIN_WIDTH = 8  # directions are grouped in bins this many levels wide, about 4°
+_MIXED = 12  # groups of a colour's pixels this many degrees apart are several inks
+_MIXED_SHARE = 0.25  # such groups each hold this fraction of the colour's pixels
 _MIN_CURVE_FRACTION = 0.75  # a curve has at least this many pixels per column
+_MIN_INK_FRACTION = 0.5  # or a thin one this much ink per column, at full strength
 _CONTRAST = 64  # a curve differs from the background by this much in some channel
 _AREA_DEPTH = 4  # a colour whose pixels lie this deep inside its shapes fills areas
 _LINE_SPAN = 0.6  # straight lines across this fraction of the plot are grid lines
@@ -640,7 +646,14 @@ def _palette(plot: Image) -> npt.NDArray[np.float64]:
     Antialiasing blends the edges of each curve with the background, and a
     blend can be common enough to count as a colour of its own. It is dropped
     if most of its pixels touch those of a colour that differs more from the
-    background.
+    background. So is a colour that mixes the pale blends of several inks,
+    as thin lines of several colours give, as ``_mixed`` finds. The inks of
+    thin lines, which never reach their full colour and spread over many
+    shades, are then found as ``_faint_inks`` finds them.
+
+    Each colour but the background is given as the ink at the strength its
+    most covered pixels show, as ``_at_full_strength`` finds it, and the
+    colours are ranked by how many pixels show them, most first.
     """
     colours = _common_colours(plot)
     pixels = plot.reshape(-1, 3).astype(np.float64)
@@ -653,15 +666,163 @@ def _palette(plot: Image) -> npt.NDArray[np.float64]:
     ):
         colours = colours[[edge, *(i for i in range(len(colours)) if i != edge)]]
     labels = _classify(plot, colours)
+    directions, lengths = _inks(plot.astype(np.float64) - colours[0])
+    groups = np.full(labels.shape, -1)
+    shown = lengths >= _FAINT
+    groups[shown] = _ink_groups(directions[shown])
     strength = np.linalg.norm(colours - colours[0], axis=1)
     keep = [0]
     for index in range(1, len(colours)):
         own = labels == index
         stronger = np.isin(labels, np.flatnonzero(strength > strength[index]))
         touching = cv2.dilate(stronger.astype(np.uint8), np.ones((3, 3), np.uint8))
-        if 2 * np.count_nonzero(own & (touching > 0)) < np.count_nonzero(own):
+        blend = 2 * np.count_nonzero(own & (touching > 0)) >= np.count_nonzero(own)
+        if not blend and not _mixed(groups, own):
             keep.append(index)
-    return colours[keep]
+    colours = colours[keep]
+    labels = _classify(plot, colours)
+    colours = np.concatenate(
+        [colours, _faint_inks(colours, labels, groups, directions, lengths)]
+    )
+    return _at_full_strength(plot, colours, directions, lengths)
+
+
+def _inks(
+    offsets: npt.NDArray[np.float64],
+) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+    """Return the direction and length of each offset of a colour from the background.
+
+    A colour drawn over the background at any coverage, by antialiasing or
+    transparency, lies on the ray from the background through it, so its
+    direction tells its ink whatever its coverage. The direction of no
+    offset at all is zero.
+    """
+    lengths = np.linalg.norm(offsets, axis=-1)
+    directions = np.divide(
+        offsets,
+        lengths[..., np.newaxis],
+        out=np.zeros_like(offsets),
+        where=lengths[..., np.newaxis] > 0,
+    )
+    return directions, lengths
+
+
+def _ink_groups(directions: npt.NDArray[np.float64]) -> npt.NDArray[np.intp]:
+    """Number directions from the background, alike for those of one ink.
+
+    Directions less than ``_SAME_INK`` degrees apart are one ink's, and the
+    inks are numbered from the one with the most directions.
+    """
+    if not len(directions):
+        return np.zeros(0, dtype=np.intp)
+    # Directions as levels: a step of 2/255 is about a quarter of a degree.
+    levels = np.round((directions + 1) * 127.5).astype(np.uint8)
+    apart = 2 * math.sin(math.radians(_SAME_INK) / 2) * 127.5
+    return _cluster(levels, _INK_BIN_WIDTH, apart)[2]
+
+
+def _mixed(groups: npt.NDArray[np.intp], own: npt.NDArray[np.bool_]) -> bool:
+    """Return whether the pixels of a colour show several inks rather than one.
+
+    The pale blends of thin lines of several colours can be counted as one
+    colour. The inks of its pixels, as ``_ink_groups`` numbers them, -1 for
+    those less than ``_FAINT`` from the background, then lie along separate
+    lines: ``_MIXED_SHARE`` of its pixels or more show other inks than the
+    most common, away from it. Compression can shift the directions of the
+    pixels of one line apart, but they stay together.
+    """
+    inked = own & (groups >= 0)
+    common = int(np.bincount(groups[inked], minlength=1).argmax())
+    near = cv2.dilate((inked & (groups == common)).astype(np.uint8), np.ones((5, 5)))
+    apart = inked & (groups != common) & (near == 0)
+    return bool(np.count_nonzero(apart) > _MIXED_SHARE * np.count_nonzero(inked))
+
+
+def _faint_inks(
+    colours: npt.NDArray[np.float64],
+    labels: npt.NDArray[np.intp],
+    groups: npt.NDArray[np.intp],
+    directions: npt.NDArray[np.float64],
+    lengths: npt.NDArray[np.float64],
+) -> npt.NDArray[np.float64]:
+    """Find the inks of thin curves that the common colours leave unexplained.
+
+    A thin antialiased line never reaches its full colour: its pixels spread
+    over many shades, each too rare to be a common colour, but all lie on the
+    ray from the background towards its ink. So the pixels that show some
+    ink, at least ``_FAINT`` from the background, but are labelled with no
+    colour, other than the pale edges of a colour's own pixels, within
+    ``_MIXED`` degrees of it, are taken by their inks, as ``_ink_groups``
+    numbers them. An ink is a curve's if its pixels, each weighted by its
+    strength as a fraction of the strongest's, add up to ``_MIN_INK_FRACTION``
+    of the plot's width or more, as a line half a pixel wide across it does,
+    and it stands out from the background by ``_CONTRAST``. Its colour is the
+    background plus its direction at the strength that only a fiftieth of its
+    pixels exceed.
+
+    Args:
+        colours: The background and the common colours.
+        labels: The colour that each pixel shows, as ``_classify`` finds it.
+        groups: The ink of each pixel, or -1 where it shows none.
+        directions: Each pixel's direction from the background.
+        lengths: How far each pixel lies from the background.
+
+    Returns:
+        The colours of the inks found, one per row.
+    """
+    background = colours[0]
+    free = (labels == 0) & (groups >= 0)
+    inks, _ = _inks(colours - background)
+    edges = math.cos(math.radians(_MIXED))
+    for index in range(1, len(colours)):
+        near = cv2.dilate((labels == index).astype(np.uint8), np.ones((5, 5)))
+        free &= ~((near > 0) & (directions @ inks[index] >= edges))
+    found = []
+    width = labels.shape[1]
+    for group in np.unique(groups[free]):
+        own = free & (groups == group)
+        strength = lengths[own]
+        full = float(np.percentile(strength, 98))
+        if strength.sum() / full >= width * _MIN_INK_FRACTION:
+            (direction,), _ = _inks(
+                (directions[own] * strength[:, np.newaxis]).sum(axis=0, keepdims=True)
+            )
+            colour = np.clip(background + full * direction, 0, 255)
+            if np.abs(colour - background).max() >= _CONTRAST:
+                found.append(colour)
+    return np.array(found).reshape(-1, 3)
+
+
+def _at_full_strength(
+    plot: Image,
+    colours: npt.NDArray[np.float64],
+    directions: npt.NDArray[np.float64],
+    lengths: npt.NDArray[np.float64],
+) -> npt.NDArray[np.float64]:
+    """Return the colours at the strength of their inks, most pixels first.
+
+    Each colour but the background, ``colours[0]``, becomes the background
+    plus the colour's direction from it, at the strength that only a fiftieth
+    of the pixels that show it exceed along that direction: the full colour
+    of a line a pixel wide or more, or the strongest that a thinner line
+    shows. Only pixels within ``_MIXED`` degrees of the direction count, so
+    not those where a curve of a darker ink crosses; a colour without such
+    pixels stays as it is. The colours are then ranked by the pixels that
+    show them, most first. ``directions`` and
+    ``lengths`` give each pixel's direction from the background and how far
+    it lies from it.
+    """
+    background = colours[0]
+    labels = _classify(plot, colours)
+    inks, strengths = _inks(colours - background)
+    on_ray = math.cos(math.radians(_MIXED))
+    strong = colours.copy()
+    for index in range(1, len(colours)):
+        along = lengths[(labels == index) & (directions @ inks[index] >= on_ray)]
+        full = np.percentile(along, 98) if len(along) else strengths[index]
+        strong[index] = np.clip(background + full * inks[index], 0, 255)
+    counts = np.bincount(labels.ravel(), minlength=len(colours))
+    return strong[[0, *(np.argsort(-counts[1:], kind="stable") + 1)]]
 
 
 def _fills_areas(in_colour: npt.NDArray[np.bool_]) -> bool:
@@ -794,12 +955,25 @@ def _classify(plot: Image, colours: npt.NDArray[np.float64]) -> npt.NDArray[np.i
 
 
 def _match(palette: npt.NDArray[np.float64], colour: Colour) -> int:
-    """Return the index of the curve colour in the palette nearest to ``colour``."""
+    """Return the index of the curve colour in the palette that ``colour`` picks.
+
+    That is the nearest within ``_MATCH_DISTANCE``, or failing that, the
+    nearest of those whose ink lies on the colour's ray from the background,
+    within ``_MIXED`` degrees, no further out than the colour: a line of the
+    colour that is thinner than a pixel, or drawn translucent, shows only
+    part of it.
+    """
     distances = np.linalg.norm(palette[1:] - colour, axis=1)
-    if not np.any(distances <= _MATCH_DISTANCE):
+    near = distances <= _MATCH_DISTANCE
+    if not np.any(near):
+        directions, lengths = _inks(palette[1:] - palette[0])
+        (wanted,), (length,) = _inks(np.array([colour]) - palette[0])
+        cosines = np.clip(directions @ wanted, -1, 1)
+        near = (np.degrees(np.arccos(cosines)) <= _MIXED) & (lengths <= length + _FAINT)
+    if not np.any(near):
         msg = f"no curve of colour #{bytes(colour).hex()} found"
         raise ValueError(msg)
-    return int(np.argmin(distances)) + 1
+    return int(np.argmin(np.where(near, distances, np.inf))) + 1
 
 
 def _follow(

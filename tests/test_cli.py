@@ -186,9 +186,9 @@ def test_traces_several_series_and_prints_their_colours(
     assert main([*SERIES, "-n", "4"]) == 0
 
     captured = capsys.readouterr()
-    colours = "-c 2ea12e -c ff7f0e -c 1f77b4 -c 040404"  # the longest first
+    colours = "-c 2ca02c -c 1f77b4 -c ff7f0e -c 000000"  # the most pixels first
     assert captured.err == f"figrecover: colours: {colours}\n"
-    assert_recovers_series(captured.out, [wave, growth, decay, trend])
+    assert_recovers_series(captured.out, [wave, decay, growth, trend])
 
 
 def test_traces_the_given_colours(
@@ -440,8 +440,8 @@ def test_writes_panels_to_standard_output_with_a_panel_column(
         'figrecover: panel a: y-axis "I" with ticks at 0, 1',
         f'figrecover: panel 2: x-axis "{titles[0]}" with ticks at 0, 10',
         f"figrecover: panel 2: y-axis{y_title} with ticks at 0, 1",
-        "figrecover: panel a: colours: -c 040404",
-        "figrecover: panel 2: colours: -c 040404",
+        "figrecover: panel a: colours: -c 000000",
+        "figrecover: panel 2: colours: -c 000000",
     ]
     data = read_panel_csv(captured.out, header)
     assert list(data) == ["a", "2"]
