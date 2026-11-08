@@ -22,7 +22,7 @@ from matplotlib.legend import Legend
 type Curve = Callable[[npt.NDArray[np.float64]], npt.NDArray[np.float64]]
 
 HERE = Path(__file__).parent
-ALSO_PDF = {"labelled", "logarithmic", "markers", "series"}  # also saved as PDFs
+ALSO_PDF = {"labelled", "logarithmic", "markers", "series", "styles"}  # and PDFs
 
 
 def spectrum(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
@@ -209,6 +209,20 @@ def draw_markers(name: str, curves: dict[str, Curve]) -> None:
     save(name, figure, axes, [(0, 0), (10, 0), (0, 1)], legend)
 
 
+def draw_styles(name: str, curves: dict[str, Curve]) -> None:
+    """Draw black curves, keyed by line style, from x of 0 to 10, and print the points.
+
+    They cross one another, and are told apart only by their dashes.
+    """
+    figure, axes = plt.subplots(figsize=(6.4, 4), dpi=100)
+    x = np.linspace(0, 10, 2000)
+    for style, curve in curves.items():
+        axes.plot(x, curve(x), color="black", linewidth=1.5, linestyle=style)
+    axes.set(xlabel="x", ylabel="y", xlim=(0, 10), ylim=(0, 3))
+    axes.spines[["top", "right"]].set_visible(False)
+    save(name, figure, axes, [(0, 0), (10, 0), (0, 1)])
+
+
 def draw_panels(name: str) -> None:
     """Draw four plots in a figure, labelled (a) to (d), and print their points.
 
@@ -366,6 +380,7 @@ titles = ("Size (KiB)", "Time (ms)")
 draw_log("binary", quadratic, titles, [(1, 0.25), (16, 0.25), (1, 64)], base=2)
 draw_titled("titled", spectrum, ("Photon energy\n(eV)", "Absorbance\n(arb. units)"))
 draw_markers("markers", {"D": decay, "s": growth, "o": wave, "x": trend})
+draw_styles("styles", {"-": decay, "--": growth, ":": wave})
 draw_slanted("slanted", damped, ("Time (s)", "Voltage (mV)"))
 draw_panels("panels")
 draw_shared("shared")

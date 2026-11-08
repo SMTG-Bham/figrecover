@@ -5,6 +5,7 @@ import math
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Literal
 
 import cv2
 import numpy as np
@@ -14,6 +15,11 @@ from .calibration import Point
 
 type Image = npt.NDArray[np.uint8]
 type Colour = tuple[int, int, int]
+type Style = Literal["solid", "dashed", "dotted", "dashdot", "markers"]
+"""How a series is drawn: a line by the pattern of its dashes, or markers."""
+
+STYLES: tuple[Style, ...] = ("solid", "dashed", "dotted", "dashdot", "markers")
+"""Every style a series can be drawn in."""
 
 AXIS_MARGIN = 3
 """Pixels beyond the axes that are ignored, so the axis lines are not traced."""
@@ -50,6 +56,36 @@ _KEY_LINE = 2  # a key this many times as wide as tall has a line through its ma
 _MARKER_SCORE = 0.6  # a marker correlates with its key's this well or better
 _MARKER_INK = 0.6  # a marker has at least this fraction of the ink of its key's
 _MARKER_SPACING = 0.75  # markers are this many marker widths apart or more
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class Series:
+    """A curve, or a series of markers, in a plot, and how it is drawn.
+
+    Series that share a colour are told apart by how they are drawn, and
+    curves of one colour and style by where they run.
+
+    Attributes:
+        colour: The colour it is drawn in, as ``(red, green, blue)``.
+        style: How it is drawn: ``"solid"``, ``"dashed"``, ``"dotted"`` or
+            ``"dashdot"`` for a line, by the pattern of its dashes, or
+            ``"markers"``.
+        width: The width of its line, or the size of its markers, in pixels
+            in an image or in points in a PDF file.
+        points: An ``(n, 2)`` array of the ``(x, y)`` positions of its
+            points: those of pixel centres in an image, measured from the
+            bottom-left corner, or in points in a PDF file.
+    """
+
+    colour: Colour
+    style: Style
+    width: float
+    points: npt.NDArray[np.float64]
+
+    @property
+    def name(self) -> str:
+        """Return its colour in hexadecimal and its style, such as 000000-dashed."""
+        return f"{bytes(self.colour).hex()}-{self.style}"
 
 
 @dataclass(frozen=True, slots=True)

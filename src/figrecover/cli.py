@@ -3,6 +3,7 @@
 import argparse
 import csv
 import io
+import itertools
 import math
 import os
 import re
@@ -21,8 +22,11 @@ from . import __version__, interactive
 from .axes import Axes
 from .calibration import MIN_POINTS, Calibration, Point
 from .digitize import (
+    STYLES,
     Colour,
     Image,
+    Series,
+    Style,
     find_colours,
     find_markers,
     load_image,
@@ -34,13 +38,14 @@ from .pdf import (
     PREVIEW_SCALE,
     Box,
     Drawing,
-    find_pdf_colours,
     find_pdf_markers,
+    find_pdf_series,
     load_pdf,
     read_pdf_axes,
     remove_pdf_grid,
     render_pdf,
     trace_pdf_curves,
+    trace_pdf_series,
 )
 
 type Ring = tuple[Point, int, Colour]
@@ -58,6 +63,23 @@ SERIES_COLOURS: list[Colour] = [  # matplotlib's, to draw series of markers in
     (188, 189, 34),
     (23, 190, 207),
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class _Selector:
+    """The curve that a -c option picks.
+
+    Attributes:
+        colour: The colour of the curve.
+        style: The style it is drawn in, or None for every curve of the
+            colour, as one.
+        number: Which of the curves of that colour and style it is, from 1,
+            longest first.
+    """
+
+    colour: Colour
+    style: Style | None = None
+    number: int = 1
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -196,8 +218,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "--series",
         type=_count,
         metavar="N",
-        help="trace the N most common curve colours, then reuse the printed -c "
-        "options (default: 1)",
+        help="trace the N most common curve colours, or in a PDF file the N "
+        "longest curves, told apart by colour and style, then reuse the printed "
+        "-c options (default: 1)",
     )
     curves.add_argument(
         "-c",
@@ -205,10 +228,13 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="colours",
         action="append",
         default=[],
-        type=_colour,
-        metavar="RRGGBB",
-        help="hexadecimal colour of a curve to trace, such as 1f77b4; repeat for "
-        "several curves",
+        type=_selector,
+        metavar="RRGGBB[:STYLE]",
+        help="hexadecimal colour of a curve to trace, such as 1f77b4, taking "
+        "every curve of that colour as one; in a PDF file, follow it with a style, "
+        f"one of {', '.join(STYLES)}, for the longest curve of that colour drawn "
+        "so, such as 000000:dashed, or with a number too for another, such as "
+        "000000:solid2; repeat for several curves",
     )
     curves.add_argument(
         "-m",
@@ -323,7 +349,15 @@ def _trace(
         colours = _series_colours(len(curves))
         rings += _marker_rings(arguments.markers, curves, colours)
     else:
-        colours = arguments.colours or _find_colours(
+        styled = [selector for selector in arguments.colours if selector.style]
+        if styled:
+            msg = (
+                "curves are told apart by style in PDF files only, so give "
+                f"-c {bytes(styled[0].colour).hex()} without a style"
+            )
+            raise ValueError(msg)
+        colours = [selector.colour for selector in arguments.colours]
+        colours = colours or _find_colours(
             lambda count: find_colours(traced, count, origin),
             arguments.series,
             _prefix(plot.name),
@@ -359,13 +393,20 @@ def _digitize_pdf(arguments: argparse.Namespace) -> None:
             find_pdf_markers(drawing, arguments.markers, calibration.origin)
         )
         colours = _series_colours(len(curves))
-    else:
-        colours = arguments.colours or _find_colours(
-            lambda count: find_pdf_colours(drawing, count, calibration.origin),
-            arguments.series,
-            "",
+    elif arguments.colours:
+        origin = calibration.origin
+        curves = _chosen(
+            arguments.colours,
+            lambda colours: trace_pdf_curves(drawing, colours, origin),
+            lambda colours: trace_pdf_series(drawing, colours, origin),
         )
-        curves = trace_pdf_curves(drawing, colours, calibration.origin)
+        colours = [selector.colour for selector in arguments.colours]
+    else:
+        found = _found(
+            find_pdf_series(drawing, calibration.origin), arguments.series, ""
+        )
+        curves = [series.points for series in found]
+        colours = [series.colour for series in found]
 
     if arguments.preview:
         corner = np.array(drawing.box[:2])
@@ -524,6 +565,107 @@ def _find_colours(
     return colours
 
 
+def _found(every: Sequence[Series], count: int | None, prefix: str) -> list[Series]:
+    """Return the longest series, and print the -c options to reuse if -n was given.
+
+    ``every`` holds every series found, longest first, ``count`` is the
+    number given with -n, and ``prefix`` starts the message, naming the
+    panel.
+
+    Raises:
+        ValueError: If fewer series were found than were asked for.
+    """
+    wanted = count or 1
+    if len(every) < wanted:
+        msg = f"found only {len(every)} of {wanted} curves"
+        raise ValueError(msg if every else "no curve found")
+    found = list(every[:wanted])
+    if count is not None:
+        options = " ".join(f"-c {option}" for option in _options(found, every))
+        print(f"figrecover: {prefix}colours: {options}", file=sys.stderr)
+    return found
+
+
+def _options(found: Sequence[Series], every: Sequence[Series]) -> list[str]:
+    """Return the -c option that picks each series found, among every series.
+
+    That is its colour, if no other series has it, or else its colour and
+    style, and its number among those of that colour and style if it is not
+    the first, such as 000000:solid2.
+    """
+    options = []
+    for series in found:
+        colour = bytes(series.colour).hex()
+        alike = [other for other in every if other.colour == series.colour]
+        same = [other for other in alike if other.style == series.style]
+        number = next(n for n, other in enumerate(same, start=1) if other is series)
+        options.append(
+            colour
+            if len(alike) == 1
+            else f"{colour}:{series.style}{number if number > 1 else ''}"
+        )
+    return options
+
+
+def _chosen(
+    selectors: Sequence[_Selector],
+    whole: Callable[[list[Colour]], list[npt.NDArray[np.float64]]],
+    styled: Callable[[list[Colour]], list[list[Series]]],
+) -> list[npt.NDArray[np.float64]]:
+    """Return the points of the curve that each -c option picks.
+
+    ``whole`` traces every curve of each of the colours given as one, and
+    ``styled`` finds the curves of each, told apart by style, longest
+    first.
+
+    Raises:
+        ValueError: If an option is given twice, or picks no curve.
+    """
+    for first, second in itertools.combinations(selectors, 2):
+        if first == second:
+            msg = f"-c {_written(first)} is given twice"
+            raise ValueError(msg)
+    plain = [selector.colour for selector in selectors if selector.style is None]
+    named = list(
+        dict.fromkeys(selector.colour for selector in selectors if selector.style)
+    )
+    traced = iter(whole(plain) if plain else [])
+    series = dict(zip(named, styled(named) if named else [], strict=True))
+    return [
+        next(traced)
+        if selector.style is None
+        else _pick(series[selector.colour], selector)
+        for selector in selectors
+    ]
+
+
+def _pick(series: Sequence[Series], selector: _Selector) -> npt.NDArray[np.float64]:
+    """Return the points of the series of a colour that a -c option picks by style.
+
+    Raises:
+        ValueError: If there are too few series of that style.
+    """
+    alike = [one for one in series if one.style == selector.style]
+    if len(alike) < selector.number:
+        colour = bytes(selector.colour).hex()
+        msg = (
+            f"found only {len(alike)} {selector.style} series of colour #{colour}"
+            if alike
+            else f"no {selector.style} series of colour #{colour} found"
+        )
+        raise ValueError(msg)
+    return alike[selector.number - 1].points
+
+
+def _written(selector: _Selector) -> str:
+    """Return a -c option as it is written, such as 000000:solid2."""
+    colour = bytes(selector.colour).hex()
+    if selector.style is None:
+        return colour
+    number = selector.number if selector.number > 1 else ""
+    return f"{colour}:{selector.style}{number}"
+
+
 def _counted(markers: list[npt.NDArray[np.float64]]) -> list[npt.NDArray[np.float64]]:
     """Print how many markers were found in each series, and return them."""
     counts = ", ".join(str(len(series)) for series in markers)
@@ -674,11 +816,24 @@ def _count(text: str) -> int:
     return count
 
 
-def _colour(text: str) -> Colour:
-    """Parse a colour written in hexadecimal as ``RRGGBB``, with or without a ``#``."""
-    match = re.fullmatch(r"#?([0-9a-f]{6})", text.strip(), re.IGNORECASE)
+def _selector(text: str) -> _Selector:
+    """Parse a -c option: a colour, and perhaps a style and number.
+
+    The colour is written in hexadecimal as ``RRGGBB``, with or without a
+    ``#``, and may be followed by a colon, a style and a number from 1, such
+    as ``000000:dashed`` or ``000000:solid2``.
+    """
+    match = re.fullmatch(
+        r"#?([0-9a-f]{6})(?::([a-z]+)([1-9][0-9]*)?)?", text.strip(), re.IGNORECASE
+    )
     if match is None:
         msg = f"expected a colour written as RRGGBB, got {text!r}"
         raise argparse.ArgumentTypeError(msg)
     red, green, blue = bytes.fromhex(match[1])
-    return red, green, blue
+    if match[2] is None:
+        return _Selector((red, green, blue))
+    styles = [style for style in STYLES if style == match[2].lower()]
+    if not styles:
+        msg = f"expected a style of {', '.join(STYLES)}, got {text!r}"
+        raise argparse.ArgumentTypeError(msg)
+    return _Selector((red, green, blue), styles[0], int(match[3] or 1))

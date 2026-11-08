@@ -13,11 +13,13 @@ from figrecover import (
     Drawing,
     find_pdf_colours,
     find_pdf_markers,
+    find_pdf_series,
     load_pdf,
     read_pdf_axes,
     remove_pdf_grid,
     render_pdf,
     trace_pdf_curves,
+    trace_pdf_series,
 )
 
 type Curve = Callable[[npt.NDArray[np.float64]], npt.NDArray[np.float64]]
@@ -31,6 +33,7 @@ CURVE = "1 0 0 RG 60 60 m 160 110 l 260 210 l 360 260 l S"
 DIGIT = 5.56  # the width of a digit of Helvetica at 10 points
 # Where examples/make_examples.py draws markers, in markers.pdf and scatter.pdf.
 MARKED = np.arange(0.5, 10, 0.5)
+BLUE = (0, 0, 255)
 
 
 def ringing(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
@@ -315,6 +318,15 @@ def test_finds_series_by_their_markers_in_the_example_pdf() -> None:
     # through them are left out.
     assert find_pdf_colours(found, 1, origin) == [(0, 0, 0)]
     assert len(trace_pdf_curves(found, [(0, 0, 0)], origin)[0]) == 4 * len(MARKED)
+    # By style, they are the markers of each shape.
+    styled = find_pdf_series(found, origin)
+    assert [one.name for one in styled] == ["000000-markers"] * 4
+    for one in styled:
+        assert any(np.array_equal(one.points, markers) for markers in series)
+    # The diamonds, squares on a corner, are the widest across their boxes.
+    widest = max(styled, key=lambda one: one.width)
+    assert widest.width == pytest.approx(6 * math.sqrt(2), abs=0.01)
+    np.testing.assert_array_equal(widest.points, series[0])
 
 
 def test_reads_markers_drawn_one_by_one_at_their_middles(tmp_path: Path) -> None:
@@ -446,6 +458,91 @@ def test_finds_series_by_the_shapes_and_colours_of_markers(tmp_path: Path) -> No
         np.testing.assert_allclose(y, function(x), atol=0.01)
         assert x.min() < 0.02
         assert x.max() > 9.98
+
+
+def test_tells_lines_of_one_colour_apart_by_width_and_dashes(tmp_path: Path) -> None:
+    lines = [  # the width and dashes of each line, as matplotlib draws them
+        ("1.5 w []", 100),
+        ("1.5 w [5.55 2.4]", 130),
+        ("1.5 w [1.5 2.475]", 160),
+        ("3 w []", 190),
+        ("3 w [11.1 4.8]", 220),
+    ]
+    content = plot(
+        *(
+            f"0 0 0 RG {style} 0 d 60 {y} m 160 {y + 20} l {360 - y / 10} {y} l S"
+            for style, y in lines
+        )
+    )
+    found = drawing(tmp_path, content)
+
+    series = find_pdf_series(found, (60, 60))
+
+    # Longest first.
+    assert [(one.name, one.width) for one in series] == [
+        ("000000-solid", 1.5),
+        ("000000-dashed", 1.5),
+        ("000000-dotted", 1.5),
+        ("000000-solid", 3),
+        ("000000-dashed", 3),
+    ]
+    np.testing.assert_allclose(series[3].points, [(60, 190), (160, 210), (341, 190)])
+    # By colour, they are one curve.
+    assert find_pdf_colours(found, 1, (60, 60)) == [(0, 0, 0)]
+    assert len(trace_pdf_curves(found, [(0, 0, 0)], (60, 60))[0]) == 15
+
+
+def test_names_the_style_of_lines_by_their_dashes(tmp_path: Path) -> None:
+    content = plot(
+        "1 0 0 RG 1 w [6 2 1 2] 0 d 60 100 m 360 120 l S",  # dashes and dots
+        "0 0 1 RG 1 w [4] 0 d 60 140 m 340 160 l S",  # dashes as long as gaps
+        "0 1 0 RG 1 w [2 0] 0 d 60 180 m 320 200 l S",  # no gaps
+        # Dots of 1 point, on a line 0.5 points wide drawn twice as large.
+        "q 2 0 0 2 0 0 cm 1 0 1 RG 0.5 w [1 1] 0 d 30 110 m 150 120 l S Q",
+    )
+
+    series = find_pdf_series(drawing(tmp_path, content), (60, 60))
+
+    assert [(one.name, one.width) for one in series] == [
+        ("ff0000-dashdot", 1),
+        ("0000ff-dashed", 1),
+        ("00ff00-solid", 1),
+        ("ff00ff-dotted", 1),
+    ]
+
+
+def test_joins_paths_that_carry_on_one_line(tmp_path: Path) -> None:
+    dashes = [  # along a line rising 3 points in 10, drawn dash by dash
+        f"{x} {200 + 0.3 * x:g} m {x + 6} {200 + 0.3 * (x + 6):g} l S"
+        for x in range(60, 160, 9)
+    ]
+    content = plot(
+        "0 0 0 RG 60 60 m 360 260 l S 60 260 m 360 60 l S",  # an X of two lines
+        "0 0 1 RG 60 100 m 160 150 l S 160 150 m 260 120 l S",  # a line in two
+        "1 0 0 RG " + " ".join(dashes),
+    )
+    found = drawing(tmp_path, content)
+
+    series = find_pdf_series(found, (60, 60))
+    black, red, blue = trace_pdf_series(found, [(0, 0, 0), (250, 0, 0), BLUE], (60, 60))
+
+    assert [one.name for one in series] == [
+        "000000-solid",
+        "000000-solid",
+        "0000ff-solid",
+        "ff0000-solid",
+    ]
+    np.testing.assert_allclose(black[0].points, [(60, 60), (360, 260)])
+    np.testing.assert_allclose(black[1].points, [(60, 260), (360, 60)])
+    assert len(red) == 1
+    assert len(red[0].points) == 2 * len(dashes)
+    np.testing.assert_allclose(
+        blue[0].points, [(60, 100), (160, 150), (160, 150), (260, 120)]
+    )
+    with pytest.raises(ValueError, match="no curve of colour #00ff00"):
+        trace_pdf_series(found, [(0, 255, 0)], (60, 60))
+    with pytest.raises(ValueError, match="#000000 and #101010 both match"):
+        trace_pdf_series(found, [(0, 0, 0), (16, 16, 16)], (60, 60))
 
 
 def test_reads_a_figure_in_a_box_on_a_page(tmp_path: Path) -> None:
