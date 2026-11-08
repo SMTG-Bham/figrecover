@@ -10,6 +10,7 @@ repos:
       - id: mixed-line-ending
         args: [--fix=lf]
       - id: trailing-whitespace
+        exclude: ^examples/.*\.svg$  # matplotlib ends lines of paths with spaces
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.17.3
