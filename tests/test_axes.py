@@ -14,9 +14,12 @@ from figrecover import Axes, Image, axes, load_image, read_axes
 from figrecover.axes import (
     _PLAIN,
     _factor,
+    _in_line_along,
+    _merged,
     _read_sideways,
     _read_text,
     _read_words,
+    _split,
     _Text,
 )
 
@@ -698,8 +701,10 @@ def test_reads_powers_of_the_base_most_labels_show(
     assert found.calibration.x_log
 
 
-def write_upwards(image: Image, x: float, y: float, content: str) -> _Text:
-    """Write text upwards, centred on a pixel position, as rotated labels are.
+def write_upwards(
+    image: Image, x: float, y: float, content: str, *, upwards: bool = True
+) -> _Text:
+    """Write text upwards, or downwards, centred on a pixel, as rotated labels are.
 
     Returns:
         The text as OCR reads it, and its box.
@@ -708,10 +713,11 @@ def write_upwards(image: Image, x: float, y: float, content: str) -> _Text:
     (width, height), baseline = cv2.getTextSize(content, font, 0.5, 1)
     across = np.full((height + baseline + 4, width + 4, 3), 255, dtype=np.uint8)
     cv2.putText(across, content, (2, height + 2), font, 0.5, (0, 0, 0), 1)
-    upwards = cv2.rotate(across, cv2.ROTATE_90_COUNTERCLOCKWISE)
-    tall, wide = upwards.shape[:2]
+    turn = cv2.ROTATE_90_COUNTERCLOCKWISE if upwards else cv2.ROTATE_90_CLOCKWISE
+    turned = cv2.rotate(across, turn)
+    tall, wide = turned.shape[:2]
     top, left = HEIGHT - round(y + tall / 2), round(x - wide / 2)
-    image[top : top + tall, left : left + wide] = upwards
+    image[top : top + tall, left : left + wide] = turned
     return _Text(content, left, HEIGHT - top - tall, left + wide, HEIGHT - top)
 
 
@@ -729,22 +735,26 @@ def test_reads_labels_written_upwards(monkeypatch: pytest.MonkeyPatch) -> None:
     assert not found.calibration.x_log
 
 
-def write_slanted(image: Image, x: float, y: float, content: str) -> _Text:
-    """Write text rising at 45 degrees, centred on a pixel position.
+def write_slanted(
+    image: Image, x: float, y: float, content: str, angle: float = 45
+) -> _Text:
+    """Write text rising at an angle, in degrees, centred on a pixel position.
 
     Returns:
-        The text as OCR reads it, and its box, tilted as the text is.
+        The text as OCR reads it, and the box around it, tilted as the text is.
     """
     font = cv2.FONT_HERSHEY_SIMPLEX
     (width, height), _ = cv2.getTextSize(content, font, 0.5, 1)
     side = width + 8
     across = np.full((side, side, 3), 255, dtype=np.uint8)
     cv2.putText(across, content, (4, (side + height) // 2), font, 0.5, (0, 0, 0), 1)
-    turn = cv2.getRotationMatrix2D((side / 2, side / 2), 45, 1)
+    turn = cv2.getRotationMatrix2D((side / 2, side / 2), angle, 1)
     slanted = cv2.warpAffine(across, turn, (side, side), borderValue=(255, 255, 255))
     top, left = HEIGHT - round(y + side / 2), round(x - side / 2)
     image[top : top + side, left : left + side] = slanted
-    return _Text(content, left, HEIGHT - top - side, left + side, HEIGHT - top, 1, 45)
+    return _Text(
+        content, left, HEIGHT - top - side, left + side, HEIGHT - top, 1, angle
+    )
 
 
 def test_reads_slanted_labels_without_exponents(
@@ -762,39 +772,139 @@ def test_reads_slanted_labels_without_exponents(
     assert [value for _, value in found.x_ticks] == [20, 40, 60]
 
 
-def slanted_labels(values: Sequence[str]) -> list[_Text]:
-    """Return x-axis tick labels as OCR reads them written at a slant."""
-    return [dataclasses.replace(label, slant=45) for label in x_labels(values)]
+def test_reads_slightly_slanted_labels_in_line_as_they_are(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Rising at 25 degrees, the 0 of each label lies higher than the digit
+    # before it, but is as tall, so it is no exponent. OCR read the labels
+    # well, in boxes not tilted, so they are not read again turned.
+    image = plot()
+    labels = [
+        dataclasses.replace(
+            write_slanted(image, 80 + 80 * i, 40, f"{i + 1}0", 25), slant=0
+        )
+        for i in range(3)
+    ]
+    monkeypatch.setattr(
+        axes, "_read_text", lambda _image: [*labels, *y_labels(["0", "1", "2"])]
+    )
+
+    def read_turned(_image: Image, _top: float, angle: float) -> list[_Text]:
+        raise AssertionError(angle)
+
+    monkeypatch.setattr(axes, "_read_turned", read_turned)
+
+    found = read_axes(image)
+
+    assert [value for _, value in found.x_ticks] == [10, 20, 30]
+    assert not found.calibration.x_log
 
 
-def test_reads_slanted_labels_again_turned(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Only the box of 8 shows the slant. Turned one way, OCR reads every
-    # label; the other way, fewer.
-    labels = x_labels(["0", "\N{CJK UNIFIED IDEOGRAPH-4E59}", "4", "9", "8"])
-    labels[-1] = dataclasses.replace(labels[-1], slant=45)
-    turned = {
-        -45: [
-            text(value, 80 + 80 * i, 44, width=24) for i, value in enumerate("02468")
-        ],
-        45: [text("2", 160, 46)],
-    }
-    monkeypatch.setattr(axes, "_read_turned", lambda _image, _top, angle: turned[angle])
+@pytest.mark.parametrize("missed", [1, 2])
+def test_reads_slanted_labels_again_turned_level(
+    monkeypatch: pytest.MonkeyPatch, missed: int
+) -> None:
+    # Written at 60 degrees, OCR reads 2 as a Chinese character, or misses
+    # 4, leaving a gap. Turned level, by minus 60 degrees, it reads them all,
+    # and the title below them.
+    image = plot()
+    drawn = [write_slanted(image, 80 + 80 * i, 40, v, 60) for i, v in enumerate("0246")]
+    if missed == 1:
+        drawn[1] = dataclasses.replace(drawn[1], text="\N{CJK UNIFIED IDEOGRAPH-4E59}")
+    else:
+        del drawn[2]
+    monkeypatch.setattr(
+        axes, "_read_text", lambda _image: [*drawn, *y_labels(["0", "1", "2"])]
+    )
+    angles: list[float] = []
 
-    found = read(monkeypatch, [*labels, *y_labels(["0", "1", "2"])])
+    def read_turned(_image: Image, _top: float, angle: float) -> list[_Text]:
+        angles.append(angle)
+        numbers = [text(v, 80 + 80 * i, 41, 12) for i, v in enumerate("0246")]
+        return [*numbers, text("Time", 200, 10, 40)]
 
-    assert [value for _, value in found.x_ticks] == [0, 2, 4, 6, 8]
-    assert [pixel for pixel, _ in found.x_ticks] == [80, 160, 240, 320, 400]
+    monkeypatch.setattr(axes, "_read_turned", read_turned)
+
+    found = read_axes(image)
+
+    assert [value for _, value in found.x_ticks] == [0, 2, 4, 6]
+    assert [pixel for pixel, _ in found.x_ticks] == pytest.approx(
+        [80, 160, 240, 320], abs=1
+    )
+    assert angles == [pytest.approx(-60, abs=10)]
 
 
 def test_keeps_slanted_labels_read_no_better_turned(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    labels = slanted_labels(["0", "\N{CJK UNIFIED IDEOGRAPH-4E59}", "4", "6"])
+    image = plot()
+    drawn = [write_slanted(image, 80 + 80 * i, 40, v) for i, v in enumerate("0246")]
+    drawn[1] = dataclasses.replace(drawn[1], text="\N{CJK UNIFIED IDEOGRAPH-4E59}")
+    monkeypatch.setattr(
+        axes, "_read_text", lambda _image: [*drawn, *y_labels(["0", "1", "2"])]
+    )
     monkeypatch.setattr(axes, "_read_turned", lambda _image, _top, _angle: [])
 
-    found = read(monkeypatch, [*labels, *y_labels(["0", "1", "2"])])
+    found = read_axes(image)
 
     assert [value for _, value in found.x_ticks] == [0, 4, 6]
+
+
+@pytest.mark.parametrize("sure", [-90, 90])
+def test_reads_x_labels_written_up_or_down_again_turned_the_surer_way(
+    monkeypatch: pytest.MonkeyPatch, sure: int
+) -> None:
+    # OCR reads the tick mark above 1.0, written upwards, as a minus sign.
+    # Turned a quarter turn each way, it reads the labels in line, but less
+    # surely upside down, misread as other numbers.
+    image = plot()
+    drawn = [
+        write_upwards(image, 80 + 80 * i, 40, value)
+        for i, value in enumerate(["0.5", "1.0", "1.5"])
+    ]
+    drawn[1] = dataclasses.replace(drawn[1], text="-1.0")
+    monkeypatch.setattr(
+        axes, "_read_text", lambda _image: [*drawn, *y_labels(["0", "1", "2"])]
+    )
+
+    def read_turned(_image: Image, _top: float, angle: float) -> list[_Text]:
+        values, score = (["0.5", "1.0", "1.5"], 1) if angle == sure else ("123", 0.7)
+        return [
+            dataclasses.replace(text(value, 80 + 80 * i, 40), score=score, slant=-angle)
+            for i, value in enumerate(values)
+        ]
+
+    monkeypatch.setattr(axes, "_read_turned", read_turned)
+
+    found = read_axes(image)
+
+    assert [value for _, value in found.x_ticks] == [0.5, 1.0, 1.5]
+
+
+def test_merges_labels_read_turned_into_those_first_read() -> None:
+    labels = [
+        text("1", 50, 40),  # holds the middle of -5, as does the next
+        text("!", 60, 40),
+        text("8", 100, 40),  # holds the middles of 3 and 4
+        text("9", 160, 40),  # holds the middle of 6 alone
+        text("x", 220, 40),  # holds none
+    ]
+    turned = [
+        text("-5", 55, 40, 10),
+        text("3", 96, 40, 4),
+        text("4", 104, 40, 4),
+        dataclasses.replace(text("6", 161, 41, 10), score=0.9, slant=60),
+        text("7", 300, 40),  # in no label's box
+    ]
+
+    merged = _merged(labels, turned)
+
+    assert merged == [
+        labels[4],
+        *turned[:3],
+        dataclasses.replace(labels[3], text="6", score=0.9, slant=60),
+        turned[4],
+    ]
 
 
 def sideways(
@@ -919,6 +1029,95 @@ def test_reads_the_lowest_label_reaching_down_beside_the_x_axis_labels(
     found = read(monkeypatch, [*x_labels(["0", "1", "2"]), *slanted])
 
     assert found.y_ticks == ((48.0, 0.0), (108.0, 0.5), (168.0, 1.0))
+
+
+def single_digits_written_downwards(image: Image) -> list[_Text]:
+    """Write y-axis tick labels 0, 2, 4 and 6 downwards, 60 pixels apart from y = 80."""
+    return [
+        write_upwards(image, 40, 80 + 60 * i, digit, upwards=False)
+        for i, digit in enumerate("0246")
+    ]
+
+
+def test_reads_single_digits_written_downwards_again_turned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # OCR reads single digits written downwards in boxes wider than tall,
+    # and 6 as 9, out of line. Their characters run sideways, so they are
+    # read again turned each way, less surely upside down.
+    image = plot()
+    drawn = single_digits_written_downwards(image)
+    first = [*drawn[:3], dataclasses.replace(drawn[3], text="9")]
+    monkeypatch.setattr(
+        axes, "_read_text", lambda _image: [*x_labels(["0", "1", "2"]), *first]
+    )
+    turned = {
+        False: [dataclasses.replace(label, slant=-90) for label in drawn],
+        True: [
+            dataclasses.replace(label, text=upside_down, score=0.7, slant=90)
+            for label, upside_down in zip(drawn, "0hp9", strict=True)
+        ],
+    }
+    monkeypatch.setattr(
+        axes, "_read_sideways", lambda _image, _right, *, upwards: turned[upwards]
+    )
+
+    found = read_axes(image)
+
+    assert [value for _, value in found.y_ticks] == [0, 2, 4, 6]
+
+
+def test_reads_single_digits_written_downwards_as_they_are_if_read_well(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image = plot()
+    drawn = single_digits_written_downwards(image)
+    monkeypatch.setattr(
+        axes, "_read_text", lambda _image: [*x_labels(["0", "1", "2"]), *drawn]
+    )
+
+    def read_sideways(_image: Image, _right: int, *, upwards: bool) -> list[_Text]:
+        raise AssertionError(upwards)
+
+    monkeypatch.setattr(axes, "_read_sideways", read_sideways)
+
+    found = read_axes(image)
+
+    assert [value for _, value in found.y_ticks] == [0, 2, 4, 6]
+
+
+@pytest.mark.parametrize("upwards", [True, False])
+def test_parts_numbers_run_together_by_their_characters(upwards: bool) -> None:
+    # Written up or down, -1 and -2 run together as -1-2: four characters,
+    # each a run of six rows of ink, from y = 10 up, four rows apart.
+    ink = np.zeros((HEIGHT, WIDTH), dtype=np.uint8)
+    for bottom in (10, 20, 30, 40):
+        ink[HEIGHT - bottom - 6 : HEIGHT - bottom, 20:30] = 255
+    slant = 90 if upwards else -90
+    word = _Text("-1-2", 15, 8, 35, 48, 0.9, slant)
+
+    parted = _split(word, ink)
+
+    # Written upwards, the first number is the lowest; downwards, the highest.
+    low, high = (10, 26), (30, 46)
+    first, second = (low, high) if upwards else (high, low)
+    assert parted == [
+        _Text("-1", 15, first[0], 35, first[1], 0.9, slant),
+        _Text("-2", 15, second[0], 35, second[1], 0.9, slant),
+    ]
+    # A word of one number stays as it is, and one whose characters cannot
+    # all be told apart is left out.
+    assert _split(dataclasses.replace(word, text="-12"), ink) == [
+        dataclasses.replace(word, text="-12")
+    ]
+    assert _split(dataclasses.replace(word, text="-1-25"), ink) == []
+
+
+def test_reads_no_labels_in_line_of_fewer_than_three() -> None:
+    labels = x_labels(["0", "1"])
+    ink = np.zeros((HEIGHT, WIDTH), dtype=np.uint8)
+
+    assert _in_line_along(labels, lambda t: t.x, ink, 14) == []
 
 
 @pytest.mark.parametrize("upwards", [True, False])
@@ -1118,6 +1317,24 @@ def test_moves_ticks_to_the_marks_drawn(
     found = read_axes(marked_plot([80, 160, 240], [81, 141, 201], line))
 
     # The centres of the marks' pixels; the y labels are centred on theirs.
+    assert [pixel for pixel, _ in found.x_ticks] == [80.5, 160.5, 240.5]
+    assert [pixel for pixel, _ in found.y_ticks] == [80, 140, 200]
+
+
+def test_moves_ticks_of_rotated_labels_centred_on_the_marks_to_them(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The x labels, written at 45 degrees, lie centred on their marks, but
+    # their middles 1.5 pixels off; those of the y labels, written across,
+    # half a pixel off, and they stay.
+    image = marked_plot([80, 160, 240], [81, 141, 201])
+    slanted = [write_slanted(image, 79 + 80 * i, 40, v) for i, v in enumerate("012")]
+    labels = [*slanted, *y_labels(["0", "1", "2"])]
+    monkeypatch.setattr(axes, "_read_text", lambda _image: labels)
+
+    found = read_axes(image)
+
+    assert [label.x for label in slanted] == [79, 159, 239]
     assert [pixel for pixel, _ in found.x_ticks] == [80.5, 160.5, 240.5]
     assert [pixel for pixel, _ in found.y_ticks] == [80, 140, 200]
 
