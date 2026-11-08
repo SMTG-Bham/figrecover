@@ -165,6 +165,64 @@ def test_reads_slanted_tick_labels() -> None:
     np.testing.assert_allclose(data, [(0, 0), (10, 0), (0, 1)], atol=0.03)
 
 
+@pytest.mark.parametrize(
+    ("name", "pixels", "x_marks", "y_marks"),
+    [
+        # x labels at 30 degrees, y labels at 45 degrees.
+        (
+            "tilted",
+            [(59, 55), (625, 55), (59, 189)],
+            [59.5, 172.5, 285.5, 398.5, 511.5, 625.5],
+            [54.5, 121.5, 188.5, 255.5, 322.5, 390.5],
+        ),
+        # x labels at 60 degrees, y labels written upwards.
+        (
+            "steep",
+            [(48, 56), (625, 56), (48, 190)],
+            [48.5, 163.5, 279.5, 394.5, 510.5, 625.5],
+            [55.5, 122.5, 189.5, 256.5, 323.5, 390.5],
+        ),
+        # x and y labels written downwards, and the y title too.
+        (
+            "downwards",
+            [(48, 52), (629, 52), (48, 187)],
+            [48.5, 164.5, 280.5, 396.5, 513.5, 629.5],
+            [51.5, 119.5, 186.5, 254.5, 322.5, 390.5],
+        ),
+    ],
+)
+def test_reads_rotated_tick_labels(
+    name: str,
+    pixels: list[tuple[int, int]],
+    x_marks: list[float],
+    y_marks: list[float],
+) -> None:
+    # The pixels are the positions of (0, 0), (10, 0) and (0, 1) that
+    # examples/make_examples.py prints, and the marks the centres of the
+    # pixels of the tick marks drawn.
+    found = read_axes(load_image(EXAMPLES / f"{name}.png"))
+
+    data = found.calibration.to_data(pixels)
+
+    assert [value for _, value in found.x_ticks] == [0, 2, 4, 6, 8, 10]
+    assert [value for _, value in found.y_ticks] == [0, 0.5, 1, 1.5, 2, 2.5]
+    np.testing.assert_allclose([pixel for pixel, _ in found.x_ticks], x_marks, atol=1)
+    np.testing.assert_allclose([pixel for pixel, _ in found.y_ticks], y_marks, atol=1)
+    np.testing.assert_allclose(data, [(0, 0), (10, 0), (0, 1)], atol=0.03)
+    assert (found.x_title, found.y_title) == ("Time (s)", "Voltage (mV)")
+
+
+def test_refuses_y_labels_written_upwards_read_without_their_points(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Read as they lie, without turning them, OCR reads the y-axis labels of
+    # steep.png as 0.0, 05, 1.0, 15 and 25, losing the points of three.
+    monkeypatch.setattr(axes, "_read_sideways", lambda _image, _right, **_options: [])
+
+    with pytest.raises(ValueError, match="OCR lost characters"):
+        read_axes(load_image(EXAMPLES / "steep.png"))
+
+
 @pytest.mark.parametrize("name", ["labelled", "spectrum"])
 def test_finds_where_the_axis_lines_cross(name: str) -> None:
     # The axes of labelled.png start before the first ticks, and those of

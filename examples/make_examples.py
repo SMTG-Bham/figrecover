@@ -187,6 +187,30 @@ def draw_slanted(name: str, curve: Curve, titles: tuple[str, str]) -> None:
     save(name, figure, axes, [(0, 0), (10, 0), (0, 1)])
 
 
+def draw_rotated(
+    name: str, curve: Curve, rotations: tuple[float, float], *, downwards: bool = False
+) -> None:
+    """Draw a curve over x from 0 to 10 with rotated tick labels, and print the points.
+
+    The x-axis and y-axis tick labels are rotated by the rotations, in
+    degrees anticlockwise. The y-axis title is written upwards, or downwards,
+    with its top away from the axis, as titles of right-hand axes are. The
+    layout makes room for them.
+    """
+    figure, axes = plt.subplots(figsize=(6.4, 4), dpi=100, layout="constrained")
+    x = np.linspace(0, 10, 2000)
+    axes.plot(x, curve(x), color="black", linewidth=1.5)
+    axes.set(xlabel="Time (s)", xlim=(0, 10), ylim=(0, 2.5))
+    if downwards:
+        axes.set_ylabel("Voltage (mV)", rotation=270, va="top")
+    else:
+        axes.set_ylabel("Voltage (mV)")
+    axes.tick_params(axis="x", labelrotation=rotations[0])
+    axes.tick_params(axis="y", labelrotation=rotations[1])
+    axes.spines[["top", "right"]].set_visible(False)
+    save(name, figure, axes, [(0, 0), (10, 0), (0, 1)])
+
+
 def draw_markers(name: str, curves: dict[str, Curve]) -> None:
     """Draw black lines through markers, keyed by marker, and print the points.
 
@@ -367,6 +391,9 @@ draw_log("binary", quadratic, titles, [(1, 0.25), (16, 0.25), (1, 64)], base=2)
 draw_titled("titled", spectrum, ("Photon energy\n(eV)", "Absorbance\n(arb. units)"))
 draw_markers("markers", {"D": decay, "s": growth, "o": wave, "x": trend})
 draw_slanted("slanted", damped, ("Time (s)", "Voltage (mV)"))
+draw_rotated("tilted", damped, (30, 45))
+draw_rotated("steep", damped, (60, 90))
+draw_rotated("downwards", damped, (-90, -90), downwards=True)
 draw_panels("panels")
 draw_shared("shared")
 draw_inset("inset")
