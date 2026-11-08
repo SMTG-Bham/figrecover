@@ -93,7 +93,10 @@ class _Path:
     and ``clip`` is the box beyond which it is hidden. ``anchor`` is where
     the origin of the form that holds the path lies, or None if the page
     holds it; a form drawn as a marker is placed with its origin at the
-    point it marks.
+    point it marks. ``width`` is the width of its outline, and ``dashes``
+    the lengths of the dashes and gaps it is drawn with, in turn, or none
+    if it is solid, in points, where the reader gives them, as that of SVG
+    files does.
     """
 
     subpaths: tuple[npt.NDArray[np.float64], ...]
@@ -103,6 +106,8 @@ class _Path:
     fill: Colour | None
     clip: Box
     anchor: Point | None
+    width: float = 1
+    dashes: tuple[float, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1014,7 +1019,7 @@ def _markers(drawing: Drawing) -> list[_Marker]:
         marker = _marker(path)
         if marker is None:
             continue
-        if last == index - 1 and markers[-1].centre == marker.centre:
+        if markers and last == index - 1 and markers[-1].centre == marker.centre:
             first = markers.pop()  # one marker, drawn in two paths
             marker = _Marker(
                 marker.centre,

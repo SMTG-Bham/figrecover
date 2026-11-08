@@ -42,9 +42,12 @@ from .pdf import (
     render_pdf,
     trace_pdf_curves,
 )
+from .svg import load_svg, render_svg
 
 type Ring = tuple[Point, int, Colour]
 """A ring to draw in the preview: its centre, its radius and its colour."""
+
+_SNIFF = 4096  # a file that is not named as one is an SVG file by this many bytes
 
 SERIES_COLOURS: list[Colour] = [  # matplotlib's, to draw series of markers in
     (31, 119, 180),
@@ -106,8 +109,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error(
             "--log needs -p; figrecover finds logarithmic axes itself when reading them"
         )
-    if not _is_pdf(arguments.image) and (arguments.page or arguments.box):
-        parser.error("--page and --box choose what to read in a PDF file")
+    if _is_svg(arguments.image) and arguments.page:
+        parser.error("--page chooses a page of a PDF file; an SVG file has only one")
+    if not _is_drawing(arguments.image) and (arguments.page or arguments.box):
+        parser.error("--page and --box choose what to read in a PDF or SVG file")
     outputs = {"-o": arguments.output, "--preview": arguments.preview}
     for option, path in outputs.items():
         if path is not None and path.resolve() == arguments.image.resolve():
@@ -132,8 +137,8 @@ def _build_parser() -> argparse.ArgumentParser:
     """Create the command-line argument parser."""
     parser = argparse.ArgumentParser(
         prog="figrecover",
-        description="Recover the curves in an image of a plot, or a PDF file, as "
-        "CSV, with columns for x and y, and a series column if there are several "
+        description="Recover the curves in an image of a plot, or a PDF or SVG file, "
+        "as CSV, with columns for x and y, and a series column if there are several "
         "curves. An image of several plots, such as the panels of a figure, gives "
         "a CSV for each when its axes are read.",
     )
@@ -141,9 +146,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "image",
         type=Path,
-        help="image of the plot, or a PDF file, whose curves are read exactly "
-        "from its drawing (this needs the pdf extra); positions in a PDF are in "
-        "points from the bottom-left corner of the page",
+        help="image of the plot, or a PDF or SVG file, whose curves are read "
+        "exactly from its drawing (a PDF file needs the pdf extra); positions in "
+        "them are in points from the bottom-left corner of the page",
     )
     parser.add_argument(
         "--page",
@@ -155,8 +160,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "--box",
         type=_box,
         metavar="X0,Y0,X1,Y1",
-        help="the left, bottom, right and top edges of the part of the PDF's page "
-        "to read, such as one figure, in points (default: the whole page)",
+        help="the left, bottom, right and top edges of the part of the PDF's page, "
+        "or the SVG's drawing, to read, such as one figure, in points (default: the "
+        "whole page)",
     )
     parser.add_argument(
         "-p",
@@ -251,7 +257,7 @@ def _digitize(arguments: argparse.Namespace) -> None:
     A panel whose curves cannot be traced is left out, with a warning. With
     ``-m``, insets are left out, as the markers are those of one plot.
     """
-    if _is_pdf(arguments.image):
+    if _is_drawing(arguments.image):
         _digitize_pdf(arguments)
         return
     image = load_image(arguments.image)
@@ -333,12 +339,16 @@ def _trace(
 
 
 def _digitize_pdf(arguments: argparse.Namespace) -> None:
-    """Write the curves in a plot on a page of the PDF file as CSV.
+    """Write the curves in a plot on a page of the PDF file, or the SVG file, as CSV.
 
     Positions on the page are in points, and the preview shows the part of
     the page read, ``PREVIEW_SCALE`` pixels to the point.
     """
-    drawing = load_pdf(arguments.image, arguments.page or 1, arguments.box)
+    drawing = (
+        load_svg(arguments.image, arguments.box)
+        if _is_svg(arguments.image)
+        else load_pdf(arguments.image, arguments.page or 1, arguments.box)
+    )
     _check_positions(arguments.markers, drawing.box, "-m position")
     if arguments.remove_grid:
         drawing = remove_pdf_grid(drawing)
@@ -377,7 +387,7 @@ def _digitize_pdf(arguments: argparse.Namespace) -> None:
         if arguments.markers:
             keys = (np.array(arguments.markers) - corner) * PREVIEW_SCALE
             rings += _marker_rings([(x, y) for x, y in keys], pixels, colours)
-        image = render_pdf(drawing, PREVIEW_SCALE)
+        image = _render(drawing)
         _save_preview(arguments.preview, image, pixels, colours, rings)
     data = [calibration.to_data(curve) for curve in curves]
     _write_csv(arguments.output or sys.stdout, [(None, data)], names)
@@ -386,6 +396,38 @@ def _digitize_pdf(arguments: argparse.Namespace) -> None:
 def _is_pdf(path: Path) -> bool:
     """Return whether a file is a PDF file, by its name."""
     return path.suffix.lower() == ".pdf"
+
+
+def _is_svg(path: Path) -> bool:
+    """Return whether a file is an SVG file, by its name, or else its start.
+
+    A file named neither .pdf nor .svg, .svgz or .svg.gz is an SVG file if it
+    starts with a tag and an ``<svg`` tag starts within ``_SNIFF`` bytes.
+    """
+    suffix = path.suffix.lower()
+    if path.name.lower().endswith((".svg", ".svgz", ".svg.gz")):
+        return True
+    try:
+        with path.open("rb") as file:
+            start = file.read(_SNIFF)
+    except OSError:
+        return False
+    return suffix != ".pdf" and start.lstrip().startswith(b"<") and b"<svg" in start
+
+
+def _is_drawing(path: Path) -> bool:
+    """Return whether a file is read from its drawing: a PDF or SVG file."""
+    return _is_pdf(path) or _is_svg(path)
+
+
+def _render(drawing: Drawing) -> Image:
+    """Draw the part of the page of a PDF or SVG file read, as for a preview.
+
+    It is drawn ``PREVIEW_SCALE`` pixels to the point.
+    """
+    if _is_svg(Path(drawing.path)):
+        return render_svg(drawing, PREVIEW_SCALE)
+    return render_pdf(drawing, PREVIEW_SCALE)
 
 
 def _check_positions(positions: Sequence[Point], box: Box, name: str) -> None:
@@ -404,7 +446,7 @@ def _click_positions(drawing: Drawing, points: Sequence[Point]) -> list[Point]:
     The page is shown ``PREVIEW_SCALE`` pixels to the point.
     """
     pixels = interactive.pick_points(
-        render_pdf(drawing, PREVIEW_SCALE), [f"{x:g},{y:g}" for x, y in points]
+        _render(drawing), [f"{x:g},{y:g}" for x, y in points]
     )
     left, bottom = drawing.box[:2]
     positions = [
