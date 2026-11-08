@@ -74,7 +74,8 @@ def _filled_markers(in_colour: npt.NDArray[np.bool_]) -> npt.NDArray[np.intp]:
     ``_line_depth`` finds them, and its box is that of its middle, widened by
     how deep its middle lies. A bar or line drawn through a marker deepens it
     a little where they meet, so the middle's height is taken where it is
-    wider than a bar, and its width where it is taller than one.
+    wider than a bar, and its width where it is taller than one; a middle
+    no wider or taller than a bar, as where lines cross, is not a marker's.
 
     Returns:
         A row of the top, bottom, left and right edges of each marker's box,
@@ -96,8 +97,8 @@ def _filled_markers(in_colour: npt.NDArray[np.bool_]) -> npt.NDArray[np.intp]:
         piece = pieces[part] == index
         rows = np.flatnonzero((piece & wider[part]).any(axis=1))
         columns = np.flatnonzero((piece & taller[part]).any(axis=0))
-        rows = rows if len(rows) else np.arange(height)
-        columns = columns if len(columns) else np.arange(width)
+        if not (len(rows) and len(columns)):
+            continue  # where lines cross, not a marker
         boxes.append(
             (
                 top + rows[0] - reach,

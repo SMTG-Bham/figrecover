@@ -25,13 +25,14 @@ def test_a_cap_is_no_thicker_than_its_bar_is_wide() -> None:
     assert _capped([*runs, (1, 9)], 5, 1) == 0
 
 
-def test_a_marker_barely_thicker_than_its_lines_keeps_its_box() -> None:
-    # A line 2 pixels wide, through a marker 5 pixels across, rows 2 to 6 and
-    # columns 8 to 12, whose middle is a row of 3 pixels: too thin to narrow
-    # by the width of a bar. Widened by its depth, its box is a pixel wider
-    # each side than the marker.
-    in_colour = np.zeros((9, 20), dtype=np.bool_)
-    in_colour[4:6, :] = True
-    in_colour[2:7, 8:13] = True
+def test_a_middle_no_wider_than_a_bar_is_not_a_marker() -> None:
+    # A line 2 pixels wide, through a square 5 pixels across, rows 2 to 6 and
+    # columns 8 to 12, whose middle is a row of 3 pixels, as where lines
+    # cross; and a square 9 pixels across, whose middle is 5 by 5, and whose
+    # box, widened by its depth, is the square's.
+    in_colour = np.zeros((13, 40), dtype=np.bool_)
+    in_colour[5:7, :] = True
+    in_colour[3:8, 8:13] = True
+    in_colour[2:11, 25:34] = True
 
-    np.testing.assert_array_equal(_filled_markers(in_colour), [(2, 7, 7, 14)])
+    np.testing.assert_array_equal(_filled_markers(in_colour), [(2, 11, 25, 34)])
