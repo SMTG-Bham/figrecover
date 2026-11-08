@@ -66,6 +66,14 @@ The first release.
   its panel, as its `inset_of`. Scale factors are read only where plotting
   libraries print them, so that of a panel below is not taken for one of the
   x-axis above.
+- With the `ocr` extra, tick labels rotated to any angle are read, on either
+  axis: figrecover finds their slant from the ink of their characters and,
+  if OCR misread them, reads them again turned level, or a quarter turn each
+  way if they are written up or down, such as single digits written
+  downwards or negative labels run together as `-0.25-0.50`. Rotated labels
+  centred on their tick marks lie at the marks. A label that OCR read as
+  fewer characters than are drawn, such as `5` for `0.5`, is dropped, and an
+  axis left with too few is refused rather than read ten times too large.
 - Logarithmic axes work too. figrecover finds them itself when it reads the
   axes, including tick labels written as powers, such as 10⁻² or 2⁵, even
   where OCR misses the superscripts; and `--log` names them for `-p`.
