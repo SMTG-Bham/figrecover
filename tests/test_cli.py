@@ -1046,6 +1046,7 @@ def test_reads_error_bars_with_their_markers(
         rows = data[data[:, 0] == series, 1:]
         marked = rows[~np.isnan(rows[:, 2])]
         assert len(marked) == 10  # a row for each marker, with its bounds
+        assert len(np.unique(rows[:, 0])) == len(rows)  # and no other there
         x, *bounds = error_bounds(series)
         np.testing.assert_allclose(marked[:, 0], x, atol=0.04)
         # The triangles' middles lie up to 2.4 pixels below their points.

@@ -348,20 +348,27 @@ figrecover examples/errorbars.png -n 4 --error-bars \
     -o errorbars.csv --preview errorbars.preview.png
 ```
 
+Each colour drawn with markers and a line gives its markers first, as a
+series of their own (see [Several curves](#several-curves)), so `-n 4`
+gives the four series of markers, and `-n 7` adds the three lines:
+
+```text
+figrecover: colours: -c 2ca02c -c ff7f0e:markers -c 1f77b4:markers -c d62728:markers
+```
+
 The CSV gains `y_low` and `y_high` columns, the lower and upper ends of
 each marker's vertical bar, and, if any marker has a horizontal bar,
 `x_low` and `x_high` columns, its left and right ends. Each marker has a
-row at its middle; the rows of the line traced between the markers leave
-the bounds empty, as does a marker for a bar it does not have, or whose
-end cannot be seen:
+row at its middle. The rows of a line traced between markers leave the
+bounds empty, as does a marker for a bar it does not have, or whose end
+cannot be seen:
 
 ```text
 series,Time (s),Voltage (mV),y_low,y_high,x_low,x_high
-1,0.440487,2.62121,,,,
+1,0.521097,1.54329,1.40044,1.69914,0.218809,0.823385
+1,1.50857,1.6342,1.47836,1.79004,1.22644,1.81086
 ...
-1,0.521097,2.62121,2.51731,2.91991,,
-...
-2,0.521097,1.54329,1.40044,1.69914,0.218809,0.823385
+2,0.521097,2.62121,2.51731,2.91991,,
 ...
 ```
 

@@ -463,6 +463,7 @@ def _trace(
     origin = plot.calibration.origin
     rings: list[Ring] = [(pixel, 6, (0, 0, 255)) for pixel in plot.pixels]
     inks: list[Colour] = []  # the colour of each curve, as drawn
+    styles: list[Style | None] = []  # and its style, if known
     if arguments.markers:
         curves = _found_markers(traced, arguments.markers, plot.calibration)
         colours = _series_colours(len(curves))
@@ -475,6 +476,7 @@ def _trace(
                 lambda colours: trace_series(traced, colours, origin),
             )
         inks = [selector.colour for selector in arguments.colours]
+        styles = [selector.style for selector in arguments.colours]
         colours = _distinct(inks)
     else:
         found = _found(
@@ -485,12 +487,18 @@ def _trace(
         )
         curves = [series.points for series in found]
         inks = [series.colour for series in found]
+        styles = [series.style for series in found]
         colours = _distinct(inks)
     bars = None
     if arguments.error_bars and arguments.markers:
         bars = find_marker_error_bars(traced, arguments.markers, origin)
     elif arguments.error_bars:
         bars = _bars_by_colour(traced, inks, origin)
+        # A series of markers gives the middles that their bars run from.
+        curves = [
+            series.points if style == "markers" else curve
+            for curve, series, style in zip(curves, bars, styles, strict=True)
+        ]
     return curves, colours, rings, bars
 
 
@@ -963,7 +971,8 @@ def _data(
     even on a reversed axis, NaN where the point has none. If ``aligned``,
     the error bars' points are the curves' own, as markers and the points in
     a PDF are; otherwise each marker adds a row among those of its curve,
-    sorted by x, and the curve's own rows have no bounds.
+    sorted by x, in place of a row of the curve at its point, and the
+    curve's other rows have no bounds.
     """
     data = [calibration.to_data(curve) for curve in curves]
     if bars is None:
@@ -980,7 +989,9 @@ def _data(
     if aligned:
         return bounded
     merged = []
-    for rows, marked in zip(data, bounded, strict=True):
+    for traced, marked in zip(data, bounded, strict=True):
+        middles = {(x, y) for x, y in marked[:, :2]}
+        rows = traced[[(x, y) not in middles for x, y in traced]].reshape(-1, 2)
         unbounded = np.column_stack([rows, np.full((len(rows), len(BOUNDS)), np.nan)])
         both = np.vstack([unbounded, marked])
         merged.append(both[np.argsort(both[:, 0], kind="stable")])
