@@ -6,7 +6,8 @@ import math
 import os
 import warnings
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Literal
 
 import cv2
 import numpy as np
@@ -16,6 +17,11 @@ from .calibration import Point
 
 type Image = npt.NDArray[np.uint8]
 type Colour = tuple[int, int, int]
+type Style = Literal["solid", "dashed", "dotted", "dashdot", "markers"]
+"""How a series is drawn: a line by the pattern of its dashes, or markers."""
+
+STYLES: tuple[Style, ...] = ("solid", "dashed", "dotted", "dashdot", "markers")
+"""Every style a series can be drawn in."""
 
 AXIS_MARGIN = 3
 """Pixels beyond the axes that are ignored, so the axis lines are not traced."""
@@ -54,6 +60,19 @@ _MIN_PIXELS = 4  # smaller specks are noise, such as where two other curves cros
 _RUN_GAP = 6  # a curve's pixels in a column this far apart or less are one run
 _MIN_BRANCH = 0.05  # branches across less of the plot's width than this are minor
 _SNAP_REACH = 12  # an axis line this many pixels inside the axes given is theirs
+_FIT = 6  # where a track is headed is fitted to this many of its last points
+_TURN = 25  # the next dash of a curve turns from it by this many degrees or less
+_GAP_WIDTHS = 12  # the dashes of a curve lie this many line widths apart or less
+_FOLD = 90  # tracks heading this many degrees apart where they meet fold back
+_SOLID = 0.9  # a curve inked along this fraction of its length or more is solid
+_DOT = 2  # a dash at most this many line widths long is a dot
+_DOTTED = 0.75  # a curve whose dashes are this fraction dots, or more, is dotted
+_ONE_LINE = 1.5  # a run at most this many line widths tall holds one line
+_DOT_GAP = 3  # the dots of a curve lie this many line widths apart or less
+_MARKER_DEPTH = 1.5  # markers reach this many pixels deeper than half a line or more
+_MARKER_SIZES = 2  # markers are within this factor of their median size
+_MIN_MARKERS = 3  # a colour draws markers if it has this many or more
+_THIN = 0.25  # this share of a curve's runs, or more, are no taller than its line
 _FRAME_SIDE = 0.05  # frame lines span this fraction of the plot's shorter side
 _FRAME_CONTRAST = 32  # its lines differ from the background by this much or more
 _FRAME_LINED = 0.75  # its sides run along this fraction of its height or more
@@ -79,6 +98,36 @@ _MOST_HIDDEN = 2  # a marker hides parts of this many others at most
 _ALIGNED = 2  # markers this many pixels apart or less across share an x position
 _GAP = 1.5  # a series' markers this many times their usual spacing apart leave a gap
 _FLAT = 1e-6  # parts of an image that vary less than this are flat
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class Series:
+    """A curve, or a series of markers, in a plot, and how it is drawn.
+
+    Series that share a colour are told apart by how they are drawn, and
+    curves of one colour and style by where they run.
+
+    Attributes:
+        colour: The colour it is drawn in, as ``(red, green, blue)``.
+        style: How it is drawn: ``"solid"``, ``"dashed"``, ``"dotted"`` or
+            ``"dashdot"`` for a line, by the pattern of its dashes, or
+            ``"markers"``.
+        width: The width of its line, or the size of its markers, in pixels
+            in an image or in points in a PDF file.
+        points: An ``(n, 2)`` array of the ``(x, y)`` positions of its
+            points: those of pixel centres in an image, measured from the
+            bottom-left corner, or in points in a PDF file.
+    """
+
+    colour: Colour
+    style: Style
+    width: float
+    points: npt.NDArray[np.float64]
+
+    @property
+    def name(self) -> str:
+        """Return its colour in hexadecimal and its style, such as 000000-dashed."""
+        return f"{bytes(self.colour).hex()}-{self.style}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -254,14 +303,31 @@ def find_colours(image: Image, count: int = 1, origin: Point = (0, 0)) -> list[C
             if reason is None
         )
         msg = f"found only {len(curves)} of {count} curves, {found}"
-        left_out = "; ".join(
-            f"#{bytes(colour).hex()} ({pixels} pixels), as it {reason}"
-            for colour, pixels, reason in candidates
-            if reason is not None
-        )
         msg = msg if curves else "no curve found"
-        raise ValueError(f"{msg}; left out {left_out}" if left_out else msg)
+        raise ValueError(msg + _reasons(candidates))
     return curves[:count]
+
+
+def _left_out(image: Image, origin: Point) -> str:
+    """Say which colours that could be curves' were left out, and why.
+
+    See ``_reasons`` for what it says.
+    """
+    return _reasons(_candidates(image, origin))
+
+
+def _reasons(candidates: Iterable[tuple[Colour, int, str | None]]) -> str:
+    """Describe the colours left out, as ``_candidates`` gives them.
+
+    That is "; left out", then each colour, how many pixels show it, and
+    why it is not a curve's; or nothing if none were left out.
+    """
+    left_out = "; ".join(
+        f"#{bytes(colour).hex()} ({pixels} pixels), as it {reason}"
+        for colour, pixels, reason in candidates
+        if reason is not None
+    )
+    return f"; left out {left_out}" if left_out else ""
 
 
 def _curve_colours(image: Image, origin: Point) -> list[Colour]:
@@ -337,25 +403,9 @@ def trace_curves(
         ValueError: If no curve has one of the colours, two of them match the
             same curve, or one fills areas.
     """
-    plot, left, top = _plot_area(image, origin)
-    palette = _palette(plot)
-    indices = [_match(palette, colour) for colour in colours]
-    for (first, index), (second, other) in itertools.combinations(
-        zip(colours, indices, strict=True), 2
-    ):
-        if index == other:
-            msg = (
-                f"colours #{bytes(first).hex()} and #{bytes(second).hex()} both "
-                f"match the curve of colour #{bytes(_to_colour(palette[index])).hex()}"
-            )
-            raise ValueError(msg)
-    labels = _labelled(plot, palette)
-    for colour, index in zip(colours, indices, strict=True):
-        if _fills_areas(labels == index):
-            msg = f"colour #{bytes(colour).hex()} fills areas rather than a curve"
-            raise ValueError(msg)
+    masks, _, left, top = _masks(image, colours, origin)
     height = image.shape[0]
-    curves = [_follow(labels == index, left, top, height) for index in indices]
+    curves = [_follow(in_colour, left, top, height) for in_colour in masks]
     for colour, points in zip(colours, curves, strict=True):
         _, crossings = np.unique(points[:, 0], return_counts=True)
         times = int(np.median(crossings))
@@ -366,6 +416,85 @@ def trace_curves(
             )
             warnings.warn(message, stacklevel=2)
     return curves
+
+
+def trace_series(
+    image: Image, colours: Sequence[Colour], origin: Point = (0, 0)
+) -> list[list[Series]]:
+    """Find the curves drawn in each of the given colours, told apart by style.
+
+    The pixels of each colour are found as ``trace_curves`` finds them, and
+    followed across the columns as tracks, by ``_tracks``: through crossings,
+    each keeping on the way it was headed, and across gaps of up to
+    ``_GAP_WIDTHS`` line widths, as between the dashes of a dashed curve.
+    Tracks across at least ``_MIN_BRANCH`` of the width make the curves, by
+    ``_curves``: the two sides of a loop are one curve, and so are the
+    pieces of a curve hidden in places by another. Each curve is a series
+    of its own, with its style, by ``_style``, and the width of its line, by
+    ``_line_width``.
+
+    A colour with one curve, or none, as markers alone draw, gives one
+    series, of the points that ``trace_curves`` gives, in the style of its
+    curve, or ``"markers"``.
+
+    Args:
+        image: Colour image of a plot.
+        colours: The colours of the curves, such as ``find_colours`` returns.
+        origin: Pixel position where the axes cross, measured from the
+            bottom-left corner.
+
+    Returns:
+        For each colour, its curves, most pixels first, each in the common
+        colour that the colour picks, with a point for each column that it
+        crosses, at the middle of its own pixels there, where curves cross
+        too, or across a gap, on the straight line between its ends. The
+        points are the pixel ``(x, y)`` coordinates of pixel centres,
+        measured from the bottom-left corner and sorted by x, then y.
+
+    Raises:
+        ValueError: If no curve has one of the colours, two of them match the
+            same curve, or one fills areas.
+    """
+    masks, found, left, top = _masks(image, colours, origin)
+    height = image.shape[0]
+    return [
+        [series for series, _ in _styled(in_colour, colour, left, top, height)]
+        for in_colour, colour in zip(masks, found, strict=True)
+    ]
+
+
+def find_series(image: Image, origin: Point = (0, 0)) -> list[Series]:
+    """Find every curve in a plot, told apart by colour, style and where it runs.
+
+    The colours are those that ``find_colours`` finds, and the curves of
+    each those that ``trace_series`` finds.
+
+    Args:
+        image: Colour image of a plot.
+        origin: Pixel position where the axes cross, measured from the
+            bottom-left corner.
+
+    Returns:
+        Every curve. Colours of one curve each come in the order that
+        ``find_colours`` gives them, and the curves of colours of several,
+        each colour's in the order ``trace_series`` gives them, come in among
+        them by their pixels, counting those of a run of pixels that curves
+        share a share each, the most first.
+    """
+    colours = _curve_colours(image, origin)
+    masks, found, left, top = _masks(image, colours, origin)
+    height = image.shape[0]
+    styled = [
+        _styled(in_colour, colour, left, top, height)
+        for in_colour, colour in zip(masks, found, strict=True)
+    ]
+    queues = [[pairs[0] for pairs in styled if len(pairs) == 1]]
+    queues += [pairs for pairs in styled if len(pairs) > 1]
+    every: list[Series] = []
+    while any(queues):
+        first = max((queue for queue in queues if queue), key=lambda queue: queue[0][1])
+        every.append(first.pop(0)[0])
+    return every
 
 
 def trace_curve(image: Image, origin: Point = (0, 0)) -> npt.NDArray[np.float64]:
@@ -586,6 +715,41 @@ def find_marker_series(
             )
         )
     return series
+
+
+def _masks(
+    image: Image, colours: Sequence[Colour], origin: Point
+) -> tuple[list[npt.NDArray[np.bool_]], list[Colour], int, int]:
+    """Return the pixels of each colour in the plot area, as ``trace_curves`` has them.
+
+    Returns:
+        A mask of the pixels of each colour, in the plot area; the common
+        colour that each colour picks; and the left and top edges of the
+        plot area.
+
+    Raises:
+        ValueError: If no curve has one of the colours, two of them match the
+            same curve, or one fills areas.
+    """
+    plot, left, top = _plot_area(image, origin)
+    palette = _palette(plot)
+    indices = [_match(palette, colour) for colour in colours]
+    for (first, index), (second, other) in itertools.combinations(
+        zip(colours, indices, strict=True), 2
+    ):
+        if index == other:
+            msg = (
+                f"colours #{bytes(first).hex()} and #{bytes(second).hex()} both "
+                f"match the curve of colour #{bytes(_to_colour(palette[index])).hex()}"
+            )
+            raise ValueError(msg)
+    labels = _labelled(plot, palette)
+    for colour, index in zip(colours, indices, strict=True):
+        if _fills_areas(labels == index):
+            msg = f"colour #{bytes(colour).hex()} fills areas rather than a curve"
+            raise ValueError(msg)
+    masks = [labels == index for index in indices]
+    return masks, [_to_colour(palette[index]) for index in indices], left, top
 
 
 def _plot_area(image: Image, origin: Point) -> tuple[Image, int, int]:
@@ -1279,44 +1443,48 @@ def _follow(
     """Return a point at the middle of each branch of a curve in each column.
 
     In each column, the curve's pixels form runs, split by gaps of more than
-    ``_RUN_GAP`` pixels. Runs in neighbouring columns that overlap, one to
-    one, belong to one branch. A column gives a point at the median height
-    of each of its runs whose branch spans at least ``_MIN_BRANCH`` of the
-    width, so both sides of a loop give points, while short pieces such as
-    the caps of error bars are ignored. A column with no such run, as where
-    branches meet, gives one point at the median height of all its pixels.
+    ``_RUN_GAP`` pixels, and runs in neighbouring columns that overlap are
+    followed as tracks, by ``_tracks``. A column gives a point at the median
+    height of each of its runs that holds a track across at least
+    ``_MIN_BRANCH`` of the width, so both sides of a loop give points, while
+    short pieces such as the caps of error bars are ignored. A column with no
+    such run gives one point at the median height of all its pixels.
 
     The curve's pixels are in a part of an image ``height`` pixels tall, from
     column ``left`` and row ``top``.
     """
-    _, specks, stats, _ = cv2.connectedComponentsWithStats(in_colour.astype(np.uint8))
-    areas = stats[:, cv2.CC_STAT_AREA]
-    areas[0] = 0  # the pixels outside the curve
-    in_curve = (areas >= _MIN_PIXELS)[specks]
-
+    in_curve = _without_specks(in_colour)
     columns = np.flatnonzero(in_curve.any(axis=0))
     runs = [_runs(np.flatnonzero(in_curve[:, column])) for column in columns]
-    branches = _branches(columns, runs)
-    lengths = np.bincount(np.concatenate(branches))
     minimum = in_curve.shape[1] * _MIN_BRANCH
+    major = {
+        (column, run)
+        for track in _tracks(columns, runs, _width(runs), gaps=False)
+        if track.span >= minimum
+        for column, run in zip(track.columns, track.runs, strict=True)
+    }
 
     points: list[tuple[float, float]] = []
-    for column, column_runs, column_branches in zip(
-        columns, runs, branches, strict=True
-    ):
-        major = [
-            run
-            for run, branch in zip(column_runs, column_branches, strict=True)
-            if lengths[branch] >= minimum
+    for column, column_runs in zip(columns.tolist(), runs, strict=True):
+        kept = [
+            run for index, run in enumerate(column_runs) if (column, index) in major
         ]
         # The centre of the pixel in column c and row r is at
         # (c + 0.5, height - r - 0.5).
         points.extend(
             (column + left + 0.5, height - top - float(np.median(rows)) - 0.5)
-            for rows in major or [np.concatenate(column_runs)]
+            for rows in kept or [np.concatenate(column_runs)]
         )
-    data = np.array(points, dtype=np.float64)
+    data = np.array(points, dtype=np.float64).reshape(-1, 2)
     return data[np.lexsort((data[:, 1], data[:, 0]))]
+
+
+def _without_specks(in_colour: npt.NDArray[np.bool_]) -> npt.NDArray[np.bool_]:
+    """Return a colour's pixels less specks of fewer than ``_MIN_PIXELS`` pixels."""
+    _, specks, stats, _ = cv2.connectedComponentsWithStats(in_colour.astype(np.uint8))
+    areas = stats[:, cv2.CC_STAT_AREA]
+    areas[0] = 0  # the pixels outside the curve
+    return np.asarray((areas >= _MIN_PIXELS)[specks], dtype=np.bool_)
 
 
 def _runs(rows: npt.NDArray[np.intp]) -> list[npt.NDArray[np.intp]]:
@@ -1324,29 +1492,620 @@ def _runs(rows: npt.NDArray[np.intp]) -> list[npt.NDArray[np.intp]]:
     return np.split(rows, np.flatnonzero(np.diff(rows) > _RUN_GAP + 1) + 1)
 
 
-def _branches(
-    columns: npt.NDArray[np.intp], runs: Sequence[Sequence[npt.NDArray[np.intp]]]
-) -> list[npt.NDArray[np.intp]]:
-    """Number the branch of each run, left to right.
+def _width(runs: Sequence[Sequence[npt.NDArray[np.intp]]], share: float = 0.5) -> float:
+    """Return the width of a curve's line, from the heights of its runs, or 1.
 
-    A run continues the branch of a run in the column before it if each
-    overlaps the other, touching corners included, and nothing else there.
+    That is the height that ``share`` of them reach no higher than: the
+    median, or less where markers, which are taller, may be most of them.
     """
-    branches = [np.arange(len(runs[0]))]
-    count = len(runs[0])
-    for index in range(1, len(columns)):
-        before, now = runs[index - 1], runs[index]
-        touching = np.array(
-            [[r[0] <= s[-1] + 1 and s[0] <= r[-1] + 1 for s in now] for r in before]
-        ) & (columns[index] - columns[index - 1] == 1)
-        numbers = np.arange(count, count + len(now))
-        for j in range(len(now)):
-            (partners,) = np.nonzero(touching[:, j])
-            if len(partners) == 1 and np.count_nonzero(touching[partners[0]]) == 1:
-                numbers[j] = branches[-1][partners[0]]
-        branches.append(numbers)
-        count += len(now)
-    return branches
+    heights = [run[-1] - run[0] + 1 for column in runs for run in column]
+    return float(np.quantile(heights, share)) if heights else 1.0
+
+
+@dataclass(slots=True, eq=False)
+class _Track:
+    """A curve followed across the columns of a plot, as ``_tracks`` follows it.
+
+    For each column it crosses, ``columns`` holds the column, ``rows`` the
+    height of its middle there, as a row from the top, ``runs`` the index of
+    the run of pixels it lies in among those of the column, and ``shared``
+    how many tracks lie in that run. ``clear`` holds the indices of the
+    points where its line is clear of others, as ``_place`` finds them, as
+    it is in a run alone. ``parent`` is the track it split
+    from, if it started where a run parted in two, and ``pixels`` counts the
+    pixels of its runs, those of a run that tracks share shared among them.
+    """
+
+    columns: list[int] = field(default_factory=list)
+    rows: list[float] = field(default_factory=list)
+    runs: list[int] = field(default_factory=list)
+    shared: list[int] = field(default_factory=list)
+    clear: list[int] = field(default_factory=list)
+    parent: _Track | None = None
+    pixels: float = 0
+
+    @property
+    def span(self) -> int:
+        """Return how many columns it spans, from its first to its last."""
+        return self.columns[-1] - self.columns[0] + 1
+
+    def heading(self, column: int) -> tuple[float, float]:
+        """Return the row where it is headed in a column, and its slope there.
+
+        That is the line fitted to its last ``_FIT`` points where its line
+        is clear of others, by least squares, so that tracks whose lines
+        overlap, where curves cross, carry on as they came; or to its last
+        points, if it has never been clear; or level through its only point.
+        """
+        recent = self.clear[-_FIT:] or range(len(self.columns))[-_FIT:]
+        columns = [self.columns[index] for index in recent]
+        rows = [self.rows[index] for index in recent]
+        slope = _slope(columns, rows)
+        return float(np.mean(rows) + slope * (column - np.mean(columns))), slope
+
+
+def _tracks(
+    columns: npt.NDArray[np.intp],
+    runs: Sequence[Sequence[npt.NDArray[np.intp]]],
+    width: float,
+    *,
+    gaps: bool,
+) -> list[_Track]:
+    """Follow the tracks of a curve across the runs of its pixels in each column.
+
+    A run carries on the tracks of the runs in the column before that
+    overlap it, touching corners included. Where a run overlaps several, as
+    where curves cross, it carries on all their tracks; where several runs
+    overlap one, as where curves part, its tracks carry on in those nearest
+    where each is headed, one to a run while there are runs enough, first
+    those in runs that overlap no other, so that crossing curves keep their
+    tracks. A run left with no track starts one of its own, split from the
+    tracks of the runs it overlaps.
+
+    A track whose run overlaps none in the next column ends there, unless
+    ``gaps`` is true: then it carries on in a run that no track has taken,
+    nearest where it is headed, at most ``_GAP_WIDTHS`` times ``width``, the
+    width of the curve's line, from its end, and either at most a pixel from
+    where it is headed or in a direction from its end that turns by at most
+    ``_TURN`` degrees from the track's, as the next dash of a dashed curve
+    does. A track no longer than ``_DOT`` line widths, such as a dot of a
+    dotted curve, heads no way yet: it carries on in the nearest such run at
+    most ``_DOT_GAP`` line widths from its end, whichever way it lies. So
+    does a track taken out of a run that it shares, by ``_released``, as a
+    dashed curve is where it leaves another between dashes.
+    """
+    tracks: list[_Track] = []
+    before: Sequence[npt.NDArray[np.intp]] = []
+    held: list[list[_Track]] = []  # the tracks in each run of the column before
+    waiting: list[_Track] = []  # tracks that lost their runs, until bridged
+    last = -2
+    for column, now in zip(columns.tolist(), runs, strict=True):
+        hosts: list[list[_Track]] = [[] for _ in now]
+        parents: list[list[_Track]] = [[] for _ in now]
+        overlaps = [
+            [
+                index
+                for index, run in enumerate(now)
+                if column == last + 1
+                and run[0] <= ahead[-1] + 1
+                and ahead[0] <= run[-1] + 1
+            ]
+            for ahead in before
+        ]
+        lost = [
+            track
+            for near, carried in zip(overlaps, held, strict=True)
+            if not near
+            for track in carried
+        ]
+        for near, carried in sorted(
+            zip(overlaps, held, strict=True), key=lambda pair: len(pair[0])
+        ):
+            for index in near:
+                parents[index] += carried
+            if near:
+                _divide(carried, near, now, hosts, column)
+        if gaps:
+            lost += _released(hosts, now, column, width)
+            waiting = [
+                track
+                for track in waiting + lost
+                if column - track.columns[-1] <= _GAP_WIDTHS * width
+            ]
+            _bridge(waiting, now, hosts, column, width)
+        for index, run in enumerate(now):
+            if not hosts[index]:
+                parent = parents[index][0] if parents[index] else None
+                tracks.append(_Track(parent=parent))
+                hosts[index].append(tracks[-1])
+            _place(hosts[index], run, index, column, width)
+        before, held, last = now, hosts, column
+    return tracks
+
+
+def _divide(
+    tracks: Sequence[_Track],
+    near: Sequence[int],
+    runs: Sequence[npt.NDArray[np.intp]],
+    hosts: list[list[_Track]],
+    column: int,
+) -> None:
+    """Carry tracks on in the runs of a column near them, nearest where each is headed.
+
+    ``near`` holds the indices of the runs, and ``hosts`` the tracks in each
+    run so far, which this adds to. Each track takes a run of its own, that
+    no track has yet, while there are runs enough; the rest join the run
+    nearest where they are headed.
+    """
+    headed = [track.heading(column)[0] for track in tracks]
+    costs = sorted(
+        (_off(row, runs[index]), number, index)
+        for number, row in enumerate(headed)
+        for index in near
+    )
+    placed: set[int] = set()
+    for _, number, index in costs:
+        if number not in placed and not hosts[index]:
+            hosts[index].append(tracks[number])
+            placed.add(number)
+    for _, number, index in costs:
+        if number not in placed:
+            hosts[index].append(tracks[number])
+            placed.add(number)
+
+
+def _released(
+    hosts: list[list[_Track]],
+    runs: Sequence[npt.NDArray[np.intp]],
+    column: int,
+    width: float,
+) -> list[_Track]:
+    """Take tracks out of the runs they share that hold only one line.
+
+    ``hosts`` holds the tracks in each run of a column, and ``width`` is the
+    width of the curve's line. The track headed nearest a run stays in it,
+    and the others leave it if they are headed more than ``width`` beyond
+    it, and the run is at most ``_ONE_LINE`` times as tall as a line along
+    that track would be, so that curves that cross keep their runs.
+
+    Returns:
+        The tracks taken out.
+    """
+    released: list[_Track] = []
+    for index, run in enumerate(runs):
+        if len(hosts[index]) > 1:
+            headings = [track.heading(column) for track in hosts[index]]
+            offs = [_off(row, run) for row, _ in headings]
+            nearest = int(np.argmin(offs))
+            tall = _ONE_LINE * width * math.hypot(1, headings[nearest][1])
+            if run[-1] - run[0] + 1 <= tall:
+                kept = [
+                    track
+                    for number, (track, off) in enumerate(
+                        zip(hosts[index], offs, strict=True)
+                    )
+                    if number == nearest or off <= width
+                ]
+                released += [track for track in hosts[index] if track not in kept]
+                hosts[index][:] = kept
+    return released
+
+
+def _bridge(
+    waiting: list[_Track],
+    runs: Sequence[npt.NDArray[np.intp]],
+    hosts: list[list[_Track]],
+    column: int,
+    width: float,
+) -> None:
+    """Carry tracks that lost their runs on across a gap, as ``_tracks`` says.
+
+    ``hosts`` holds the tracks in each run of the column so far, which this
+    adds to, and the tracks carried on are taken out of ``waiting``;
+    ``width`` is the width of the curve's line. The nearest pairs of tracks
+    and runs are joined first: those nearest where the tracks are headed, or
+    a dot's nearest its end.
+    """
+    pairs = []
+    for number, track in enumerate(waiting):
+        row, slope = track.heading(column)
+        across = column - track.columns[-1]
+        for index, run in enumerate(runs):
+            if hosts[index]:
+                continue
+            if track.span <= _DOT * width:  # a dot, which heads no way yet
+                target = float(np.clip(track.rows[-1], run[0], run[-1]))
+                distance = math.hypot(across, target - track.rows[-1])
+                if distance <= _DOT_GAP * width:
+                    pairs.append((distance, distance, number, index))
+                continue
+            target = float(np.clip(row, run[0], run[-1]))
+            down = target - track.rows[-1]
+            turn = abs(math.degrees(math.atan2(down, across) - math.atan(slope)))
+            if math.hypot(across, down) <= _GAP_WIDTHS * width and (
+                abs(target - row) <= 1 or turn <= _TURN
+            ):
+                pairs.append(
+                    (abs(target - row), math.hypot(across, down), number, index)
+                )
+    carried: set[int] = set()
+    for _, _, number, index in sorted(pairs):
+        if number not in carried and not hosts[index]:
+            hosts[index].append(waiting[number])
+            carried.add(number)
+    waiting[:] = [
+        track for number, track in enumerate(waiting) if number not in carried
+    ]
+
+
+def _place(
+    tracks: Sequence[_Track],
+    run: npt.NDArray[np.intp],
+    index: int,
+    column: int,
+    width: float,
+) -> None:
+    """Add a point in a run of a column to each of the tracks in it.
+
+    A track alone in a run lies at its median row, unless the run is more
+    than ``_ONE_LINE`` times as tall as its line, a line ``width`` wide being
+    taller by the secant of its slope, as where a dash of another curve
+    lies across it: then it lies half its line's height inside whichever end
+    of the run is nearer where it is headed. Where tracks share a run,
+    their lines are clear of one another, and keep the order in which they
+    came, if its rows part into as many lumps as there are tracks, with gaps
+    between them: each takes a lump, in turn, and lies at its median row. So
+    are the lines of two tracks in a run more than ``_ONE_LINE`` times as
+    tall as either line, as where curves touch: the upper lies half its
+    line's height below the top of the run, and the lower as far above its
+    bottom.
+    Otherwise their lines overlap, as where curves cross, and the tracks
+    share out the run's rows, each taking those nearest where it is headed,
+    and lie at the median of theirs, or, with none, where they are headed,
+    as far into the run as that lies.
+    """
+    clear = True
+    if len(tracks) == 1:
+        rows = [float(np.median(run))]
+        if tracks[0].columns:
+            row, slope = tracks[0].heading(column)
+            line = width * math.hypot(1, slope)
+            if run[-1] - run[0] + 1 > _ONE_LINE * line:  # with another line
+                edges = [run[0] + (line - 1) / 2, run[-1] - (line - 1) / 2]
+                rows = [min(edges, key=lambda edge: abs(edge - row))]
+    else:
+        headings = [track.heading(column) for track in tracks]
+        tall = [width * math.hypot(1, slope) for _, slope in headings]
+        order = np.argsort([track.rows[-1] for track in tracks], kind="stable")
+        upper, *middle, lower = order
+        lumps = np.split(run, np.flatnonzero(np.diff(run) > 1) + 1)
+        rows = [0.0] * len(tracks)
+        if len(lumps) == len(tracks):
+            for lump, number in zip(lumps, order, strict=True):
+                rows[number] = float(np.median(lump))
+        elif not middle and run[-1] - run[0] + 1 > _ONE_LINE * max(tall):
+            rows[upper] = run[0] + (tall[upper] - 1) / 2
+            rows[lower] = run[-1] - (tall[lower] - 1) / 2
+        else:
+            clear = False
+            headed = np.array([row for row, _ in headings])
+            nearest = np.abs(run[:, np.newaxis] - headed).argmin(axis=1)
+            rows = [
+                float(np.median(run[nearest == number]))
+                if np.any(nearest == number)
+                else float(np.clip(row, run[0], run[-1]))
+                for number, row in enumerate(headed)
+            ]
+    for track, row in zip(tracks, rows, strict=True):
+        if clear:
+            track.clear.append(len(track.columns))
+        track.columns.append(column)
+        track.rows.append(row)
+        track.runs.append(index)
+        track.shared.append(len(tracks))
+        track.pixels += len(run) / len(tracks)
+
+
+def _styled(
+    in_colour: npt.NDArray[np.bool_], colour: Colour, left: int, top: int, height: int
+) -> list[tuple[Series, float]]:
+    """Return the curves of a colour as series, most pixels first, with their pixels.
+
+    See ``trace_series`` for what the curves are. Markers, by ``_blobs``,
+    taking the line to be as wide as ``_THIN`` of the runs of the colour's
+    pixels are tall, are left out of the pixels that make the curves, and,
+    if there are curves too, come first, as a series of their own. The
+    curve's pixels are in a part of an image ``height`` pixels tall, from
+    column ``left`` and row ``top``.
+    """
+    in_curve = _without_specks(in_colour)
+    columns = np.flatnonzero(in_curve.any(axis=0))
+    runs = [_runs(np.flatnonzero(in_curve[:, column])) for column in columns]
+    marked, centres, size = _blobs(in_curve, _width(runs, _THIN))
+    lines = in_curve & ~marked
+    columns = np.flatnonzero(lines.any(axis=0))
+    runs = [_runs(np.flatnonzero(lines[:, column])) for column in columns]
+    at = dict(zip(columns.tolist(), runs, strict=True))
+    minimum = in_curve.shape[1] * _MIN_BRANCH
+    tracks = _tracks(columns, runs, _width(runs), gaps=True)
+    curves = _curves([track for track in tracks if track.span >= minimum])
+    described = [_described(curve, at, marked) for curve in curves]
+    found = []
+    if len(centres) and curves:
+        # The centre of the pixel in column c and row r is at
+        # (c + 0.5, height - r - 0.5).
+        points = centres * (1, -1) + (left + 0.5, height - top - 0.5)
+        series = Series(colour, "markers", size, points[np.argsort(points[:, 0])])
+        found.append((series, float(np.count_nonzero(marked))))
+    if len(found) + len(curves) > 1:
+        return found + [
+            (
+                Series(colour, style, width, _points(curve, at, left, top, height)),
+                sum(track.pixels for track in curve),
+            )
+            for curve, (style, width) in zip(curves, described, strict=True)
+        ]
+    alone: tuple[Style, float] = described[0] if described else ("markers", 0.0)
+    series = Series(colour, *alone, _follow(in_colour, left, top, height))
+    return [(series, float(np.count_nonzero(in_curve)))]
+
+
+def _blobs(
+    in_curve: npt.NDArray[np.bool_], width: float
+) -> tuple[npt.NDArray[np.bool_], npt.NDArray[np.float64], float]:
+    """Find the markers among a colour's pixels, as blobs thicker than its line.
+
+    A marker's core is its pixels deeper inside than half the width of the
+    curve's line and ``_MARKER_DEPTH`` more, by the distance transform, and
+    of at least ``_MIN_PIXELS`` pixels. Markers are those cores within a
+    factor of ``_MARKER_SIZES`` of their median size, if there are at least
+    ``_MIN_MARKERS`` of them, as filled markers draw; lines, dashes, open
+    markers and crosses have none.
+
+    Returns:
+        The pixels of the markers, those as far from their cores as the
+        cores lie deep, and a pixel more; the column and row of each core's
+        middle; and their size across, twice their greatest depth. With no
+        markers, none of the pixels, no middles and a size of 0.
+    """
+    depth = cv2.distanceTransform(in_curve.astype(np.uint8), cv2.DIST_L2, 5)
+    deepest = width / 2 + _MARKER_DEPTH
+    deep = (depth > deepest).astype(np.uint8)
+    _, cores, stats, middles = cv2.connectedComponentsWithStats(deep)
+    areas = stats[1:, cv2.CC_STAT_AREA]
+    typical = float(np.median(areas)) if len(areas) else 0.0
+    kept = (
+        np.flatnonzero(
+            (areas >= _MIN_PIXELS)
+            & (areas * _MARKER_SIZES >= typical)
+            & (areas <= typical * _MARKER_SIZES)
+        )
+        + 1
+    )
+    if len(kept) < _MIN_MARKERS:
+        return np.zeros_like(in_curve), np.empty((0, 2)), 0.0
+    inside = np.isin(cores, kept)
+    reach = math.ceil(deepest) + 1
+    disc = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * reach + 1,) * 2)
+    marked = cv2.dilate(inside.astype(np.uint8), disc) > 0
+    size = 2 * float(depth[inside].max())
+    return marked & in_curve, np.asarray(middles[kept], dtype=np.float64), size
+
+
+def _curves(tracks: Sequence[_Track]) -> list[list[_Track]]:
+    """Return the curves that tracks of one colour make, most pixels first.
+
+    A track that split from another, or ended in the same run as another,
+    makes one curve with it if they head at least ``_FOLD`` degrees apart
+    there, as the two sides of a loop do where it turns back, by
+    ``_folded``; tracks that part at a smaller angle, as curves drawn from
+    one point do, are curves of their own. Then, nearest first, curves of
+    which one starts where the other has ended, or at most ``_RUN_GAP``
+    columns before, are one curve, as the pieces of a curve hidden in places
+    by another are.
+    """
+    numbers = {id(track): number for number, track in enumerate(tracks)}
+    owners = list(range(len(tracks)))  # the track that each joined, in turn
+
+    def owner(number: int) -> int:
+        while owners[number] != number:
+            number = owners[number]
+        return number
+
+    ends: dict[tuple[int, int], list[_Track]] = {}
+    for number, track in enumerate(tracks):
+        parent = track.parent
+        if parent is not None and id(parent) in numbers:
+            start = track.columns[0]
+            if _folded(track, 0, parent, start):
+                owners[owner(number)] = owner(numbers[id(parent)])
+        ends.setdefault((track.columns[-1], track.runs[-1]), []).append(track)
+    for together in ends.values():
+        for first, second in itertools.combinations(together, 2):
+            if _folded(first, -1, second, first.columns[-1]):
+                owners[owner(numbers[id(first)])] = owner(numbers[id(second)])
+
+    joined: dict[int, list[_Track]] = {}
+    for number, track in enumerate(tracks):
+        joined.setdefault(owner(number), []).append(track)
+    curves = list(joined.values())
+    while True:
+        pairs = [
+            (_apart(first, second), number, other)
+            for number, first in enumerate(curves)
+            for other, second in enumerate(curves)
+            if _first(second)[0] > _last(first)[0] - _RUN_GAP and number != other
+        ]
+        if not pairs:
+            break
+        _, number, other = min(pairs)
+        curves[number] += curves.pop(other)
+    return sorted(curves, key=lambda curve: -sum(track.pixels for track in curve))
+
+
+def _folded(track: _Track, end: int, other: _Track, column: int) -> bool:
+    """Return whether two tracks that meet head ``_FOLD`` degrees apart or more.
+
+    ``end`` is 0 where the track starts, to compare the way it heads from
+    its first ``_FIT`` points with the way the other heads from ``column``
+    on, and -1 where it ends, to compare the ways both head over their last
+    ``_FIT`` points.
+    """
+    if end == 0:
+        mine = slice(None, _FIT)
+        start = int(np.searchsorted(other.columns, column))
+        theirs = slice(start, start + _FIT)
+    else:
+        mine = theirs = slice(-_FIT, None)
+    slopes = [
+        _slope(one.columns[part], one.rows[part])
+        for one, part in ((track, mine), (other, theirs))
+    ]
+    turn = math.degrees(abs(math.atan(slopes[0]) - math.atan(slopes[1])))
+    return turn >= _FOLD
+
+
+def _first(curve: Sequence[_Track]) -> tuple[int, float]:
+    """Return the column and row of a curve's first point."""
+    track = min(curve, key=lambda one: one.columns[0])
+    return track.columns[0], track.rows[0]
+
+
+def _last(curve: Sequence[_Track]) -> tuple[int, float]:
+    """Return the column and row of a curve's last point."""
+    track = max(curve, key=lambda one: one.columns[-1])
+    return track.columns[-1], track.rows[-1]
+
+
+def _apart(first: Sequence[_Track], second: Sequence[_Track]) -> float:
+    """Return how far one curve starts from where another ends, in pixels."""
+    (end, row), (start, other) = _last(first), _first(second)
+    return math.hypot(start - end, other - row)
+
+
+def _slope(columns: Sequence[int], rows: Sequence[float]) -> float:
+    """Return the slope of the line fitted to points by least squares, or 0."""
+    if len(set(columns)) <= 1:
+        return 0.0
+    slope, _ = np.polyfit(columns, rows, 1)
+    return float(slope)
+
+
+def _points(
+    curve: Sequence[_Track],
+    at: dict[int, list[npt.NDArray[np.intp]]],
+    left: int,
+    top: int,
+    height: int,
+) -> npt.NDArray[np.float64]:
+    """Return the points of a curve, as ``trace_series`` gives them.
+
+    ``at`` holds the runs of each column. A run that two of the curve's
+    tracks share gives one point, at its median row, and the columns that a
+    track crosses a gap in, between dashes, give points on the straight line
+    across the gap.
+    """
+    found: dict[tuple[int, int], list[float]] = {}
+    for track in curve:
+        for column, row, run in zip(track.columns, track.rows, track.runs, strict=True):
+            found.setdefault((column, run), []).append(row)
+    rows = [
+        (column, mine[0] if len(mine) == 1 else float(np.median(at[column][run])))
+        for (column, run), mine in found.items()
+    ]
+    for track in curve:
+        gaps = np.flatnonzero(np.diff(track.columns) > 1)
+        for start, end in zip(gaps, gaps + 1, strict=True):
+            across = np.arange(track.columns[start] + 1, track.columns[end])
+            heights = np.interp(
+                across,
+                [track.columns[start], track.columns[end]],
+                [track.rows[start], track.rows[end]],
+            )
+            rows += zip(across.tolist(), heights.tolist(), strict=True)
+    # The centre of the pixel in column c and row r is at (c + 0.5, height - r - 0.5).
+    data = np.array(rows, dtype=np.float64) * (1, -1) + (left + 0.5, height - top - 0.5)
+    return data[np.lexsort((data[:, 1], data[:, 0]))]
+
+
+def _described(
+    curve: Sequence[_Track],
+    at: dict[int, list[npt.NDArray[np.intp]]],
+    marked: npt.NDArray[np.bool_],
+) -> tuple[Style, float]:
+    """Return the style of a curve, by ``_style``, and its width, by ``_line_width``."""
+    width = _line_width(curve, at)
+    return _style(curve, at, width, marked), width
+
+
+def _line_width(
+    curve: Sequence[_Track], at: dict[int, list[npt.NDArray[np.intp]]]
+) -> float:
+    """Return the width of a curve's line, in pixels.
+
+    That is the median height of the runs it has alone, across the way it
+    heads: the height times the cosine of its slope there.
+    """
+    widths = []
+    for track in curve:
+        slopes = np.gradient(track.rows, track.columns) if track.span > 1 else [0.0]
+        widths += [
+            (at[column][run][-1] - at[column][run][0] + 1) / math.hypot(1, slope)
+            for column, run, shared, slope in zip(
+                track.columns, track.runs, track.shared, slopes, strict=False
+            )
+            if shared == 1
+        ]
+    return float(np.median(widths)) if widths else 1.0
+
+
+def _style(
+    curve: Sequence[_Track],
+    at: dict[int, list[npt.NDArray[np.intp]]],
+    width: float,
+    marked: npt.NDArray[np.bool_],
+) -> Style:
+    """Return the style of a curve's line, from the dashes along its tracks.
+
+    A dash is a stretch of neighbouring columns, and its length the diagonal
+    of the box around its runs. A curve inked along at least ``_SOLID`` of
+    its length, counting the gaps between its dashes, but not those whose
+    straight line across lies mostly within a pixel of ``marked`` pixels,
+    where markers were taken out, is solid. Otherwise a
+    dash is a dot if its length, less the width of the line, which the box
+    takes in across the dash, is at most ``_DOT`` times the width, and the
+    curve is dotted if at least ``_DOTTED`` of its dashes are dots, dashed if
+    at least that fraction are not, and dashdot otherwise.
+    """
+    lengths: list[float] = []
+    gaps: list[float] = []
+    for track in curve:
+        breaks = np.flatnonzero(np.diff(track.columns) > 1) + 1
+        pieces = np.split(np.arange(len(track.columns)), breaks)
+        for piece in pieces:
+            spans = [at[track.columns[i]][track.runs[i]] for i in piece]
+            extent = max(run[-1] for run in spans) - min(run[0] for run in spans) + 1
+            lengths.append(math.hypot(len(piece), extent))
+        for after in breaks:
+            ends = [track.columns[after - 1], track.columns[after]]
+            across = np.arange(ends[0] + 1, ends[1])
+            rows = np.interp(across, ends, track.rows[after - 1 : after + 1])
+            near = np.round(rows).astype(np.intp) + np.array([[-1], [0], [1]])
+            hidden = marked[np.clip(near, 0, len(marked) - 1), across].any(axis=0)
+            if 2 * np.count_nonzero(hidden) <= len(across):
+                down = track.rows[after] - track.rows[after - 1]
+                gaps.append(math.hypot(ends[1] - ends[0], down) - 1)
+    if sum(lengths) >= _SOLID * (sum(lengths) + sum(gaps)):
+        return "solid"
+    dots = float(np.mean([length - width <= _DOT * width for length in lengths]))
+    if dots >= _DOTTED:
+        return "dotted"
+    return "dashed" if dots <= 1 - _DOTTED else "dashdot"
+
+
+def _off(row: float, run: npt.NDArray[np.intp]) -> float:
+    """Return how far a row lies outside a run of rows, or 0 if within it."""
+    return float(max(run[0] - row, row - run[-1], 0))
 
 
 def _offsets(image: Image) -> npt.NDArray[np.float32]:
@@ -2156,11 +2915,11 @@ def _window(
 ) -> npt.NDArray[np.float32]:
     """Return part of an image, from its top-left corner, with zeros beyond it."""
     window = np.zeros((rows, columns), dtype=np.float32)
-    _place(window, area, -top, -left)
+    _stamp(window, area, -top, -left)
     return window
 
 
-def _place(
+def _stamp(
     canvas: npt.NDArray[np.float32], piece: npt.NDArray[np.float32], top: int, left: int
 ) -> None:
     """Draw a piece on a canvas from its top-left corner, keeping the higher level."""
@@ -2179,7 +2938,7 @@ def _render(
     """Draw markers' shapes in part of a plot area, from its top-left corner."""
     canvas = np.zeros(size, dtype=np.float32)
     for marker in markers:
-        _place(canvas, marker.shape, marker.top - top, marker.left - left)
+        _stamp(canvas, marker.shape, marker.top - top, marker.left - left)
     return canvas
 
 
@@ -2189,7 +2948,7 @@ def _counted(
     """Return where markers' shapes count in part of a plot area, outside masks."""
     canvas = np.zeros(size, dtype=np.float32)
     for marker in markers:
-        _place(canvas, marker.mask, marker.top - top, marker.left - left)
+        _stamp(canvas, marker.mask, marker.top - top, marker.left - left)
     return canvas > 0
 
 
@@ -2199,7 +2958,7 @@ def _footprints(
     """Return the pixels that markers' ink covers in a plot area, and a pixel around."""
     canvas = np.zeros(size[:2], dtype=np.float32)
     for marker in markers:
-        _place(
+        _stamp(
             canvas,
             (marker.shape >= _CONTRAST / 255).astype(np.float32),
             marker.top,

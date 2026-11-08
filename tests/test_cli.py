@@ -2,7 +2,6 @@
 
 import dataclasses
 import gzip
-import re
 import runpy
 import sys
 import warnings
@@ -21,12 +20,13 @@ from figrecover import (
     MarkerSeries,
     Panel,
     Point,
+    Series,
     __version__,
     cli,
     interactive,
     load_image,
 )
-from figrecover.cli import _names, main
+from figrecover.cli import _names, _options, main
 
 type Curve = Callable[[npt.NDArray[np.float64]], npt.NDArray[np.float64]]
 
@@ -38,6 +38,7 @@ GRID_LOCATIONS = ["-l", "80,44", "-l", "576,44", "-l", "80,167"]
 SPECTRUM = [str(EXAMPLES / "spectrum.png"), *POINTS]
 GRID = [str(EXAMPLES / "grid.png"), *POINTS]
 SERIES = [str(EXAMPLES / "series.png"), *POINTS, *LOCATIONS]
+STYLES = [str(EXAMPLES / "styles.png"), *POINTS, *LOCATIONS]
 LABELLED = str(EXAMPLES / "labelled.png")
 # The pixel positions of POINTS, and of the legend's markers, that
 # examples/make_examples.py prints.
@@ -57,6 +58,9 @@ LABELLED_PDF = str(EXAMPLES / "labelled.pdf")
 PDF_LOCATIONS = ["-l", "57.6,31.68", "-l", "414.72,31.68", "-l", "57.6,105.6"]
 SERIES_PDF = [str(EXAMPLES / "series.pdf"), *POINTS, *PDF_LOCATIONS]
 MARKERS_PDF = str(EXAMPLES / "markers.pdf")
+STYLES_PDF = str(EXAMPLES / "styles.pdf")
+# styles.pdf has the axes of series.pdf.
+STYLES_AT_POINTS = [STYLES_PDF, *POINTS, *PDF_LOCATIONS]
 # The positions of POINTS, and of the legend's markers, in markers.pdf, in
 # points, that examples/make_examples.py prints.
 MARKER_PDF_LOCATIONS = ["-l", "39.89,59.29", "-l", "451.44,59.29", "-l", "39.89,133.26"]
@@ -232,18 +236,16 @@ def test_says_when_the_image_is_greyscale(
     assert grey is not None
     cv2.imwrite(str(image), grey)
 
-    assert main([str(image), *POINTS, *LOCATIONS, "-n", "3"]) == 0
+    assert main([str(image), *POINTS, *LOCATIONS, "-n", "4"]) == 0
 
-    errors = capsys.readouterr().err.splitlines()
-    assert errors[0] == (
-        "figrecover: the image is greyscale, so curves are told apart by grey "
-        "level only"
+    # The two curves of one grey are told apart by where they run.
+    captured = capsys.readouterr()
+    assert captured.err == (
+        "figrecover: the image is greyscale, so curves of different colours may "
+        "share a grey\n"
+        "figrecover: colours: -c 919191 -c 000000 -c 5c5c5c:solid -c 5c5c5c:solid2\n"
     )
-    assert re.fullmatch(
-        "figrecover: the curve of colour #[0-9a-f]{6} crosses most columns 2 "
-        "times: it may be 2 curves of that colour, or loop",
-        errors[2],
-    )
+    assert_recovers_series(captured.out, [growth, trend, decay, wave])
 
 
 def test_traces_the_given_colours(
@@ -408,6 +410,40 @@ def test_reports_markers_ambiguous_hidden_or_missing(
         "figrecover: series 2: 2 found, 1 of them ambiguous near x = 2.5, and 2 "
         "probably hidden near x = 1.5, 2\n"
     )
+
+
+def test_tells_curves_of_one_colour_apart_by_style(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main([*STYLES, "-n", "3"]) == 0
+
+    captured = capsys.readouterr()
+    options = "-c 000000:solid -c 000000:dashed -c 000000:dotted"  # most pixels first
+    assert captured.err == (
+        "figrecover: the image is greyscale, so curves of different colours may "
+        f"share a grey\nfigrecover: colours: {options}\n"
+    )
+    assert_recovers_styles(captured.out, [decay, growth, wave])
+
+
+def test_traces_the_given_styles(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main([*STYLES, "-c", "000000:dotted", "-c", "000000:solid"]) == 0
+
+    assert_recovers_styles(capsys.readouterr().out, [wave, decay])
+
+
+def assert_recovers_styles(text: str, curves: Sequence[Curve]) -> None:
+    """Check that each series in CSV output follows its true curve, in order.
+
+    A dashed or dotted curve may start and end a gap in from the axes.
+    """
+    data = read_csv(text, header="series,x,y")
+    assert set(data[:, 0]) == set(range(1, len(curves) + 1))
+    for series, curve in enumerate(curves, start=1):
+        x, y = data[data[:, 0] == series, 1:].T
+        assert x.min() < 0.15
+        assert x.max() > 9.85
+        np.testing.assert_allclose(y, curve(x), atol=0.04)
 
 
 def test_writes_one_series_without_a_series_column(
@@ -916,6 +952,52 @@ def test_traces_series_of_markers_in_pdf_files_by_colour(
         np.testing.assert_allclose(y, curve(x), atol=1e-5)
 
 
+def test_tells_curves_of_pdf_files_apart_by_style(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main([STYLES_PDF, "-n", "3"]) == 0
+
+    captured = capsys.readouterr()
+    options = "-c 000000:dotted -c 000000:dashed -c 000000:solid"  # longest first
+    assert captured.err.endswith(f"figrecover: colours: {options}\n")
+    data = read_csv(captured.out, header="series,x,y")
+    for series, curve in enumerate([wave, growth, decay], start=1):
+        x, y = data[data[:, 0] == series, 1:].T
+        np.testing.assert_allclose(y, curve(x), atol=1e-5)
+
+
+def test_picks_curves_of_pdf_files_by_style(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main([STYLES_PDF, "-c", "000000:Solid", "-c", "#000000"]) == 0
+
+    data = read_csv(capsys.readouterr().out, header="series,x,y")
+    x, y = data[data[:, 0] == 1, 1:].T
+    np.testing.assert_allclose(y, decay(x), atol=1e-5)
+    # Without a style, every curve of the colour, as one.
+    x, y = data[data[:, 0] == 2, 1:].T
+    near = [np.isclose(y, curve(x), atol=1e-5) for curve in (decay, growth, wave)]
+    assert np.all(np.any(near, axis=0))
+    assert np.all(np.any(near, axis=1))
+
+
+def test_writes_the_options_that_pick_each_series() -> None:
+    def series(colour: tuple[int, int, int], style: str) -> Series:
+        return Series(colour, style, 1, np.zeros((1, 2)))  # type: ignore[arg-type]
+
+    every = [
+        series((0, 0, 0), "solid"),
+        series((255, 0, 0), "solid"),
+        series((0, 0, 0), "dashed"),
+        series((0, 0, 0), "solid"),
+    ]
+
+    assert _options(every, every) == [
+        "000000:solid",
+        "ff0000",
+        "000000:dashed",
+        "000000:solid2",
+    ]
+
+
 @pytest.mark.usefixtures("without_pdf")
 def test_reports_a_missing_pdf_extra(capsys: pytest.CaptureFixture[str]) -> None:
     assert main([LABELLED_PDF]) == 1
@@ -1011,6 +1093,28 @@ def test_can_be_cancelled(monkeypatch: pytest.MonkeyPatch) -> None:
         ([*SERIES, "-n", "5"], "found only 4 of 5 curves"),
         ([*SERIES, "-c", "00ffff"], "no curve of colour #00ffff found"),
         (
+            [*STYLES_AT_POINTS, "-c", "000000", "-c", "0" * 6],
+            "-c 000000 is given twice",
+        ),
+        ([*SERIES, "-c", "000000:dashed"], "no dashed series of colour #000000"),
+        (
+            [*STYLES_AT_POINTS, "-c", "000000:solid2", "-c", "000000:solid2"],
+            "-c 000000:solid2 is given twice",
+        ),
+        ([*STYLES_AT_POINTS, "-n", "4"], "found only 3 of 4 curves"),
+        (
+            [*STYLES_AT_POINTS, "-c", "000000:dashed2"],
+            "found only 1 dashed series of colour #000000",
+        ),
+        (
+            [*STYLES_AT_POINTS, "-c", "000000:markers"],
+            "no markers series of colour #000000 found",
+        ),
+        (
+            [*STYLES_AT_POINTS, "-c", "ff0000:solid"],
+            "no curve of colour #ff0000 found",
+        ),
+        (
             [*SPECTRUM, "-l", "80,44", "-l", "5760,44", "-l", "80,147"],
             "the -l location 5760,44 lies outside the 640x400 image",
         ),
@@ -1074,6 +1178,11 @@ def test_accepts_points_with_spaces_and_exponents(
         ([*SERIES, "-n", "two"], "expected a positive whole number"),
         ([*SERIES, "-c", "red"], "expected a colour written as RRGGBB, got 'red'"),
         ([*SERIES, "-c", "#12345"], "expected a colour written as RRGGBB"),
+        ([*SERIES, "-c", "000000:solid0"], "expected a colour written as RRGGBB"),
+        (
+            [*SERIES, "-c", "000000:wavy"],
+            "expected a style of solid, dashed, dotted, dashdot, markers, got",
+        ),
         ([*SERIES, "-n", "2", "-c", "000000"], "not allowed with argument"),
         ([*SERIES, "-c", "000000", "-m", "1,1"], "not allowed with argument"),
         (["plot.png", "-l", "80,44"], "give the reference points of the -l"),

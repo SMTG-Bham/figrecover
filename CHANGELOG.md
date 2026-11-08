@@ -13,8 +13,8 @@ The first release.
   strength, such as `2ca02c` for matplotlib's green, and ranked by pixels.
   Where translucent bands overlap is not taken for a curve. When `-n` finds
   too few curves, it names those found and the colours left out, and why;
-  it warns when a curve crosses most columns more than once, as curves
-  sharing a colour do; and it says when an image is greyscale. The edges of
+  a colour taken as one curve warns when it crosses most columns more than
+  once; and it says when an image is greyscale. The edges of
   a dark curve are no longer taken for a lighter grey curve, and grid lines
   broken by the curves over them, or dashed, are skipped.
   `examples/benchmark_colours.py` measures finding several series by
@@ -32,6 +32,19 @@ The first release.
   key in a curve's colour is not traced as part of that curve, and an
   inset's markers are not taken for a series' with `-m`; step plots, bars,
   shaded spans, grid lines and boxes drawn around part of a curve are kept.
+- Curves that share a colour are told apart by how they are drawn. In
+  images, each curve of a colour is followed through the places where it
+  crosses or touches another, and across the gaps between its dashes, and
+  named by its dashes `solid`, `dashed`, `dotted` or `dashdot`; a dashed or
+  dotted curve gives a point in every column. In PDF files, lines are told
+  apart by their widths and dashes, separate lines of one style stay apart,
+  and markers by their shapes and fills. `-n` lists each as a curve and
+  prints options such as `-c 000000:dashed`, while a plain `-c` takes every
+  curve of its colour, and the preview draws curves that share a colour in
+  colours of their own. Markers and a line in one colour, such as data and a
+  fit, give the markers as a series of points and the line as a curve.
+  `find_series`, `trace_series`, `find_pdf_series` and `trace_pdf_series`
+  return them as `Series`, each with its colour, style, width and points.
 - `-m` tells series apart by the shapes of their markers, such as squares,
   diamonds, open circles and crosses, cut out of the legend, for plots whose
   series share a colour, as many spreadsheet charts do. It gives a point at

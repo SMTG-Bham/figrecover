@@ -311,10 +311,9 @@ def test_leaves_turned_images_as_they_are_when_told_to(
 
     assert main([saved(tmp_path, image), *POINTS, *options, "--no-level"]) == 0
 
-    # The frame is traced as part of the curve, as it is not level, and so
-    # it crosses most columns more than once.
+    # The frame is traced as part of the curve, as it is not level.
     captured = capsys.readouterr()
-    assert "crosses most columns 3 times" in captured.err
+    assert captured.err == ""
     assert len(read_csv(captured.out)) > 1000
 
 

@@ -24,7 +24,7 @@ from matplotlib.legend import Legend
 type Curve = Callable[[npt.NDArray[np.float64]], npt.NDArray[np.float64]]
 
 HERE = Path(__file__).parent
-ALSO_PDF = {"labelled", "logarithmic", "markers", "series"}  # also saved as PDFs
+ALSO_PDF = {"labelled", "logarithmic", "markers", "series", "styles"}  # and PDFs
 # Also saved as SVG files: name.svg with text drawn as glyph outlines, as
 # matplotlib draws it by default, and name-text.svg with text as text.
 ALSO_SVG = {"labelled", "logarithmic", "markers", "series", "rasterised"}
@@ -267,6 +267,20 @@ def draw_keyed(name: str, series: list[tuple[str, str, Curve]]) -> None:
     save(name, figure, axes, [(0, 0), (10, 0), (0, 1)], legend)
 
 
+def draw_styles(name: str, curves: dict[str, Curve]) -> None:
+    """Draw black curves, keyed by line style, from x of 0 to 10, and print the points.
+
+    They cross one another, and are told apart only by their dashes.
+    """
+    figure, axes = plt.subplots(figsize=(6.4, 4), dpi=100)
+    x = np.linspace(0, 10, 2000)
+    for style, curve in curves.items():
+        axes.plot(x, curve(x), color="black", linewidth=1.5, linestyle=style)
+    axes.set(xlabel="x", ylabel="y", xlim=(0, 10), ylim=(0, 3))
+    axes.spines[["top", "right"]].set_visible(False)
+    save(name, figure, axes, [(0, 0), (10, 0), (0, 1)])
+
+
 def draw_panels(name: str) -> None:
     """Draw four plots in a figure, labelled (a) to (d), and print their points.
 
@@ -467,6 +481,7 @@ crossing = [("o", rising), ("s", falling), ("^", shallow), ("D", above)]
 draw_keyed("overlapping", [(marker, "black", curve) for marker, curve in crossing])
 hues = ["tab:blue", "tab:orange", "tab:green", "tab:red"]
 draw_keyed("coloured", [("o", hue, ripple(i)) for i, hue in enumerate(hues)])
+draw_styles("styles", {"-": decay, "--": growth, ":": wave})
 draw_slanted("slanted", damped, ("Time (s)", "Voltage (mV)"))
 draw_panels("panels")
 draw_shared("shared")
