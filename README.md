@@ -3,7 +3,7 @@
 Recover data from images of plots. figrecover finds the curves in a picture of
 a plot, such as a scanned figure or a screenshot, and writes their points as
 CSV in the plot's own units. Curves are told apart by colour. It reads plots in
-PDF files too, exactly, from what they draw rather than from pixels.
+PDF and SVG files too, exactly, from what they draw rather than from pixels.
 
 It suits batches of similar plots: calibrate once, then digitize every image
 the same way from the command line.
@@ -40,6 +40,9 @@ PDF reader. Extras combine, as in `figrecover[ocr,pdf]`:
 ```bash
 uv tool install "figrecover[pdf] @ git+https://github.com/SMTG-Bham/figrecover"
 ```
+
+SVG files (see [SVG files](#svg-files)) need no extra: figrecover reads them
+with Python's own XML parser.
 
 ## Usage
 
@@ -662,6 +665,72 @@ figrecover examples/rasterised.pdf -n 2
 figrecover: colours: -c ff7f0e -c 1f77b4
 ```
 
+### SVG files
+
+Give an SVG file, and figrecover reads it as it reads a PDF file, exactly,
+from what it draws: its text, its paths, through their transforms and clip
+paths, and its images. It needs no extra. Files compressed with gzip, such as
+`.svgz` and `.svg.gz` files, are read too, and a file named otherwise is taken
+for an SVG file if it starts with a tag, and an `<svg` tag in its first 4 KiB:
+
+```bash
+figrecover examples/labelled.svg
+```
+
+```text
+figrecover: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10
+figrecover: y-axis "Voltage (mV)" with ticks at -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1
+```
+
+The examples `labelled`, `logarithmic`, `series`, `markers` and `rasterised`
+are saved as SVG files twice: `name.svg` with its text drawn as glyph outlines,
+as matplotlib draws it by default, and `name-text.svg` with
+`svg.fonttype: none`, as text. On both, the recovered points lie within
+4×10⁻⁸ of the true curves, as matplotlib writes positions to six decimal places
+of a point, every marker within 2×10⁻⁸ of its point, and the curves drawn as an
+image in `rasterised.svg` as closely as in `rasterised.pdf`.
+
+- Positions in an SVG file are in points from the bottom-left corner of its
+  drawing, as in a PDF file: so are `-l` locations and `--box`, which chooses
+  part of the drawing to read; `--page` is refused. A user unit, in which an
+  SVG file places what it draws, is a CSS pixel, 0.75 points, unless the
+  root's `width`, `height` and `viewBox` make it otherwise: matplotlib's are
+  points, so its SVG and PDF files share their positions.
+- Text is read from `<text>` and `<tspan>` elements, each character placed by
+  its `x`, `y`, `dx` and `dy`, through `transform`s, so rotated titles read as
+  in a PDF file. Superscripts and subscripts are found by their sizes and
+  heights, raised or lowered by `baseline-shift`, or by `dy` as Plotly raises
+  its exponents. An SVG file does not give the widths of its characters, so
+  each is taken to be 0.6 of its font size wide, 0.7 for capitals, or 0.3 or
+  0.9 for narrow and wide ones: a label anchored at its middle or end, as
+  tick labels usually are, lies exactly where it is drawn, and its tick at
+  its tick mark.
+- matplotlib's text drawn as glyph outlines is read from the comment that
+  matplotlib writes before each line of it, in a group whose id starts
+  `text_`, with mathtext such as `$\mathdefault{10^{-1}}$` written as plain
+  text, `10⁻¹`, and the box of the outlines. So is its mathtext written as
+  text, which matplotlib writes a character at a time, grouped by font rather
+  than in the order they are read.
+- Markers drawn with `<use>`, as matplotlib draws them, mark the point at the
+  `x` and `y` of the `<use>`, as a form marks its origin in a PDF file; other
+  markers, such as `<circle>` elements or Plotly's paths of arcs, mark the
+  middles of their boxes. Arcs pass through their points at each quarter turn
+  of their ellipses, as do circles and ellipses.
+- Colours come from presentation attributes, such as `stroke="#1f77b4"`, and
+  `style` attributes, as elements inherit them, in hexadecimal, `rgb()` or by
+  name, including `currentColor`; `opacity` and `stroke-opacity` of 0 hide a
+  path. Each path keeps its stroke width and dash pattern, and a gradient
+  paints in its first colour.
+- Images, given as data URIs or as files beside the SVG file, are traced as in
+  a PDF file, placed and turned as they are shown: matplotlib draws them
+  upside down and turns them over.
+- The preview is drawn by figrecover itself, with OpenCV: the paths, the
+  images and the text, in a font of its own.
+- Files that declare XML entities are refused, as their entities can expand
+  to fill the memory: the "billion laughs" is refused in a tenth of a
+  millisecond. So are files of more than 64 MiB, decompressed, and those
+  that draw more than a million elements, counting each `<use>`.
+
 ### Python
 
 The same steps are available as a library:
@@ -742,7 +811,8 @@ data = [calibration.to_data(series) for series in markers]
 lines first, if needed.
 
 With the `pdf` extra, `load_pdf` reads what a page of a PDF file draws, and
-the same steps work on it, in points from the page's bottom-left corner:
+the same steps work on it, in points from the page's bottom-left corner; so
+does `load_svg`, for an SVG file, without the extra:
 
 ```python
 from figrecover import find_pdf_colours, load_pdf, read_pdf_axes, trace_pdf_curves
@@ -760,6 +830,8 @@ as an image, at 2 pixels to the point, and `remove_pdf_grid(drawing)` paints
 over grid lines in the images that it draws. `find_pdf_markers(drawing, keys,
 origin)` finds series by the shapes of their markers, as `find_markers` does
 in an image, from the position of a marker of each series in points.
+`load_svg(path, box)` takes the part of an SVG file's drawing to read in the
+same way, and `render_svg(drawing)` draws what it read, with OpenCV.
 
 ## How it works
 
@@ -893,6 +965,26 @@ With a PDF file, steps 1 to 8 give way to these:
    an image of a plot from where the axes cross in it, or from its edges if
    they cross outside it, and its curves are ranked with those drawn as paths.
 
+With an SVG file, step 1 gives way to this:
+
+1. Python's XML parser reads the file, refusing it at the first declaration
+   of an entity. Each element is drawn through the transforms of those that
+   hold it, and the viewBoxes of the `<svg>` elements, into points from the
+   bottom-left corner, taking the properties it inherits from them. A
+   `<use>` draws its target with its origin at its `x` and `y`, as a form
+   marks a marker in a PDF file. A path passes through the ends of its
+   pieces, and an arc through the points at each quarter turn of its
+   ellipse; its clip is the box around its clip path's shapes, within those
+   of the elements that hold it. The characters of `<text>` and `<tspan>`
+   elements are placed after one another, 0.6 font sizes apart, 0.7 for
+   capitals, or 0.3 or 0.9 for narrow and wide ones, unless an `x` or `y`
+   places them, and each run of them is moved back by half its width or all
+   of it if anchored at its middle or end, then joined into texts as a PDF
+   file's are. Each line that matplotlib writes after a comment, as glyph
+   outlines or as mathtext a character at a time, is a text of its own: the
+   comment, with its mathtext written plainly, in the box of its outlines or
+   characters.
+
 ## Limitations
 
 - Curves are told apart by colour, or by the shapes of their markers, so
@@ -915,7 +1007,8 @@ With a PDF file, steps 1 to 8 give way to these:
 - Panels are found by axis lines that meet, so a figure of plots without
   them, or of plots whose axes touch, as plots sharing an axis can, is read
   as one plot. Legends shared by several panels are not read. Panels and
-  insets are found in images only: in a PDF file, give `--box` to read one.
+  insets are found in images only: in a PDF or SVG file, give `--box` to read
+  one.
 - Insets and legends are painted out only inside a frame of four lines that
   stands clear of the axes' own frame: an inset in the corner of the axes,
   sharing two of their lines, is traced as part of the plot, and not read as
@@ -933,7 +1026,16 @@ With a PDF file, steps 1 to 8 give way to these:
   inset is then painted out, unread, without a warning, as a legend is.
 - In a PDF file, the text must be text to read the axes: text drawn as
   outlines, as some programs export it, has none to read, so give `-p` and
-  `-l`.
+  `-l`. So it must be in an SVG file, other than matplotlib's glyph outlines:
+  glyphs that cairo draws, in `<use>` elements of targets whose ids start
+  `glyph`, are left out.
+- In an SVG file, only presentation attributes and `style` attributes give
+  colours: `<style>` sheets are not read, so a file styled by classes, as
+  Adobe Illustrator writes one, is read with SVG's defaults, filled in
+  black. Filters, masks and patterns are not read, and a gradient is its
+  first colour. A clip path clips to the box around it, and a label that is
+  not anchored at its middle or end lies up to a few tenths of a font size
+  from where it is drawn, as its characters' widths are estimated.
 - In a PDF file, lines that are straight along an axis are left out, as grid
   lines are, so a constant curve drawn as a single horizontal line is too.
 - In a PDF file, a colour drawn with markers gives only the points they mark,
@@ -1010,6 +1112,7 @@ protection.
 │   ├── digitize.py          # image loading, grid removal, curve colours and tracing
 │   ├── interactive.py       # window for clicking on reference points
 │   ├── pdf.py               # reading plots from PDF files, from their drawing
+│   ├── svg.py               # reading plots from SVG files, from their drawing
 │   └── cli.py               # the figrecover command
 └── tests/
 ```

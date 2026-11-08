@@ -1,6 +1,7 @@
 """Tests for the command-line interface, using the example plots."""
 
 import dataclasses
+import gzip
 import runpy
 import sys
 import warnings
@@ -54,6 +55,7 @@ MARKERS_PDF = str(EXAMPLES / "markers.pdf")
 # The positions of POINTS, and of the legend's markers, in markers.pdf, in
 # points, that examples/make_examples.py prints.
 MARKER_PDF_LOCATIONS = ["-l", "39.89,59.29", "-l", "451.44,59.29", "-l", "39.89,133.26"]
+LABELLED_SVG = str(EXAMPLES / "labelled.svg")
 MARKER_PDF_KEYS = [
     *("-m", "108.45,12.91", "-m", "187.85,12.91"),
     *("-m", "272.06,12.91", "-m", "347.51,12.91"),
@@ -747,6 +749,77 @@ def test_reports_a_missing_pdf_extra(capsys: pytest.CaptureFixture[str]) -> None
     assert "needs the pdf extra" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("name", ["labelled.svg", "labelled-text.svg"])
+def test_reads_svg_files_exactly(
+    name: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    preview = tmp_path / "preview.png"
+
+    assert main([str(EXAMPLES / name), "--preview", str(preview)]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.err == (
+        'figrecover: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10\n'
+        'figrecover: y-axis "Voltage (mV)" with ticks at '
+        "-0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1\n"
+    )
+    data = read_csv(captured.out, header="Time (s),Voltage (mV)")
+    # As exact as the 6 significant figures of the CSV file.
+    np.testing.assert_allclose(data[:, 1], ringing(data[:, 0]), atol=1e-5)
+    image = cv2.imread(str(preview))
+    assert image is not None
+    assert image.shape[0] == 2 * 288  # the drawing, 2 pixels to the point
+    assert np.any(np.all(image == (255, 0, 0), axis=-1))  # the ticks, in blue
+
+
+def test_reads_svg_files_by_their_start_and_in_a_box(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    figure = tmp_path / "figure"
+    figure.write_bytes((EXAMPLES / "series-text.svg").read_bytes())
+    compressed = tmp_path / "figure.svg.gz"
+    compressed.write_bytes(gzip.compress(figure.read_bytes()))
+    box = ["--box", "0,0,460.8,288"]
+
+    assert main([str(figure), *POINTS, *PDF_LOCATIONS, *box, "-c", "1f77b4"]) == 0
+    data = read_csv(capsys.readouterr().out)
+    np.testing.assert_allclose(data[:, 1], decay(data[:, 0]), atol=1e-5)
+    assert main([str(compressed), "-n", "4"]) == 0
+    assert capsys.readouterr().err.endswith(
+        "figrecover: colours: -c 2ca02c -c 1f77b4 -c ff7f0e -c 000000\n"
+    )
+
+
+@pytest.mark.usefixtures("without_pdf")
+def test_reads_svg_files_without_the_pdf_extra(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main([LABELLED_SVG, "--preview", str(tmp_path / "preview.png")]) == 0
+
+    data = read_csv(capsys.readouterr().out, header="Time (s),Voltage (mV)")
+    np.testing.assert_allclose(data[:, 1], ringing(data[:, 0]), atol=1e-5)
+
+
+def test_asks_for_missing_locations_in_svg_files_and_prints_them(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    shown: list[Image] = []
+
+    def pick_points(image: Image, _labels: Sequence[str]) -> list[Point]:
+        shown.append(image)
+        # The drawing is shown 2 pixels to the point.
+        return [(115.2, 63.36), (829.44, 63.36), (115.2, 211.2)]
+
+    monkeypatch.setattr(interactive, "pick_points", pick_points)
+
+    assert main([str(EXAMPLES / "series.svg"), *POINTS, "-c", "1f77b4"]) == 0
+    assert shown[0].shape == (576, 922, 3)
+    captured = capsys.readouterr()
+    assert captured.err == f"figrecover: locations: {' '.join(PDF_LOCATIONS)}\n"
+    data = read_csv(captured.out)
+    np.testing.assert_allclose(data[:, 1], decay(data[:, 0]), atol=1e-5)
+
+
 def test_can_be_cancelled(monkeypatch: pytest.MonkeyPatch) -> None:
     def pick_points(_image: Image, _labels: Sequence[str]) -> list[Point]:
         raise KeyboardInterrupt
@@ -774,6 +847,7 @@ def test_can_be_cancelled(monkeypatch: pytest.MonkeyPatch) -> None:
         ),
         ([*MARKERS, "-m", "148,18", "-m", "600,18"], "found no marker near 600,18"),
         ([LABELLED_PDF, "--page", "2"], "'" + LABELLED_PDF + "' has no page 2"),
+        (["missing.svg"], "cannot read SVG 'missing.svg'"),
         (
             [str(EXAMPLES / "series.pdf"), *POINTS, "-l", "0,0", "-l", "999,0"],
             "the -l location 999,0 lies outside the page read, 0,0,460.8,288",
@@ -835,6 +909,7 @@ def test_accepts_points_with_spaces_and_exponents(
         (["plot.png", "--page", "2"], "--page and --box choose what to read in a PDF"),
         (["plot.png", "--box", "0,0,1,1"], "--page and --box choose what to read"),
         ([LABELLED_PDF, "--page", "0"], "expected a positive whole number, got '0'"),
+        ([LABELLED_SVG, "--page", "1"], "--page chooses a page of a PDF file; an SVG"),
         ([LABELLED_PDF, "--box", "0,0,1"], "expected a box written as x0,y0,x1,y1"),
         ([LABELLED_PDF, "--box", "0,0,inf,1"], "expected finite numbers in the box"),
         ([LABELLED_PDF, "--box", "1,0,0,1"], "whose x1 and y1 exceed its x0 and y0"),

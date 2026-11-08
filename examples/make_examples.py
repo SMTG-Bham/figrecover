@@ -6,7 +6,7 @@
 
 Run from the repository root with ``uv run examples/make_examples.py``. It
 prints the pixel position of each reference point, for figrecover's -l option,
-or in a PDF its position in points.
+or in a PDF its position in points, which is its position in the SVG files too.
 """
 
 from collections.abc import Callable
@@ -23,6 +23,10 @@ type Curve = Callable[[npt.NDArray[np.float64]], npt.NDArray[np.float64]]
 
 HERE = Path(__file__).parent
 ALSO_PDF = {"labelled", "logarithmic", "markers", "series"}  # also saved as PDFs
+# Also saved as SVG files: name.svg with text drawn as glyph outlines, as
+# matplotlib draws it by default, and name-text.svg with text as text.
+ALSO_SVG = {"labelled", "logarithmic", "markers", "series", "rasterised"}
+plt.rcParams["svg.hashsalt"] = "figrecover"  # the same ids in SVG files each time
 
 
 def spectrum(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
@@ -331,11 +335,18 @@ def save_pdf(
     """Save a plot as a PDF, and print the positions of reference points in points.
 
     With a legend, also print the positions of its markers. The PDF's date is
-    left out, so that it is drawn the same each time.
+    left out, so that it is drawn the same each time. Plots named in
+    ``ALSO_SVG`` are saved as SVG files too, in points, as the PDF is.
     """
     figure.savefig(
         HERE / f"{name}.pdf", facecolor="white", metadata={"CreationDate": None}
     )
+    if name in ALSO_SVG:
+        for stem, fonttype in [(name, "path"), (f"{name}-text", "none")]:
+            with plt.rc_context({"svg.fonttype": fonttype}):
+                figure.savefig(
+                    HERE / f"{stem}.svg", facecolor="white", metadata={"Date": None}
+                )
     # Display coordinates are pixels, of which there are dpi to 72 points,
     # but the legend keeps those of the PDF's drawing, at 72 to the inch.
     positions = axes.transData.transform(points) * 72 / figure.dpi

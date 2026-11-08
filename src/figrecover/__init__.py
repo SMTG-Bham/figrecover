@@ -26,6 +26,7 @@ from .pdf import (
     render_pdf,
     trace_pdf_curves,
 )
+from .svg import load_svg, render_svg
 
 __version__ = version("figrecover")
 
@@ -46,12 +47,14 @@ __all__ = [
     "find_pdf_markers",
     "load_image",
     "load_pdf",
+    "load_svg",
     "read_axes",
     "read_panels",
     "read_pdf_axes",
     "remove_grid",
     "remove_pdf_grid",
     "render_pdf",
+    "render_svg",
     "trace_curve",
     "trace_curves",
     "trace_pdf_curves",
