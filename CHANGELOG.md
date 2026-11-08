@@ -84,6 +84,17 @@ The first release.
   placed on the page. `--page` and `--box` choose the page and the part of it
   to read, such as one figure on a page of a paper, and positions on the page
   are in points.
+- figrecover reads plots in SVG files exactly too, without an extra, as it
+  reads them in PDF files: their paths through their transforms, viewBoxes and
+  clip paths, with their colours, stroke widths and dash patterns; markers
+  drawn with `<use>`; text from `<text>` and `<tspan>` elements, rotated, with
+  superscripts and subscripts raised by `baseline-shift` or `dy`, or from the
+  comments before matplotlib's glyph outlines and mathtext, written plainly;
+  and images, as data URIs or files. `.svgz` files are read too, and files
+  that declare XML entities, such as the billion laughs, are refused. The
+  preview is drawn with OpenCV. `load_svg` and `render_svg` do the same in
+  Python, and `examples/make_examples.py` saves five examples as SVG files,
+  with and without text drawn as glyph outlines.
 - `--preview` saves a faded copy of the image with each recovered curve drawn
   in its colour, and `--remove-grid` paints over grid lines before tracing.
 - Transparent pixels are treated as white, and plots with a dark background
