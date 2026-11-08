@@ -70,7 +70,10 @@ labels instead; see [Reading the axes](#reading-the-axes). For logarithmic
 axes, see [Logarithmic axes](#logarithmic-axes).
 
 figrecover traces the part of the image above and right of the lowest and
-leftmost reference points, so take them on the axis lines. A reversed axis,
+leftmost reference points, so take them on the axis lines. If they lie a
+little below or left of an axis line, up to 12 pixels, the part traced still
+starts just beyond the line, as if they had been taken on it, though the
+points are calibrated as given. A reversed axis,
 whose values fall from left to right or from bottom to top, starts at its
 largest value, so take the corner where the axes cross rather than the
 origin, and ticks on the axis lines.
@@ -755,9 +758,11 @@ in an image, from the position of a marker of each series in points.
    pixels to data for each axis, or to the logarithm of the data for a
    logarithmic axis. The leftmost and lowest reference points mark the axes.
 3. Pixels left of and below the axes are ignored, which drops the axes, their
-   ticks and labels. A frame closing the axes, a thin line along the top from
-   the y-axis that meets one down the right, is dropped with everything
-   beyond it. Frames inside what remains, such as those of insets and
+   ticks and labels. So are axis lines up to 12 pixels inside the axes
+   given: rows or columns of ink near them that run unbroken from the other
+   axis across 60% of the plot. A frame closing the axes, a thin line along
+   the top half from the y-axis that meets one down the right, is dropped
+   with everything beyond it. Frames inside what remains, such as those of insets and
    legends, are painted in the background colour with all they hold, and 3
    pixels around them, so an inset's curve or a legend's key is not traced
    as part of a curve of its colour. A frame is a box of four straight lines

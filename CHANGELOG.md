@@ -89,7 +89,9 @@ The first release.
 - Transparent pixels are treated as white, and plots with a dark background
   work as well as light ones. Pixel positions are those of pixel centres.
 - Reference points must be finite numbers, and `-l` positions must lie on the
-  image. `-o` and `--preview` refuse to overwrite the image, or each other.
+  image. Points taken up to 12 pixels below or left of the axis lines trace
+  the same points as those taken on them, rather than crashing or finding
+  no curve. `-o` and `--preview` refuse to overwrite the image, or each other.
 - A typed Python API: `Calibration`, with linear or logarithmic axes,
   `load_image`, `remove_grid`, `find_colours`, `trace_curves`, `trace_curve`,
   `find_markers` and, with the `ocr` extra, `read_axes`, and `read_panels`,
