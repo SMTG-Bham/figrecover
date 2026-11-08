@@ -14,6 +14,8 @@ from figrecover import (
     Image,
     Point,
     find_colours,
+    find_error_bars,
+    find_marker_error_bars,
     find_markers,
     load_image,
     remove_grid,
@@ -23,6 +25,7 @@ from figrecover import (
 
 type Function = Callable[[npt.NDArray[np.float64]], npt.NDArray[np.float64]]
 
+EXAMPLES = Path(__file__).parents[1] / "examples"
 HEIGHT, WIDTH = 200, 400
 ORIGIN = (40, 30)  # pixel position of the axes, from the bottom-left corner
 PIXELS_PER_UNIT = (35, 40)
@@ -630,6 +633,158 @@ def test_find_markers_needs_a_marker_at_each_key(key: Point, message: str) -> No
 
     with pytest.raises(ValueError, match=message):
         find_markers(image, [*keys, key], calibration.origin)
+
+
+def at(x: float, y: float) -> tuple[int, int]:
+    """Return the column and row of the pixel at a point of a synthetic plot."""
+    return (
+        round(ORIGIN[0] + x * PIXELS_PER_UNIT[0] - 0.5),
+        round(HEIGHT - ORIGIN[1] - y * PIXELS_PER_UNIT[1] - 0.5),
+    )
+
+
+def bar(
+    image: Image,
+    ends: tuple[tuple[float, float], tuple[float, float]],
+    colour: Colour = BLUE,
+    *,
+    caps: bool,
+) -> None:
+    """Draw an error bar between two points of a synthetic plot, with or without caps.
+
+    The bar is a pixel wide, and its caps, across its ends, 9 pixels long.
+    """
+    cv2.line(image, at(*ends[0]), at(*ends[1]), colour, 1)
+    for end in ends if caps else ():
+        column, row = at(*end)
+        if ends[0][0] == ends[1][0]:
+            cv2.line(image, (column - 4, row), (column + 4, row), colour, 1)
+        else:
+            cv2.line(image, (column, row - 4), (column, row + 4), colour, 1)
+
+
+def test_find_error_bars_follows_bars_to_their_ends() -> None:
+    image, calibration = synthetic_plot(curves=[(ORANGE, lambda x: 3.6 + 0 * x)])
+    points = [(1, 1.5), (3, 2.0), (5, 2.5), (7, 2.0), (9, 1.0), (9.5, 3.0)]
+    line = np.array([at(*point) for point in points[:5]])
+    cv2.polylines(image, [line], isClosed=False, color=BLUE, lineType=cv2.LINE_AA)
+    bar(image, ((1, 1.2), (1, 2.2)), caps=True)  # longer above than below
+    bar(image, ((3, 1.7), (3, 2.4)), caps=False)  # crossed by an orange mark
+    cv2.line(image, at(2.8, 2.25), at(3.2, 2.25), ORANGE, 2)
+    bar(image, ((5, 2.2), (5, 3.1)), caps=True)  # its upper end under one
+    cv2.line(image, at(4.8, 3.1), at(5.2, 3.1), ORANGE, 3)
+    bar(image, ((6.6, 2.0), (7.4, 2.0)), caps=True)  # across
+    bar(image, ((9, -0.5), (9, 1.4)), caps=False)  # down past the x-axis
+    for point in points:  # the last without bars or a line
+        cv2.circle(image, at(*point), 4, BLUE, -1, cv2.LINE_AA)
+
+    bars, orange = find_error_bars(image, [BLUE, ORANGE], calibration.origin)
+
+    # The ends of bars hidden by another colour, or beyond the plot, are not
+    # known. The bars end within a pixel, about 0.03 in x and y.
+    nan = np.nan
+    np.testing.assert_allclose(calibration.to_data(bars.points), points, atol=0.03)
+    low = [(nan, 1.2), (nan, 1.7), (nan, 2.2), (6.6, nan), (nan, nan), (nan, nan)]
+    high = [(nan, 2.2), (nan, 2.4), (nan, nan), (7.4, nan), (nan, 1.4), (nan, nan)]
+    np.testing.assert_allclose(calibration.to_data(bars.low), low, atol=0.03)
+    np.testing.assert_allclose(calibration.to_data(bars.high), high, atol=0.03)
+    assert len(orange.points) == 0
+    # The bars are left out of the line, which strays 0.27 with them.
+    (traced,) = trace_curves(image, [BLUE], calibration.origin)
+    data = calibration.to_data(traced)
+    lined = data[data[:, 0] < 9.1]
+    expected = np.interp(lined[:, 0], *np.array(points[:5]).T)
+    assert np.abs(lined[:, 1] - expected).max() < 0.1
+    assert data[:, 1].min() > 0.9
+
+
+# The four series that examples/make_examples.py draws in errorbars.png,
+# from the top: each colour and curve, its errors below and above, and to
+# each side, if it has bars across.
+ERROR_MARKED = np.arange(0.5, 10, 1.0)
+ERROR_SERIES: list[tuple[Colour, Function, tuple[float, float], float | None]] = [
+    ((31, 119, 180), lambda x: 3.4 + np.sin(x) / 4, (0.2, 0.2), None),
+    ((255, 127, 14), lambda x: 2.4 + np.cos(x) / 4, (0.1, 0.3), None),
+    ((44, 160, 44), lambda x: 1.5 + np.sin(x / 2) / 5, (0.15, 0.15), 0.3),
+    ((214, 39, 40), lambda x: 0.6 + 0.15 * np.cos(x / 2), (0.2, 0.2), None),
+]
+# Its calibration, from where matplotlib draws (0, 0), (10, 0) and (0, 1).
+ERROR_CALIBRATION = Calibration.from_points(
+    [(0, 0), (10, 0), (0, 1)], [(80, 44), (576, 44), (80, 121)]
+)
+
+
+def test_find_error_bars_reads_the_example_plot() -> None:
+    image = load_image(EXAMPLES / "errorbars.png")
+    origin = ERROR_CALIBRATION.origin
+
+    found = find_error_bars(image, [colour for colour, *_ in ERROR_SERIES], origin)
+
+    # matplotlib draws 49.6 pixels to a unit of x and 77 to one of y. The
+    # middles of the triangles, which are wider below, lie lower than their
+    # points, by up to 2.5 pixels; the rest within a pixel. Every bar ends
+    # within 2 pixels of its bound.
+    scale = np.array([ERROR_CALIBRATION.x_scale, ERROR_CALIBRATION.y_scale])
+    x = ERROR_MARKED
+    for bars, (colour, function, (below, above), across) in zip(
+        found, ERROR_SERIES, strict=True
+    ):
+        sideways = np.full_like(x, np.nan if across is None else across)
+        points = np.column_stack([x, function(x)])
+        low = np.column_stack([x - sideways, function(x) - below])
+        high = np.column_stack([x + sideways, function(x) + above])
+        off = 2.5 if colour == (214, 39, 40) else 1
+        np.testing.assert_allclose(
+            ERROR_CALIBRATION.to_data(bars.points), points, atol=off * scale.max()
+        )
+        for ends, truth in ((bars.low, low), (bars.high, high)):
+            error = np.abs(ERROR_CALIBRATION.to_data(ends) - truth) / scale
+            np.testing.assert_array_equal(np.isnan(error), np.isnan(truth))
+            assert np.nanmax(error) <= 2
+
+
+def test_trace_curves_leaves_out_error_bars() -> None:
+    image = load_image(EXAMPLES / "errorbars.png")
+    colours = [colour for colour, *_ in ERROR_SERIES]
+
+    traced = trace_curves(image, colours, ERROR_CALIBRATION.origin)
+
+    # The line through the orange markers, whose bars are longer above,
+    # strays no more than 0.01 of the y range (4) from the line through
+    # their points, and the green markers, with bars across, give points
+    # only where they lie, about 6 pixels each side.
+    _, orange, green, _ = (ERROR_CALIBRATION.to_data(curve) for curve in traced)
+    x = ERROR_MARKED
+    expected = np.interp(orange[:, 0], x, ERROR_SERIES[1][1](x))
+    assert np.abs(orange[:, 1] - expected).max() <= 0.01 * 4
+    assert np.abs(green[:, 0, np.newaxis] - x).min(axis=1).max() < 7 / 49.6
+
+
+def test_find_marker_error_bars_follows_bars_in_any_colour() -> None:
+    image, calibration, keys, markers = marker_plot(SHAPES[:2])
+    for x, y in markers[0][::6]:  # every sixth square, 12 pixels each way
+        column, row = round(x - 0.5), round(HEIGHT - y - 0.5)
+        cv2.line(image, (column, row - 12), (column, row + 12), BLACK, 1)
+        for end in (row - 12, row + 12):
+            cv2.line(image, (column - 4, end), (column + 4, end), BLACK, 1)
+
+    found = find_marker_error_bars(image, keys, calibration.origin)
+
+    markers = find_markers(image, keys, calibration.origin)
+    for bars, points in zip(found, markers, strict=True):
+        np.testing.assert_array_equal(bars.points, points)
+    # The caps lie 12 pixels from the middles of the squares, and the
+    # diamonds have no bars.
+    barred = np.zeros(len(markers[0]), dtype=np.bool_)
+    barred[::6] = True
+    lows, highs = found[0].low[:, 1], found[0].high[:, 1]
+    np.testing.assert_allclose(lows[barred], markers[0][barred, 1] - 12, atol=1)
+    np.testing.assert_allclose(highs[barred], markers[0][barred, 1] + 12, atol=1)
+    assert np.isnan(lows[~barred]).all()
+    assert np.isnan(highs[~barred]).all()
+    assert np.isnan(found[0].low[:, 0]).all()
+    assert np.isnan(found[1].low).all()
+    assert np.isnan(found[1].high).all()
 
 
 def test_load_image_reads_colour_stretched_to_the_full_range(tmp_path: Path) -> None:

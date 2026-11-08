@@ -11,6 +11,7 @@ import numpy as np
 import numpy.typing as npt
 
 from .calibration import Point
+from .errorbars import ErrorBars, _Bars, _filled_markers, _read_bars
 
 type Image = npt.NDArray[np.uint8]
 type Colour = tuple[int, int, int]
@@ -241,7 +242,9 @@ def trace_curves(
     pixel belongs to the common colour that it best matches when blended with
     the background, so the antialiased edges of a curve count towards it,
     unless it matches none, as black text among coloured curves does; and
-    specks of fewer than four pixels are ignored. Each image column gives one
+    specks of fewer than four pixels are ignored, as are the error bars of
+    filled markers, as ``find_error_bars`` finds them, so that they do not
+    pull the curve away from its points. Each image column gives one
     point for each branch of a curve that crosses it, at the median height of
     the branch's pixels there, so both sides of a loop are traced. See
     ``_follow`` for what a branch is.
@@ -279,7 +282,9 @@ def trace_curves(
             msg = f"colour #{bytes(colour).hex()} fills areas rather than a curve"
             raise ValueError(msg)
     height = image.shape[0]
-    return [_follow(labels == index, left, top, height) for index in indices]
+    return [
+        _follow(_without_bars(labels, index), left, top, height) for index in indices
+    ]
 
 
 def trace_curve(image: Image, origin: Point = (0, 0)) -> npt.NDArray[np.float64]:
@@ -363,6 +368,128 @@ def find_markers(
     return [
         np.array(sorted(points), dtype=np.float64).reshape(-1, 2) for points in centres
     ]
+
+
+def find_error_bars(
+    image: Image, colours: Sequence[Colour], origin: Point = (0, 0)
+) -> list[ErrorBars]:
+    """Find the filled markers of each colour in a plot, and their error bars.
+
+    The plot area is that which ``trace_curves`` traces, and each colour
+    picks the nearest common colour in it, as there. A filled marker is a
+    shape of its colour thicker than its lines and bars, by a pixel each
+    side or more, and its point is the middle of its box. Its error bars run
+    from the edges of the marker, up and down its middle column and across
+    its middle row, in its colour, to their ends, or to the middles of their
+    caps: short lines across their ends, wider than the bars. A bar may cross
+    ink of other colours up to 6 pixels wide. Before a cap, a bar needs only
+    a row; without one, it must run 5 pixels beyond its marker and be
+    straight, and not be a line of the colour that leaves the bar's path at
+    its end, as the marker's own line does. See ``_follow_bar``.
+
+    Args:
+        image: Colour image of a plot.
+        colours: The colour of each series, such as ``find_colours`` returns.
+        origin: Pixel position where the axes cross, measured from the
+            bottom-left corner.
+
+    Returns:
+        The error bars of each colour's markers, measured from the
+        bottom-left corner, sorted by x, then y. A bar whose end is hidden,
+        by a marker, another colour or the edge of the plot area, gives NaN
+        for that end, as does a marker without a bar that way.
+
+    Raises:
+        ValueError: If no curve has one of the colours.
+    """
+    plot, left, top = _plot_area(image, origin)
+    palette = _palette(plot)
+    indices = [_match(palette, colour) for colour in colours]
+    labels = _classify(plot, palette)
+    found = []
+    for index in indices:
+        points, low, high = _placed(_bars_of(labels, index), left, top, image.shape[0])
+        order = np.lexsort((points[:, 1], points[:, 0]))
+        found.append(ErrorBars(points[order], low[order], high[order]))
+    return found
+
+
+def _bars_of(labels: npt.NDArray[np.intp], index: int) -> _Bars:
+    """Return the error bars of the filled markers of a colour, by its index.
+
+    ``labels`` is the index of the colour of each pixel, as ``_classify``
+    labels them. See ``find_error_bars`` for which markers and bars are
+    found.
+    """
+    in_colour = labels == index
+    return _read_bars(in_colour, (labels > 0) & ~in_colour, _filled_markers(in_colour))
+
+
+def _without_bars(labels: npt.NDArray[np.intp], index: int) -> npt.NDArray[np.bool_]:
+    """Return where a colour lies, less the error bars of its filled markers.
+
+    ``labels`` is as ``_bars_of`` takes it.
+    """
+    return np.asarray((labels == index) & ~_bars_of(labels, index).drawn)
+
+
+def find_marker_error_bars(
+    image: Image, keys: Sequence[Point], origin: Point = (0, 0)
+) -> list[ErrorBars]:
+    """Find the markers of each series by their shapes, and their error bars.
+
+    The markers are those that ``find_markers`` finds, each the size of its
+    key's marker. Their error bars are followed as ``find_error_bars``
+    follows them, but in ink of any colour, 64 levels or more from the
+    background, as series told apart by their markers often share one.
+
+    Args:
+        image: Colour image of a plot.
+        keys: The pixel position of the marker in each series' legend key,
+            measured from the bottom-left corner.
+        origin: Pixel position where the axes cross, measured from the
+            bottom-left corner.
+
+    Returns:
+        The error bars of each key's markers, whose points are those that
+        ``find_markers`` returns, with the ends of their bars as
+        ``find_error_bars`` gives them.
+
+    Raises:
+        ValueError: If there is no marker at a key, or there is no plot area.
+    """
+    markers = find_markers(image, keys, origin)
+    levels = _ink_levels(image)
+    plot, left, top = _plot_area(image, origin)
+    ink = _ink_levels(plot) >= _CONTRAST / 255
+    height = image.shape[0]
+    found = []
+    for series, key in zip(markers, keys, strict=True):
+        size = np.array(_key_marker(levels, key)[0].shape) - 2  # less the margin
+        middles = np.column_stack([height - top - series[:, 1], series[:, 0] - left])
+        near, far = np.round(middles - size / 2), np.round(middles + size / 2)
+        boxes = np.column_stack([near[:, 0], far[:, 0], near[:, 1], far[:, 1]])
+        bars = _read_bars(ink, np.zeros_like(ink), boxes.astype(np.intp))
+        found.append(ErrorBars(series, *_placed(bars, left, top, height)[1:]))
+    return found
+
+
+def _placed(
+    bars: _Bars, left: int, top: int, height: int
+) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+    """Return the points and the ends of error bars found in a part of an image.
+
+    The part starts at column ``left`` and row ``top`` of an image ``height``
+    pixels tall, and positions are measured from its bottom-left corner: the
+    middles of the markers, the left and lower ends of their bars, and their
+    right and upper ends.
+    """
+    rows, columns = bars.middles.T
+    return (
+        np.column_stack([left + columns, height - top - rows]),
+        np.column_stack([left + bars.low[:, 1], height - top - bars.high[:, 0]]),
+        np.column_stack([left + bars.high[:, 1], height - top - bars.low[:, 0]]),
+    )
 
 
 def _plot_area(image: Image, origin: Point) -> tuple[Image, int, int]:
