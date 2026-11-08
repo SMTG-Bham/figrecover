@@ -183,13 +183,16 @@ figrecover: colours: -c 040404:solid -c 040404:dashed -c 040404:dotted
 
 ![Three crossing black curves, solid, dashed and dotted, each recovered in a colour of its own](examples/styles.preview.png)
 
-The curves of a colour come in that colour's place, most pixels first, and
-the preview draws curves that share a colour in colours of their own. A
-dashed or dotted curve gives a point in every column, those between its
-dashes on the straight line across the gap. On a plot of black solid,
-dashed and dotted curves at 1.5 points and 100 dots per inch, each curve
-lies within 0.005 of the y-axis range of the true curve in 98% of the
-columns, and two black lines that cross, as an X, keep to their own lines.
+Colours of one curve come in their usual order, and the curves of a colour of
+several come in among them by their pixels, most first: so the mean of pale
+replicates, drawn in the full colour, comes before the replicates, which cross
+one another and break into many pieces. The preview draws curves that share a
+colour in colours of their own. A dashed or dotted curve gives a point in
+every column, those between its dashes on the straight line across the gap. On
+a plot of black solid, dashed and dotted curves at 1.5 points and 100 dots per
+inch, each curve lies within 0.005 of the y-axis range of the true curve in
+98% of the columns, and two black lines that cross, as an X, keep to their own
+lines.
 
 In a PDF file, the style is read exactly from the dashes that each line is
 drawn with, a dash at most two line widths long being a dot, and lines of
@@ -206,6 +209,15 @@ figrecover: colours: -c 000000:dotted -c 000000:dashed -c 000000:solid
 A second curve of the same colour and style is numbered, such as
 `-c 000000:solid2`, and the colour alone, `-c 000000`, still takes every curve
 of that colour, as one.
+
+A colour drawn with filled markers and a line, such as data points and a curve
+fitted to them, gives the markers first, as a series of their own in the style
+`markers`, with a point at the middle of each marker, and then the line. On a
+plot of 19 points scattered about a fitted line, all in one colour, `-n 2`
+gives the 19 points, each within a pixel, and the line, within 0.005 of the
+y-axis range in 99% of the columns. In a PDF file, likewise, a line in the
+colour of markers is a curve of its own unless it passes through the markers
+alone, as a line joining them does.
 
 ### Markers
 
@@ -660,7 +672,9 @@ its ends.
   colour drawn with markers gives their points, in the order they are drawn,
   rather than the line through them, and `-n` and `-c` tell such series apart
   by colour too: a marker's colour is its fill, or its outline's for open
-  markers. Series that share a colour, as in `examples/markers.pdf`, are told
+  markers. With `-n`, or `-c` and a style, a line in that colour that does
+  not pass through the markers alone, such as a fit, is a curve of its own,
+  after them. Series that share a colour, as in `examples/markers.pdf`, are told
   apart by their markers' shapes with `-m`, given the position in points of
   each series' marker in the legend, or of any of its markers. The markers
   in a legend, with their labels beside them, and the caps of error bars are
@@ -889,7 +903,12 @@ for series in find_pdf_series(load_pdf("examples/styles.pdf"), (57.6, 31.68)):
    curves touch, each at the edge on its side, and otherwise share its rows
    by where they are headed. Tracks across 5% of the plot are curves, those
    that part or meet heading 90° apart or more, as the sides of a loop, are
-   one, and so are those where one starts as another ends. A curve inked
+   one, and so are those where one starts as another ends. Markers come
+   out first: three or more blobs of like size, within a factor of two, whose
+   cores lie deeper inside than half the line's width and 1.5 pixels more,
+   taking the line's width to be the height that a quarter of the colour's
+   runs reach. A colour with markers and a curve gives their middles as a
+   series of its own, before its curves. A curve inked
    along 90% of its length is solid; otherwise it is dotted if three quarters
    of its dashes are at most two line widths long, less the width, dashed if
    three quarters are longer, and dashdot if neither.
@@ -949,10 +968,11 @@ With a PDF file, steps 1 to 8 give way to these:
    a text level with them, right of and above the axes, beginning or ending
    within four of its heights, are a legend's keys and left out. A colour
    drawn with markers gives their points in place of its lines, a series for
-   each shape and fill, ranked by the length of the line through them. With
-   `-m`, the marker nearest each
-   position, within 10 points, picks those of the same colours whose outlines
-   lie within 0.01 points of its own.
+   each shape and fill, ranked by the length of the line through them; with
+   `-n`, a line in its colour that passes through any point other than the
+   markers' centres, within 0.01 points, comes after them, as a curve of its
+   own. With `-m`, the marker nearest each position, within 10 points, picks
+   those of the same colours whose outlines lie within 0.01 points of its own.
 6. Each image drawn on the page, with any transparency on white, is traced as
    an image of a plot from where the axes cross in it, or from its edges if
    they cross outside it, and its curves are ranked with those drawn as paths.
@@ -965,8 +985,10 @@ With a PDF file, steps 1 to 8 give way to these:
   than half, may swap where they meet, as may a solid curve where the dash
   of another curve of its colour lies along it as they cross, if the lines
   are thick. Of two curves drawn from one point, the one that parts from the
-  other starts where they part. Series told apart by their markers give
-  only the markers that can be seen, not the lines between them.
+  other starts where they part. Translucent curves, such as pale replicates
+  about their mean, darken where they cross, so they break into pieces there,
+  each a series of its own, often named `dashed`. Series told apart by their
+  markers give only the markers that can be seen, not the lines between them.
 - A curve needs enough pixels to span the plot, so short curves may not be
   found, and dots of fewer than four pixels are ignored, so sparse dotted
   lines may not be either.
@@ -1005,9 +1027,14 @@ With a PDF file, steps 1 to 8 give way to these:
   `-l`.
 - In a PDF file, lines that are straight along an axis are left out, as grid
   lines are, so a constant curve drawn as a single horizontal line is too.
-- In a PDF file, a colour drawn with markers gives only the points they mark,
-  so a line of the same colour is left out, even one through more points
-  than are marked, or a fitted line. A shape drawn only once is not taken for
+- In a PDF file, a colour drawn with markers gives with `-c` and its colour
+  alone only the points they mark, so a line of the same colour, such as a
+  fit, is left out; `-n`, or `-c` with the style `solid`, gives it. In an
+  image, markers are told from a line of their colour only if they are
+  filled and three or more, and at least 1.5 pixels thicker than half the
+  line: open markers and crosses are traced as part of the line, and a
+  colour of markers alone gives a point per column, as before, not one per
+  marker. A shape drawn only once is not taken for
   a marker, markers each in a colour of their own, as a colour map draws
   them, make series of one point each, and a marker with a text level with it
   close by, right of and above the axes, is taken for a legend's key.

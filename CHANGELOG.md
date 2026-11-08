@@ -29,9 +29,10 @@ The first release.
   and markers by their shapes and fills. `-n` lists each as a curve and
   prints options such as `-c 000000:dashed`, while a plain `-c` takes every
   curve of its colour, and the preview draws curves that share a colour in
-  colours of their own. `find_series`, `trace_series`, `find_pdf_series` and
-  `trace_pdf_series` return them as `Series`, each with its colour, style,
-  width and points.
+  colours of their own. Markers and a line in one colour, such as data and a
+  fit, give the markers as a series of points and the line as a curve.
+  `find_series`, `trace_series`, `find_pdf_series` and `trace_pdf_series`
+  return them as `Series`, each with its colour, style, width and points.
 - `-m` tells series apart by the shapes of their markers, such as squares,
   diamonds, open circles and crosses, cut out of the legend, for plots whose
   series share a colour, as many spreadsheet charts do. It gives a point at
