@@ -376,13 +376,15 @@ def test_finds_markers_by_their_keys_where_they_lie(
     ]
     for series, curve in enumerate(curves, start=1):
         x, y = data[data[:, 0] == series, 1:].T
-        # Some of the markers every half unit from 0.5 to 9.5 are hidden
-        # where the series cross. Turning the image and levelling it blurs
-        # thin markers, such as crosses, so a few more can be missed, and
-        # their middles found a pixel or two further off, about 0.03.
-        assert len(x) >= 15
-        np.testing.assert_allclose(x, np.round(2 * x) / 2, atol=0.05)
-        np.testing.assert_allclose(y, curve(x), atol=0.05)
+        # The markers lie every half unit from 0.5 to 9.5. Turning the image
+        # and levelling it blurs thin markers, such as crosses, so their
+        # middles can be found a pixel or two off, about 0.03, and one
+        # marker of another series can be taken for one of these.
+        on_curve = (np.abs(x - np.round(2 * x) / 2) <= 0.05) & (
+            np.abs(y - curve(x)) <= 0.05
+        )
+        assert np.count_nonzero(on_curve) >= 18
+        assert np.count_nonzero(~on_curve) <= 1
 
 
 @pytest.mark.parametrize(

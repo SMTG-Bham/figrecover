@@ -76,6 +76,31 @@ def quadratic(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
     return x**2 / 4
 
 
+def ripple(level: int) -> Curve:
+    """Return a gentle wave at one of four levels, clear of those of the others."""
+    return lambda x: 0.3 + 0.66 * level + 0.1 * np.sin(x + level)
+
+
+def rising(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return a straight line rising through 1.5 at x = 5."""
+    return 1.5 + 0.15 * (x - 5)
+
+
+def falling(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return a straight line falling through 1.5 at x = 5."""
+    return 1.5 - 0.15 * (x - 5)
+
+
+def shallow(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return a straight line rising gently through 1.5 at x = 5."""
+    return 1.5 + 0.05 * (x - 5)
+
+
+def above(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return ``rising`` 0.05 higher, so its markers cover half of that one's."""
+    return rising(x) + 0.05
+
+
 def draw(
     name: str,
     curves: dict[str, Curve],
@@ -212,6 +237,33 @@ def draw_markers(name: str, curves: dict[str, Curve]) -> None:
     legend = axes.legend(
         loc="upper center", bbox_to_anchor=(0.5, -0.15), ncols=len(curves)
     )
+    save(name, figure, axes, [(0, 0), (10, 0), (0, 1)], legend)
+
+
+def draw_keyed(name: str, series: list[tuple[str, str, Curve]]) -> None:
+    """Draw lines through markers, keyed in a legend, and print the points.
+
+    Each series has a marker, a colour and a curve, and is drawn in turn, so
+    later markers cover earlier ones where they overlap. The markers are 6
+    points across and lie every half unit of x from 0.5 to 9.5, and the
+    legend lies in the top-left corner of the axes, in 7 point type. The
+    pixel positions of the legend's markers are printed too, for
+    figrecover's -m option.
+    """
+    figure, axes = plt.subplots(figsize=(6.4, 4), dpi=100)
+    x = np.arange(0.5, 10, 0.5)
+    for number, (marker, colour, curve) in enumerate(series, start=1):
+        axes.plot(
+            x,
+            curve(x),
+            color=colour,
+            linewidth=1,
+            marker=marker,
+            markersize=6,
+            label=f"Series {number}",
+        )
+    axes.set(xlabel="x", ylabel="y", xlim=(0, 10), ylim=(0, 3))
+    legend = axes.legend(loc="upper left", ncols=len(series), fontsize=7)
     save(name, figure, axes, [(0, 0), (10, 0), (0, 1)], legend)
 
 
@@ -410,6 +462,11 @@ titles = ("Size (KiB)", "Time (ms)")
 draw_log("binary", quadratic, titles, [(1, 0.25), (16, 0.25), (1, 64)], base=2)
 draw_titled("titled", spectrum, ("Photon energy\n(eV)", "Absorbance\n(arb. units)"))
 draw_markers("markers", {"D": decay, "s": growth, "o": wave, "x": trend})
+draw_keyed("similar", [(marker, "black", ripple(i)) for i, marker in enumerate("oph8")])
+crossing = [("o", rising), ("s", falling), ("^", shallow), ("D", above)]
+draw_keyed("overlapping", [(marker, "black", curve) for marker, curve in crossing])
+hues = ["tab:blue", "tab:orange", "tab:green", "tab:red"]
+draw_keyed("coloured", [("o", hue, ripple(i)) for i, hue in enumerate(hues)])
 draw_slanted("slanted", damped, ("Time (s)", "Voltage (mV)"))
 draw_panels("panels")
 draw_shared("shared")

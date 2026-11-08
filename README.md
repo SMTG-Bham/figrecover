@@ -124,7 +124,7 @@ in blue, so you can check the result at a glance:
 | `--log AXES` | The axes of the `-p` reference points that are logarithmic: `x`, `y` or `xy`. Default: neither. |
 | `-n`, `--series N` | Trace the N most common curve colours, and print the matching `-c` options. Default: 1. |
 | `-c`, `--colour RRGGBB` | Hexadecimal colour of a curve to trace, such as `1f77b4`. Repeat for several curves. |
-| `-m`, `--marker X,Y` | Pixel position of the marker in a series' legend key, or in a PDF file its position in points, to find the series by its markers' shape. Repeat for each series. See [Markers](#markers). |
+| `-m`, `--marker X,Y` | Pixel position of the marker in a series' legend key, or in a PDF file its position in points, to find the series by its markers' shape and colour. Repeat for each series. See [Markers](#markers). |
 | `-o`, `--output FILE` | CSV file to write. Default: standard output. |
 | `--preview IMAGE` | Also save a faded copy of the image with the recovered curves drawn on it. |
 | `--remove-grid` | Paint over grid lines before tracing. |
@@ -211,9 +211,9 @@ is greyscale, as curves can then be told apart only by grey level; give
 
 ### Markers
 
-When the series share a colour and differ in their markers, as in many
-spreadsheet charts, give the pixel position of the marker in each series'
-legend key with `-m`, measured from the bottom-left corner like `-l`:
+When the series are told apart by their markers, as in many spreadsheet
+charts, give the pixel position of the marker in each series' legend key with
+`-m`, measured from the bottom-left corner like `-l`:
 
 ```bash
 figrecover examples/markers.png \
@@ -221,13 +221,14 @@ figrecover examples/markers.png \
     -m 148,18 -m 260,18 -m 377,18 -m 483,18 --preview markers.preview.png
 ```
 
-figrecover cuts each key's marker out of the legend, leaving out the line
-through it, and finds the markers of that shape in the plot. The CSV has a
-point at the middle of each marker, numbered by series in the order of the
-`-m` options, and figrecover prints how many markers each series has:
+figrecover cuts each key's marker out of the legend, in its colour, leaving
+out the line through it, and finds the markers of that shape and colour in
+the plot. The CSV has a point at the middle of each marker, numbered by series
+in the order of the `-m` options, and figrecover prints how many markers each
+series has:
 
 ```text
-figrecover: markers found in each series: 18, 19, 18, 18
+figrecover: markers found in each series: 19, 19, 19, 19
 ```
 
 The preview rings each marker, and each key, in a colour for its series:
@@ -235,12 +236,51 @@ The preview rings each marker, and each key, in a colour for its series:
 ![Four series told apart by their markers](examples/markers.preview.png)
 
 - The markers can be filled or open, such as squares, diamonds, triangles,
-  circles and crosses, but each series needs a shape of its own. Use `-c`
-  instead for series in different colours.
-- Lines and error bars that cross a marker are allowed for, but a marker
-  covered by another, as where series cross or crowd together, is missed or
-  taken for the other's. Three markers are missed where the series above
-  cross. Check the preview.
+  circles and crosses. Each series needs a shape or a colour of its own:
+  series of one shape in several colours, as in `examples/coloured.png`,
+  are told apart, and so are series that mix shapes and colours.
+- Shapes that look alike at the image's size are told apart by fitting
+  each to the marker to a fraction of a pixel. In `examples/similar.png`,
+  whose circles, pentagons, hexagons and octagons are 6 points, or 8
+  pixels, across, every marker is found in its series, and figrecover warns
+  of the circles' keys, alike with the hexagons' and the octagons':
+
+  ```text
+  figrecover: the markers of the keys at 98,339 and 270,339 look alike at this size, so some may be taken for each other
+  figrecover: the markers of the keys at 98,339 and 355,339 look alike at this size, so some may be taken for each other
+  ```
+
+  A marker that another key's marker fits almost as well is ambiguous, and
+  figrecover prints how many each series has, and where, in the plot's x
+  units, such as `series 1: 19 found, 2 of them ambiguous near x = 3.5, 7`.
+- Lines and error bars that cross a marker are allowed for. A marker partly
+  covered by another, as where series cross or crowd together, is found by
+  what shows of it. Where the other series have markers at an x and a
+  series has none, under another's marker, its marker is probably hidden
+  there, and figrecover says so. In `examples/overlapping.png`, diamonds
+  cover the tops of the circles below them, and the four series cross at
+  x = 5:
+
+  ```bash
+  figrecover examples/overlapping.png -p 0,0 -p 10,0 -p 0,1 \
+      -l 80,44 -l 576,44 -l 80,147 -m 98,339 -m 184,339 -m 270,339 -m 355,339
+  ```
+
+  ```text
+  figrecover: markers found in each series: 16, 20, 17, 18
+  figrecover: series 1: 16 found, 3 probably hidden near x = 4, 5, 5.5
+  figrecover: series 3: 17 found, 2 probably hidden near x = 4.5, 5.5
+  figrecover: series 4: 18 found, 1 probably hidden near x = 5
+  ```
+
+  The circle at x = 5 lies wholly under a square, and those at 4 and 5.5
+  show half and a third of their ink between others. Markers mostly hidden
+  can also be taken for another's: there, one square is a triangle, one
+  triangle a diamond and one diamond a circle. Check the preview.
+- A series without markers gets a warning, as its `-m` position or the axes
+  may be wrong.
+- Compressed images work too: `examples/markers.png` saved as a JPEG of
+  quality 25 gives the same markers.
 - The legend must be in the image, but may be in the plot area: its keys are
   not taken for markers. Nor are markers in an inset with a frame.
 - In a PDF file, markers are read exactly, from what the PDF draws; see
@@ -886,6 +926,11 @@ markers = find_markers(image, keys, calibration.origin)
 data = [calibration.to_data(series) for series in markers]
 ```
 
+`find_marker_series` takes the same arguments and gives more: for each
+series, a `MarkerSeries` with its markers' `points`, whether each is
+`ambiguous`, and where its markers are probably `hidden`, in pixels. Keys
+whose markers look alike at the image's size give a `UserWarning`.
+
 `load_image` returns an RGB array, and `remove_grid(image)` paints over grid
 lines first, if needed.
 
@@ -1022,15 +1067,49 @@ same way, and `render_svg(drawing)` draws what it read, with OpenCV.
 
 With `-m`, steps 4 to 8 give way to these:
 
-1. Each key's marker is the piece of ink, 64 levels or more from the
-   background, nearest the key's position. A key at least twice as wide as
-   tall has a line through its marker, along the rows with ink across half
-   the key or more; these rows are left out of the marker, as lines cross the
-   markers in the plot at other angles.
-2. A marker lies where a key's marker correlates with the plot by 0.6 or
-   more, and the plot has at least 60% of the key's ink. Where the markers of
-   several keys match less than three quarters of a marker's width apart, the
-   best match wins. Each marker's middle is placed to a fraction of a pixel.
+1. Each key's colour is the direction, seen from the background, of the
+   strongest ink of the piece nearest the key's position, and keys whose
+   colours lie 10 degrees apart or less share one. Each pixel shows the key
+   colour whose direction lies nearest its own, if 20 degrees away or less,
+   and none of the others, so series of one shape are told apart by colour,
+   and ink of other colours is left out.
+2. Each key's marker is the piece of ink in its colour, 64 levels or more
+   from the background, nearest the key's position, leaving out specks of
+   fewer than four pixels. A key at least 1.5 times as wide as tall may have
+   a line through its marker: the rows with ink within 3 pixels of its ends.
+   It does if they are fewer than the marker's rows, the other rows with ink
+   at least half as strong as the strongest, as compression leaves fainter
+   ink beside the line. The line is masked out of the marker, as lines cross
+   the markers in the plot at other angles, except where the marker hides
+   it, differing from the line's level by more than a quarter of the range,
+   as an open marker's face does. Keys of one colour whose markers, fitted
+   to each other as in step 4, differ by less than 5% look alike, and give a
+   warning.
+3. A marker lies where a key's marker correlates with the plot by 0.6 or
+   more, and the plot has at least 60% of the ink of each half of the
+   marker, top, bottom, left and right, so a thin marker, such as a cross,
+   is not found along a line. Matches are taken best first, leaving out those
+   less than three quarters of a marker's width from a marker already found.
+4. Where other keys' markers score within 0.05 of a match, up to 2 pixels
+   away, each is fitted to the plot, shifted by the match's fraction of a
+   pixel, where it differs least by the normalised sum of squared
+   differences, which, unlike a correlation, tells circles from octagons.
+   With it, up to two markers that it partly hides, or that partly hide it,
+   are found, as in step 5, and it is moved to fit what they leave
+   uncovered. The marker that, with those, differs least from the plot
+   wins, and is ambiguous if another differs less than 30% more.
+5. Markers partly hidden under those found, or over them, are then looked
+   for around each, in what all those found leave uncovered: what shows
+   must hold a fifth or more of the key's ink, correlate with the key's
+   marker by 0.75 or more, and explain the plot under it at least 60%
+   better than the markers found alone.
+6. Series usually share x positions. Where two of a series' markers lie
+   further apart than one and a half times their usual spacing, and other
+   series have markers at an x between them, the series' marker would lie
+   there, on the straight line between its two. If another series' marker
+   lies over that place, the marker is looked for again there, as in step
+   4, and is otherwise reported as probably hidden.
+7. Each marker's middle is placed to a fraction of a pixel.
 
 On the examples, the recovered values are within 0.03 of the true curves, about
 three pixels at the steepest point, and the markers within 0.02 of the points
@@ -1097,13 +1176,14 @@ With an SVG file, step 1 gives way to this:
 
 ## Limitations
 
-- Curves are told apart by colour, or by the shapes of their markers, so
-  curves of the same colour without markers are traced as one, and line
-  styles are ignored. Series told apart by their markers give only the
-  markers that can be seen, not the lines between them. In a greyscale
-  image, curves of one grey are traced as one, and a lighter curve loses a
-  few pixels where it touches a darker one. Halftone screens, as in printed
-  and photocopied figures, are not undone.
+- Curves are told apart by colour, or by the shapes and colours of their
+  markers, so curves of the same colour without markers are traced as one,
+  and line styles are ignored. Series told apart by their markers give only
+  the markers that can be seen, not the lines between them, and each key's
+  marker is taken to be of one colour, that of its strongest ink. In a
+  greyscale image, curves of one grey are traced as one, and a lighter curve
+  loses a few pixels where it touches a darker one. Halftone screens, as in
+  printed and photocopied figures, are not undone.
 - A curve needs enough pixels to span the plot, so short curves and sparse
   dotted lines may not be found.
 - Where curves cross, the one drawn underneath loses a few pixels, and its
