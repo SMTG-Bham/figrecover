@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.14"
-# dependencies = ["matplotlib>=3.10.7", "numpy>=2.3.3"]
+# dependencies = ["matplotlib>=3.10.7", "numpy>=2.3.3", "opencv-python>=4.10.0.84"]
 # ///
 """Draw the example plots, whose curves the tests know exactly.
 
@@ -9,9 +9,11 @@ prints the pixel position of each reference point, for figrecover's -l option,
 or in a PDF its position in points.
 """
 
+import io
 from collections.abc import Callable
 from pathlib import Path
 
+import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 import numpy.typing as npt
@@ -297,6 +299,37 @@ def draw_inset(name: str) -> None:
     plt.close(figure)
 
 
+def draw_skewed(name: str, curve: Curve, angle: float) -> None:
+    """Draw a framed plot turned by an angle, as a scan can be, and print its points.
+
+    The plot is drawn over x from 0 to 10 and y from 0 to 3, framed as
+    matplotlib draws axes by default, then turned anticlockwise about the
+    middle of the image, with cubic interpolation, its corners filled in
+    white. The positions printed are those of the points, turned with it.
+    """
+    figure, axes = plt.subplots(figsize=(6.4, 4), dpi=100)
+    x = np.linspace(0, 10, 2000)
+    axes.plot(x, curve(x), color="black", linewidth=1.5)
+    axes.set(xlabel="Time (s)", ylabel="Voltage (mV)", xlim=(0, 10), ylim=(0, 3))
+    drawn = io.BytesIO()
+    figure.savefig(drawn, format="png", facecolor="white")
+    image = cv2.imdecode(np.frombuffer(drawn.getvalue(), np.uint8), cv2.IMREAD_COLOR)
+    height, width = image.shape[:2]
+    turn = cv2.getRotationMatrix2D((width / 2, height / 2), angle, 1)
+    turned = cv2.warpAffine(
+        image, turn, (width, height), flags=cv2.INTER_CUBIC, borderValue=(255,) * 3
+    )
+    cv2.imwrite(str(HERE / f"{name}.png"), turned)
+
+    # OpenCV counts columns and rows from the middle of the top-left pixel.
+    pixels = axes.transData.transform([(0, 0), (10, 0), (0, 1)])
+    columns, rows = pixels[:, 0] - 0.5, height - pixels[:, 1] - 0.5
+    moved = np.column_stack((columns, rows, np.ones(len(pixels)))) @ turn.T
+    points = np.column_stack((moved[:, 0] + 0.5, height - moved[:, 1] - 0.5))
+    print(name, " ".join(f"-l {x:.1f},{y:.1f}" for x, y in points))
+    plt.close(figure)
+
+
 def save(
     name: str,
     figure: Figure,
@@ -370,5 +403,6 @@ draw_slanted("slanted", damped, ("Time (s)", "Voltage (mV)"))
 draw_panels("panels")
 draw_shared("shared")
 draw_inset("inset")
+draw_skewed("skewed", damped, 1)
 draw_rasterised("rasterised", {"tab:blue": decay, "tab:orange": growth})
 draw_scatter("scatter", decay, growth)
