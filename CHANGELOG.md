@@ -11,7 +11,14 @@ The first release.
   thinner than a pixel and translucent lines are found too, and picked by
   their full colours with `-c`. Colours are printed as their inks' full
   strength, such as `2ca02c` for matplotlib's green, and ranked by pixels.
-  Where translucent bands overlap is not taken for a curve.
+  Where translucent bands overlap is not taken for a curve. When `-n` finds
+  too few curves, it names those found and the colours left out, and why;
+  it warns when a curve crosses most columns more than once, as curves
+  sharing a colour do; and it says when an image is greyscale. The edges of
+  a dark curve are no longer taken for a lighter grey curve, and grid lines
+  broken by the curves over them, or dashed, are skipped.
+  `examples/benchmark_colours.py` measures finding several series by
+  colour.
   `-n` traces the most common curve colours and prints the matching `-c`
   options to reuse for similar plots, skipping filled areas and grid lines of
   any shade, and `-c` traces the curves nearest to given colours. With several

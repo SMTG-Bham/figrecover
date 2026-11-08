@@ -175,11 +175,35 @@ colour picks such a line too, as the line shows part of it: `-c d62728` picks
 that line, and `-c 1f77b4` the translucent one.
 
 `-n` skips colours that fill areas, those drawn mostly as straight lines
-across the plot, such as grid lines, those where two translucent colours
-overlap, such as two shaded bands, and very pale ones, less than 64 levels
-from the background; trace a pale curve with `-c` instead. Curves in
-neighbouring colours of a colour map, such as viridis, are told apart, and two
-`-c` colours that match the same curve are an error.
+across the plot, such as grid lines, dashed or not and even with curves drawn
+over them, those where two translucent colours overlap, such as two shaded
+bands, and very pale ones, less than 64 levels from the background; trace a
+pale curve with `-c` instead. Curves in neighbouring colours of a colour map,
+such as viridis, are told apart, and two `-c` colours that match the same
+curve are an error. When `-n` finds too few curves, it says which it found
+and which colours it left out, and why, with how many pixels show each:
+
+```text
+figrecover: error: found only 1 of 3 curves, #000000 (1286 pixels); left out
+#646464 (2041 pixels), as it is drawn in lines across the plot, as grid lines
+are; #c8dcf0 (1732 pixels), as it is too pale, 54 levels from the background
+```
+
+Series that share a colour, as when a plotting library runs out of colours
+and starts its cycle again, are traced as one. figrecover warns when a curve
+crosses most columns more than once, as such curves do, or a loop:
+
+```text
+figrecover: the curve of colour #5c5c5c crosses most columns 2 times: it may be 2 curves of that colour, or loop
+```
+
+In a greyscale image, such as a photocopy, colours that differed may have
+become one grey, and the edges of a dark curve, blended with the background,
+show the lighter greys of other curves. figrecover leaves those edges out of
+the lighter curves, and with several curves asked for, says that the image
+is greyscale, as curves can then be told apart only by grey level; give
+`-c` grey levels, such as `-c 808080`, or find series by their
+[markers](#markers).
 
 ### Markers
 
@@ -900,8 +924,11 @@ same way, and `render_svg(drawing)` draws what it read, with OpenCV.
    with the background, if it is at least half-way there, so a curve's
    antialiased edges count towards it, and within 96 levels of the blend, so
    ink of other colours, such as the black text and arrows of annotations
-   among coloured curves, is not taken for the nearest curve. Specks of fewer
-   than four pixels, such as where two other curves cross, are ignored.
+   among coloured curves, is not taken for the nearest curve. A pixel of a
+   colour that touches those of a stronger colour of the same ink, within 12
+   degrees, is that colour's edge, such as the pale grey edge of a black
+   curve, and belongs to neither. Specks of fewer than four pixels, such as
+   where two other curves cross, are ignored.
 8. In each image column, a curve's pixels form runs, split by gaps of more
    than 6 pixels, and runs that overlap one to one in neighbouring columns
    form branches. Each run of a branch across at least 5% of the plot gives a
@@ -990,7 +1017,10 @@ With an SVG file, step 1 gives way to this:
 - Curves are told apart by colour, or by the shapes of their markers, so
   curves of the same colour without markers are traced as one, and line
   styles are ignored. Series told apart by their markers give only the
-  markers that can be seen, not the lines between them.
+  markers that can be seen, not the lines between them. In a greyscale
+  image, curves of one grey are traced as one, and a lighter curve loses a
+  few pixels where it touches a darker one. Halftone screens, as in printed
+  and photocopied figures, are not undone.
 - A curve needs enough pixels to span the plot, so short curves and sparse
   dotted lines may not be found.
 - Where curves cross, the one drawn underneath loses a few pixels, and its
@@ -1077,6 +1107,13 @@ fake, so they run without a display. They check the recovered data against the
 curves that `examples/make_examples.py` draws; after changing that script,
 redraw the examples with `uv run examples/make_examples.py`, which also prints
 their `-l` options.
+
+`examples/benchmark_colours.py` measures how well figrecover finds and traces
+several series by colour, over plots of 2 to 12 series in several palettes,
+line widths, resolutions and JPEG qualities, with and without grids and
+legends. Run it with `uv run --with matplotlib examples/benchmark_colours.py`,
+which takes about 15 seconds, before and after changing how colours are
+found.
 
 `pyproject.toml` declares the oldest supported dependency versions and
 `uv.lock` pins the versions used in development and CI. Dependabot refreshes
