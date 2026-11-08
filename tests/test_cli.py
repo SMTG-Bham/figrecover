@@ -193,6 +193,24 @@ def test_traces_several_series_and_prints_their_colours(
     assert_recovers_series(captured.out, [wave, decay, growth, trend])
 
 
+def test_says_when_the_image_is_greyscale(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The blue and green curves of series.png become the same grey.
+    image = tmp_path / "grey.png"
+    grey = cv2.imread(str(EXAMPLES / "series.png"), cv2.IMREAD_GRAYSCALE)
+    assert grey is not None
+    cv2.imwrite(str(image), grey)
+
+    assert main([str(image), *POINTS, *LOCATIONS, "-n", "3"]) == 0
+
+    errors = capsys.readouterr().err.splitlines()
+    assert errors[0] == (
+        "figrecover: the image is greyscale, so curves are told apart by grey "
+        "level only"
+    )
+
+
 def test_traces_the_given_colours(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

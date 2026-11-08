@@ -494,6 +494,17 @@ def test_find_colours_finds_a_curve_inside_its_own_band() -> None:
     assert find_colours(image, 1, calibration.origin) == [BLUE]
 
 
+def test_trace_curves_leaves_a_darker_curves_edges_out_of_a_lighter_one() -> None:
+    # The edges of the black line, a third covered, show the light grey of
+    # the other curve.
+    light_grey = (179, 179, 179)
+    image, calibration = synthetic_plot(curves=[(light_grey, curve), (BLACK, rising)])
+
+    pixels, _ = trace_curves(image, [light_grey, BLACK], calibration.origin)
+
+    assert_follows(pixels, calibration, curve, atol=0.075)
+
+
 def test_find_colours_finds_mid_tones_on_a_grey_background() -> None:
     image, calibration = synthetic_plot(grid=254, curves=[(PINK, curve)])
     image[np.all(image == 255, axis=-1)] = GREY

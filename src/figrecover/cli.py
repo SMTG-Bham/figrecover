@@ -23,6 +23,7 @@ from .calibration import MIN_POINTS, Calibration, Point
 from .digitize import (
     Colour,
     Image,
+    _greyscale,
     find_colours,
     find_markers,
     load_image,
@@ -262,6 +263,9 @@ def _digitize(arguments: argparse.Namespace) -> None:
         return
     image = load_image(arguments.image)
     _check_locations(arguments.markers, image, "-m position")
+    if max(arguments.series or 1, len(arguments.colours)) > 1 and _greyscale(image):
+        message = "the image is greyscale, so curves are told apart by grey level only"
+        print(f"figrecover: {message}", file=sys.stderr)
     if arguments.points:
         _check_locations(arguments.locations, image, "-l location")
         pixels = arguments.locations or _click_locations(image, arguments.points)

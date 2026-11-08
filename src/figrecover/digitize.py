@@ -54,6 +54,8 @@ _SNAP_REACH = 12  # an axis line this many pixels inside the axes given is their
 _FRAME_SIDE = 0.05  # frame lines span this fraction of the plot's shorter side
 _FRAME_CONTRAST = 32  # its lines differ from the background by this much or more
 _FRAME_LINED = 0.75  # its sides run along this fraction of its height or more
+_GREY_SPREAD = 8  # a pixel's levels this far apart or less are grey
+_GREY_SHARE = 0.005  # a greyscale image has this fraction of other pixels at most
 _KEY_REACH = 20  # a legend key's marker lies within this many pixels of its position
 _KEY_LINE = 2  # a key this many times as wide as tall has a line through its marker
 _MARKER_SCORE = 0.6  # a marker correlates with its key's this well or better
@@ -142,6 +144,16 @@ def load_image(path: str | os.PathLike[str]) -> Image:
     return np.round((pixels - low) * (255 / (high - low))).astype(np.uint8)
 
 
+def _greyscale(image: Image) -> bool:
+    """Return whether an image has no colour, as greyscale and photocopied ones have.
+
+    Its red, green and blue levels lie within ``_GREY_SPREAD`` of each other
+    in all but ``_GREY_SHARE`` of its pixels.
+    """
+    spread = np.ptp(image.astype(np.int16), axis=2)
+    return bool(np.mean(spread > _GREY_SPREAD) <= _GREY_SHARE)
+
+
 def remove_grid(image: Image) -> Image:
     """Paint over long horizontal and vertical lines, such as grid lines.
 
@@ -198,7 +210,7 @@ def find_colours(image: Image, count: int = 1, origin: Point = (0, 0)) -> list[C
     the background instead. Curves are the common colours that differ from
     the background by at least a quarter of the full range in some channel,
     and that neither fill areas nor are drawn mostly in straight lines across
-    the plot, as grid lines are.
+    the plot, as grid lines are, nor show where translucent colours overlap.
 
     Args:
         image: Colour image of a plot.
@@ -227,7 +239,7 @@ def _curve_colours(image: Image, origin: Point) -> list[Colour]:
     """
     plot = _plot_area(image, origin)[0]
     palette = _palette(plot)
-    labels = _classify(plot, palette)
+    labels = _labelled(plot, palette)
     return [
         _to_colour(colour)
         for index, colour in enumerate(palette[1:], start=1)
@@ -283,7 +295,7 @@ def trace_curves(
                 f"match the curve of colour #{bytes(_to_colour(palette[index])).hex()}"
             )
             raise ValueError(msg)
-    labels = _classify(plot, palette)
+    labels = _labelled(plot, palette)
     for colour, index in zip(colours, indices, strict=True):
         if _fills_areas(labels == index):
             msg = f"colour #{bytes(colour).hex()} fills areas rather than a curve"
@@ -984,6 +996,27 @@ def _classify(plot: Image, colours: npt.NDArray[np.float64]) -> npt.NDArray[np.i
         np.take_along_axis(distance, best, axis=-1) <= _MATCH_DISTANCE
     )
     return np.where(shown[..., 0], best[..., 0], 0)
+
+
+def _labelled(plot: Image, colours: npt.NDArray[np.float64]) -> npt.NDArray[np.intp]:
+    """Label each pixel with the index of its colour, leaving out darker ones' edges.
+
+    Pixels are labelled as ``_classify`` labels them. Antialiasing blends
+    the edges of a curve with the background, so those of a dark curve show
+    lighter colours on its ray, such as a lighter grey curve's. Pixels of a
+    colour that touch those of a stronger colour, within ``_MIXED`` degrees
+    of its direction from the background, are taken for that colour's edges,
+    and labelled 0.
+    """
+    labels = _classify(plot, colours)
+    inks, strengths = _inks(colours - colours[0])
+    alike = inks @ inks.T >= math.cos(math.radians(_MIXED))
+    edges = np.zeros(labels.shape, dtype=np.bool_)
+    for index in range(1, len(colours)):
+        darker = np.flatnonzero(alike[index] & (strengths > strengths[index]))
+        touching = cv2.dilate(np.isin(labels, darker).astype(np.uint8), np.ones((3, 3)))
+        edges |= (labels == index) & (touching > 0)
+    return np.where(edges, 0, labels)
 
 
 def _match(palette: npt.NDArray[np.float64], colour: Colour) -> int:
