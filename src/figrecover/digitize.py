@@ -57,6 +57,10 @@ _DOT = 2  # a dash at most this many line widths long is a dot
 _DOTTED = 0.75  # a curve whose dashes are this fraction dots, or more, is dotted
 _ONE_LINE = 1.5  # a run at most this many line widths tall holds one line
 _DOT_GAP = 3  # the dots of a curve lie this many line widths apart or less
+_MARKER_DEPTH = 1.5  # markers reach this many pixels deeper than half a line or more
+_MARKER_SIZES = 2  # markers are within this factor of their median size
+_MIN_MARKERS = 3  # a colour draws markers if it has this many or more
+_THIN = 0.25  # this share of a curve's runs, or more, are no taller than its line
 _FRAME_SIDE = 0.05  # frame lines span this fraction of the plot's shorter side
 _FRAME_CONTRAST = 32  # its lines differ from the background by this much or more
 _FRAME_LINED = 0.75  # its sides run along this fraction of its height or more
@@ -951,10 +955,14 @@ def _runs(rows: npt.NDArray[np.intp]) -> list[npt.NDArray[np.intp]]:
     return np.split(rows, np.flatnonzero(np.diff(rows) > _RUN_GAP + 1) + 1)
 
 
-def _width(runs: Sequence[Sequence[npt.NDArray[np.intp]]]) -> float:
-    """Return the width of a curve's line: the median height of its runs, or 1."""
+def _width(runs: Sequence[Sequence[npt.NDArray[np.intp]]], share: float = 0.5) -> float:
+    """Return the width of a curve's line, from the heights of its runs, or 1.
+
+    That is the height that ``share`` of them reach no higher than: the
+    median, or less where markers, which are taller, may be most of them.
+    """
     heights = [run[-1] - run[0] + 1 for column in runs for run in column]
-    return float(np.median(heights)) if heights else 1.0
+    return float(np.quantile(heights, share)) if heights else 1.0
 
 
 @dataclass(slots=True, eq=False)
@@ -1266,25 +1274,80 @@ def _styled(
 ) -> list[Series]:
     """Return the curves of a colour as series, most pixels first.
 
-    See ``trace_series`` for what the curves are. The curve's pixels are in a
-    part of an image ``height`` pixels tall, from column ``left`` and row
-    ``top``.
+    See ``trace_series`` for what the curves are. Markers, by ``_blobs``,
+    taking the line to be as wide as ``_THIN`` of the runs of the colour's
+    pixels are tall, are left out of the pixels that make the curves, and,
+    if there are curves too, come first, as a series of their own. The
+    curve's pixels are in a part of an image ``height`` pixels tall, from
+    column ``left`` and row ``top``.
     """
     in_curve = _without_specks(in_colour)
     columns = np.flatnonzero(in_curve.any(axis=0))
     runs = [_runs(np.flatnonzero(in_curve[:, column])) for column in columns]
+    marked, centres, size = _blobs(in_curve, _width(runs, _THIN))
+    lines = in_curve & ~marked
+    columns = np.flatnonzero(lines.any(axis=0))
+    runs = [_runs(np.flatnonzero(lines[:, column])) for column in columns]
     at = dict(zip(columns.tolist(), runs, strict=True))
     minimum = in_curve.shape[1] * _MIN_BRANCH
     tracks = _tracks(columns, runs, _width(runs), gaps=True)
     curves = _curves([track for track in tracks if track.span >= minimum])
-    described = [_described(curve, at) for curve in curves]
-    if len(curves) > 1:
-        return [
+    described = [_described(curve, at, marked) for curve in curves]
+    found = []
+    if len(centres) and curves:
+        # The centre of the pixel in column c and row r is at
+        # (c + 0.5, height - r - 0.5).
+        points = centres * (1, -1) + (left + 0.5, height - top - 0.5)
+        found.append(Series(colour, "markers", size, points[np.argsort(points[:, 0])]))
+    if len(found) + len(curves) > 1:
+        return found + [
             Series(colour, style, width, _points(curve, at, left, top, height))
             for curve, (style, width) in zip(curves, described, strict=True)
         ]
     alone: tuple[Style, float] = described[0] if described else ("markers", 0.0)
     return [Series(colour, *alone, _follow(in_colour, left, top, height))]
+
+
+def _blobs(
+    in_curve: npt.NDArray[np.bool_], width: float
+) -> tuple[npt.NDArray[np.bool_], npt.NDArray[np.float64], float]:
+    """Find the markers among a colour's pixels, as blobs thicker than its line.
+
+    A marker's core is its pixels deeper inside than half the width of the
+    curve's line and ``_MARKER_DEPTH`` more, by the distance transform, and
+    of at least ``_MIN_PIXELS`` pixels. Markers are those cores within a
+    factor of ``_MARKER_SIZES`` of their median size, if there are at least
+    ``_MIN_MARKERS`` of them, as filled markers draw; lines, dashes, open
+    markers and crosses have none.
+
+    Returns:
+        The pixels of the markers, those as far from their cores as the
+        cores lie deep, and a pixel more; the column and row of each core's
+        middle; and their size across, twice their greatest depth. With no
+        markers, none of the pixels, no middles and a size of 0.
+    """
+    depth = cv2.distanceTransform(in_curve.astype(np.uint8), cv2.DIST_L2, 5)
+    deepest = width / 2 + _MARKER_DEPTH
+    deep = (depth > deepest).astype(np.uint8)
+    _, cores, stats, middles = cv2.connectedComponentsWithStats(deep)
+    areas = stats[1:, cv2.CC_STAT_AREA]
+    typical = float(np.median(areas)) if len(areas) else 0.0
+    kept = (
+        np.flatnonzero(
+            (areas >= _MIN_PIXELS)
+            & (areas * _MARKER_SIZES >= typical)
+            & (areas <= typical * _MARKER_SIZES)
+        )
+        + 1
+    )
+    if len(kept) < _MIN_MARKERS:
+        return np.zeros_like(in_curve), np.empty((0, 2)), 0.0
+    inside = np.isin(cores, kept)
+    reach = math.ceil(deepest) + 1
+    disc = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * reach + 1,) * 2)
+    marked = cv2.dilate(inside.astype(np.uint8), disc) > 0
+    size = 2 * float(depth[inside].max())
+    return marked & in_curve, np.asarray(middles[kept], dtype=np.float64), size
 
 
 def _curves(tracks: Sequence[_Track]) -> list[list[_Track]]:
@@ -1424,11 +1487,13 @@ def _points(
 
 
 def _described(
-    curve: Sequence[_Track], at: dict[int, list[npt.NDArray[np.intp]]]
+    curve: Sequence[_Track],
+    at: dict[int, list[npt.NDArray[np.intp]]],
+    marked: npt.NDArray[np.bool_],
 ) -> tuple[Style, float]:
     """Return the style of a curve, by ``_style``, and its width, by ``_line_width``."""
     width = _line_width(curve, at)
-    return _style(curve, at, width), width
+    return _style(curve, at, width, marked), width
 
 
 def _line_width(
@@ -1453,13 +1518,18 @@ def _line_width(
 
 
 def _style(
-    curve: Sequence[_Track], at: dict[int, list[npt.NDArray[np.intp]]], width: float
+    curve: Sequence[_Track],
+    at: dict[int, list[npt.NDArray[np.intp]]],
+    width: float,
+    marked: npt.NDArray[np.bool_],
 ) -> Style:
     """Return the style of a curve's line, from the dashes along its tracks.
 
     A dash is a stretch of neighbouring columns, and its length the diagonal
     of the box around its runs. A curve inked along at least ``_SOLID`` of
-    its length, counting the gaps between its dashes, is solid. Otherwise a
+    its length, counting the gaps between its dashes, but not those whose
+    straight line across lies mostly within a pixel of ``marked`` pixels,
+    where markers were taken out, is solid. Otherwise a
     dash is a dot if its length, less the width of the line, which the box
     takes in across the dash, is at most ``_DOT`` times the width, and the
     curve is dotted if at least ``_DOTTED`` of its dashes are dots, dashed if
@@ -1474,14 +1544,15 @@ def _style(
             spans = [at[track.columns[i]][track.runs[i]] for i in piece]
             extent = max(run[-1] for run in spans) - min(run[0] for run in spans) + 1
             lengths.append(math.hypot(len(piece), extent))
-        gaps += [
-            math.hypot(
-                track.columns[after] - track.columns[after - 1],
-                track.rows[after] - track.rows[after - 1],
-            )
-            - 1
-            for after in breaks
-        ]
+        for after in breaks:
+            ends = [track.columns[after - 1], track.columns[after]]
+            across = np.arange(ends[0] + 1, ends[1])
+            rows = np.interp(across, ends, track.rows[after - 1 : after + 1])
+            near = np.round(rows).astype(np.intp) + np.array([[-1], [0], [1]])
+            hidden = marked[np.clip(near, 0, len(marked) - 1), across].any(axis=0)
+            if 2 * np.count_nonzero(hidden) <= len(across):
+                down = track.rows[after] - track.rows[after - 1]
+                gaps.append(math.hypot(ends[1] - ends[0], down) - 1)
     if sum(lengths) >= _SOLID * (sum(lengths) + sum(gaps)):
         return "solid"
     dots = float(np.mean([length - width <= _DOT * width for length in lengths]))

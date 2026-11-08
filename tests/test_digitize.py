@@ -586,6 +586,25 @@ def test_trace_series_keeps_curves_from_one_point_apart(*, ending: bool) -> None
         np.testing.assert_allclose(data[:, 1], function(data[:, 0]), atol=0.05)
 
 
+def test_trace_series_tells_markers_from_a_line_through_them() -> None:
+    image, calibration = synthetic_plot(curves=[(BLUE, rising)])
+    heights = ORIGIN[1] + (rising(MARKER_XS) + 0.15 * np.sin(3 * MARKER_XS)) * 40
+    centres = [
+        (round(ORIGIN[0] + x * PIXELS_PER_UNIT[0]), to_row(float(height)))
+        for x, height in zip(MARKER_XS, heights, strict=True)
+    ]
+    for centre in centres:  # scattered about the line, as data about a fit
+        cv2.circle(image, centre, 5, BLUE, -1, cv2.LINE_AA)
+
+    ((markers, line),) = trace_series(image, [BLUE], calibration.origin)
+
+    assert (markers.style, line.style) == ("markers", "solid")
+    # The centre of the pixel in column c and row r is at (c + 0.5, height - r - 0.5).
+    expected = [(column + 0.5, HEIGHT - row - 0.5) for column, row in centres]
+    np.testing.assert_allclose(markers.points, expected, atol=1)
+    assert_on(line, calibration, rising)
+
+
 def test_trace_series_gives_markers_alone_as_one_series() -> None:
     image, calibration = synthetic_plot(curves=[])
     xs = np.arange(1.0, 10.0)
