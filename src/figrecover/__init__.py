@@ -14,11 +14,13 @@ from .digitize import (
     trace_curve,
     trace_curves,
 )
+from .errorbars import ErrorBars
 from .panels import Panel, read_panels
 from .pdf import (
     Box,
     Drawing,
     find_pdf_colours,
+    find_pdf_error_bars,
     find_pdf_markers,
     load_pdf,
     read_pdf_axes,
@@ -35,6 +37,7 @@ __all__ = [
     "Calibration",
     "Colour",
     "Drawing",
+    "ErrorBars",
     "Image",
     "Panel",
     "Point",
@@ -43,6 +46,7 @@ __all__ = [
     "find_colours",
     "find_markers",
     "find_pdf_colours",
+    "find_pdf_error_bars",
     "find_pdf_markers",
     "load_image",
     "load_pdf",

@@ -12,6 +12,7 @@ import pytest
 from figrecover import (
     Drawing,
     find_pdf_colours,
+    find_pdf_error_bars,
     find_pdf_markers,
     load_pdf,
     read_pdf_axes,
@@ -61,6 +62,18 @@ def wave(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
 def trend(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
     """Return the black line that examples/make_examples.py draws in series.pdf."""
     return 0.4 + 0.2 * x
+
+
+# Where examples/make_examples.py draws markers in errorbars.pdf, and, from
+# the top, the curve of each series, its errors below and above, and to
+# each side, if it has bars across.
+ERROR_MARKED = np.arange(0.5, 10, 1.0)
+ERROR_SERIES: list[tuple[Curve, tuple[float, float], float | None]] = [
+    (lambda x: 3.4 + np.sin(x) / 4, (0.2, 0.2), None),
+    (lambda x: 2.4 + np.cos(x) / 4, (0.1, 0.3), None),
+    (lambda x: 1.5 + np.sin(x / 2) / 5, (0.15, 0.15), 0.3),
+    (lambda x: 0.6 + 0.15 * np.cos(x / 2), (0.2, 0.2), None),
+]
 
 
 def write_pdf(
@@ -315,6 +328,89 @@ def test_finds_series_by_their_markers_in_the_example_pdf() -> None:
     # through them are left out.
     assert find_pdf_colours(found, 1, origin) == [(0, 0, 0)]
     assert len(trace_pdf_curves(found, [(0, 0, 0)], origin)[0]) == 4 * len(MARKED)
+
+
+def test_reads_the_error_bars_of_the_example_pdf_exactly() -> None:
+    found = load_pdf(EXAMPLES / "errorbars.pdf")
+    calibration = read_pdf_axes(found).calibration
+    colours = [(31, 119, 180), (255, 127, 14), (44, 160, 44), (214, 39, 40)]
+    traced = trace_pdf_curves(found, colours, calibration.origin)
+
+    bars = find_pdf_error_bars(found, traced)
+
+    # The markers are unchanged, and each bar ends exactly where it is drawn,
+    # to within the precision with which PDFium reads it.
+    x = ERROR_MARKED
+    for series, (curve, (below, above), across) in zip(bars, ERROR_SERIES, strict=True):
+        points = calibration.to_data(series.points)
+        np.testing.assert_allclose(points, np.column_stack([x, curve(x)]), atol=1e-5)
+        sideways = np.full_like(x, math.nan if across is None else across)
+        np.testing.assert_allclose(
+            calibration.to_data(series.low),
+            np.column_stack([x - sideways, curve(x) - below]),
+            atol=1e-5,
+        )
+        np.testing.assert_allclose(
+            calibration.to_data(series.high),
+            np.column_stack([x + sideways, curve(x) + above]),
+            atol=1e-5,
+        )
+
+
+def test_matches_error_bars_to_the_points_they_pass_through(tmp_path: Path) -> None:
+    forms = [
+        "0 0 1 rg -2 -2 4 4 re f",  # a blue square
+        "1 0 0 rg 0 -3 m 3 0 l 0 3 l -3 0 l h f",  # a red diamond
+        "0 0 1 rg 0 0 1 RG -3 0 m 3 0 l B",  # a cap
+        "0 0 1 rg 0 0 1 RG -3 0 m 3 0 l 0 4.5 l h B",  # an arrowhead up
+        "0 0 1 rg 0 0 1 RG -3 0 m 3 0 l 0 -4.5 l h B",  # and down
+    ]
+    blue = [(100, 100), (150, 150), (200, 120), (230, 120)]
+    blue += [(250, 200), (280, 200), (300, 180), (330, 100)]
+    content = plot(
+        *(f"q 1 0 0 1 {x} {y} cm /X1 Do Q" for x, y in blue),
+        *(f"q 1 0 0 1 {x} {y} cm /X2 Do Q" for x, y in [(100, 120), (300, 185)]),
+        # Longer above than below, with caps, through a red point too, and
+        # with a grid line through both.
+        "0 0 1 RG 100 90 m 100 130 l S",
+        "q 1 0 0 1 100 90 cm /X3 Do Q q 1 0 0 1 100 130 cm /X3 Do Q",
+        "q 60 60 300 200 re W n 0.5 G 100 60 m 100 260 l S Q",
+        "0 0 0 RG 130 150 m 175 150 l S",  # across, in black
+        # One-sided up and down, with arrowheads.
+        "0 0 1 RG 200 120 m 200 140 l S 230 120 m 230 140 l S",
+        "q 1 0 0 1 200 140 cm /X4 Do Q q 1 0 0 1 230 140 cm /X4 Do Q",
+        "0 0 1 RG 250 185 m 250 200 l S 280 185 m 280 200 l S",
+        "q 1 0 0 1 250 185 cm /X5 Do Q q 1 0 0 1 280 185 cm /X5 Do Q",
+        # Through a blue and a red point, each bar in the colour of one.
+        "0 0 1 RG 300 170 m 300 195 l S 1 0 0 RG 300 175 m 300 192 l S",
+        "0 0 0 RG 330 90 m 330 110 l S 330 95 m 330 105 l S",  # two in doubt
+        "0 1 0 RG 70 70 m 90 80 l S 80 80 m 80 80 l S",  # slanted, and a dot
+        "0 0 1 RG 200 220 30 20 re S",  # a box
+    )
+    found = drawing(tmp_path, content, forms)
+    points = trace_pdf_curves(found, [(0, 0, 255), (255, 0, 0)], (60, 60))
+
+    blue_bars, red_bars = find_pdf_error_bars(found, points)
+
+    # The arrowheads are not markers.
+    np.testing.assert_allclose(blue_bars.points, blue)
+    np.testing.assert_allclose(red_bars.points, [(100, 120), (300, 185)])
+    nan = math.nan
+    low = [(nan, 90), (130, nan), (nan, 120), (nan, 120), (nan, 185), (nan, 185)]
+    high = [(nan, 130), (175, nan), (nan, 140), (nan, 140), (nan, 200), (nan, 200)]
+    np.testing.assert_allclose(blue_bars.low, [*low, (nan, 170), (nan, nan)])
+    np.testing.assert_allclose(blue_bars.high, [*high, (nan, 195), (nan, nan)])
+    np.testing.assert_allclose(red_bars.low, [(nan, nan), (nan, 175)])
+    np.testing.assert_allclose(red_bars.high, [(nan, nan), (nan, 192)])
+
+
+def test_reads_error_bars_on_a_page_without_level_lines(tmp_path: Path) -> None:
+    found = drawing(tmp_path, "0 0 1 RG 100 90 m 100 130 l S")
+
+    (bars,) = find_pdf_error_bars(found, [np.array([(100.0, 100.0)])])
+
+    np.testing.assert_allclose(bars.low, [(math.nan, 90)])
+    np.testing.assert_allclose(bars.high, [(math.nan, 130)])
 
 
 def test_reads_markers_drawn_one_by_one_at_their_middles(tmp_path: Path) -> None:
