@@ -48,6 +48,7 @@ from .digitize import (
     remove_grid,
     trace_curves,
 )
+from .errorbars import ErrorBars
 
 type Box = tuple[float, float, float, float]
 """A rectangle's left, bottom, right and top edges, in points."""
@@ -72,6 +73,7 @@ _KEY_REACH = 10  # a key lies within this many points of the marker it picks
 _DOT = 2  # a dash at most this many line widths long is a dot
 _CHAIN = 3  # a line carries on one ending this many times the longer's length away,
 _BEND = 30  # turning by this many degrees or less from the ends of both
+_ON_BAR = 0.01  # a point this many points or less from a straight line lies on it
 _WHITE: Colour = (255, 255, 255)
 _SUPERSCRIPTS = str.maketrans(
     "0123456789+-\u2212=()ni",
@@ -490,7 +492,9 @@ def trace_pdf_curves(
     drawn, and its lines are left out, as a line through markers passes
     through the same points. A marker is a shape at most ``_MARKER_SIZE``
     points across, other than a straight horizontal or vertical line, such
-    as the cap of an error bar, drawn at least twice. A form holding it, as
+    as the cap of an error bar, drawn at least twice; nor is an arrowhead
+    lying wholly beyond one end of a straight line whose other end lies at a
+    marker, as one-sided error bars have. A form holding it, as
     matplotlib draws markers, marks the point where the form's origin lies,
     if within the shape; otherwise the shape must be filled or closed, as a
     piece of a curve is not, and marks the middle of its box. Paths drawn
@@ -640,6 +644,58 @@ def find_pdf_markers(
             origin,
         ).points
         for key in picked
+    ]
+
+
+def find_pdf_error_bars(
+    drawing: Drawing, points: Sequence[npt.NDArray[np.float64]]
+) -> list[ErrorBars]:
+    """Find the error bars through the points of each series in a plot on a page.
+
+    Error bars are straight vertical or horizontal lines, stroked but not
+    filled, that pass through a point, to within ``_ON_BAR`` points across
+    and between their ends; matplotlib draws each as a subpath of its own.
+    Their ends are the bounds, exactly as drawn, even beyond the limits of
+    the axes. A one-sided bar, as matplotlib draws with ``lolims`` or
+    ``uplims``, ends at its point. Caps across the ends of bars, and the
+    arrowheads of one-sided bars, add nothing.
+
+    Bars are matched to points by where they lie, not by colour, so bars
+    drawn in another colour than their markers are found too. Colour only
+    settles which point a bar belongs to where it is in doubt, as where
+    series share an x: a bar through several points belongs to those with a
+    marker drawn in its colour, if any, and a point with several bars one
+    way takes the one through it alone, or else the one in its marker's
+    colour; if that leaves more than one, the point has no bar that way.
+    Lines that run from one edge of their clip to the other, as grid lines
+    and reference lines do across the axes, are not bars.
+
+    Args:
+        drawing: What is drawn on the page, as ``load_pdf`` returns it.
+        points: The points of each series, in points, such as
+            ``trace_pdf_curves`` or ``find_pdf_markers`` returns.
+
+    Returns:
+        The error bars of each series, through the points given, with the
+        ends of their bars in points, or NaN where a point has no bar that
+        way.
+    """
+    every = np.vstack([np.empty((0, 2)), *points])
+    low, high = np.full_like(every, np.nan), np.full_like(every, np.nan)
+    markers = _markers(drawing)
+    centres = np.array([marker.centre for marker in markers]).reshape(-1, 2)
+    near = np.abs(every[:, np.newaxis] - centres).max(axis=2) <= _ON_BAR
+    colours = [
+        markers[int(np.argmax(row))].colour if row.any() else None for row in near
+    ]
+    for along, (lines, line_colours) in enumerate(_straight_lines(drawing)):
+        chosen = _bars_through(every, colours, lines, line_colours, along)
+        low[chosen >= 0, along] = lines[chosen[chosen >= 0], 1]
+        high[chosen >= 0, along] = lines[chosen[chosen >= 0], 2]
+    ends = np.cumsum([0, *(len(series) for series in points)])
+    return [
+        ErrorBars(every[start:end], low[start:end], high[start:end])
+        for start, end in itertools.pairwise(ends)
     ]
 
 
@@ -1309,9 +1365,11 @@ def _markers(drawing: Drawing) -> list[_Marker]:
     """
     markers: list[_Marker] = []
     last = -1  # the index of the path that gave the last marker
+    lines = _straight_lines(drawing)
+    centres = [m.centre for m in map(_marker, drawing.paths) if m is not None]
     for index, path in enumerate(drawing.paths):
         marker = _marker(path)
-        if marker is None:
+        if marker is None or _arrowhead(path, lines, centres):
             continue
         if markers and last == index - 1 and markers[-1].centre == marker.centre:
             first = markers.pop()  # one marker, drawn in two paths
@@ -1356,6 +1414,108 @@ def _marker(path: _Path) -> _Marker | None:
     # With the middles of its straight pieces, a square's outline is not a cross's.
     outline = np.vstack([points, (path.segments[:, :2] + path.segments[:, 2:]) / 2])
     return _Marker(centre, outline - middle, path.stroke, path.fill, path.clip)
+
+
+def _straight_lines(
+    drawing: Drawing,
+) -> list[tuple[npt.NDArray[np.float64], list[Colour]]]:
+    """Return the straight lines on a page that may be error bars, and their colours.
+
+    The lines run along x, then along y: those level, then those upright.
+    Each way, a row of each line holds where it lies across that way, and
+    where it starts and ends along it. See ``find_pdf_error_bars`` for which
+    lines may be error bars.
+    """
+    found: list[list[tuple[float, float, float]]] = [[], []]
+    colours: list[list[Colour]] = [[], []]
+    for path in drawing.paths:
+        if path.stroke is None or path.fill is not None:
+            continue
+        for points, closed in zip(path.subpaths, path.closed, strict=True):
+            spans = np.ptp(points, axis=0)
+            if closed or np.count_nonzero(spans <= _FLAT) != 1:
+                continue
+            along = int(np.argmax(spans))
+            start, end = points[:, along].min(), points[:, along].max()
+            clip = path.clip[along], path.clip[along + 2]
+            if start <= clip[0] + _SLACK and end >= clip[1] - _SLACK:
+                continue  # across the axes, as a grid line
+            found[along].append((float(points[0, 1 - along]), start, end))
+            colours[along].append(path.stroke)
+    return [
+        (np.array(lines, dtype=np.float64).reshape(-1, 3), way)
+        for lines, way in zip(found, colours, strict=True)
+    ]
+
+
+def _bars_through(
+    points: npt.NDArray[np.float64],
+    colours: Sequence[Colour | None],
+    lines: npt.NDArray[np.float64],
+    line_colours: Sequence[Colour],
+    along: int,
+) -> npt.NDArray[np.intp]:
+    """Return the index of the error bar through each point one way, or -1 if none.
+
+    ``lines`` are those along x, if ``along`` is 0, or y, as
+    ``_straight_lines`` gives them, and ``colours`` those of the markers at
+    the points, or None. See ``find_pdf_error_bars`` for which bar a point
+    takes.
+    """
+    if not len(lines):
+        return np.full(len(points), -1, dtype=np.intp)
+    on = (
+        (np.abs(points[:, 1 - along, np.newaxis] - lines[:, 0]) <= _ON_BAR)
+        & (lines[:, 1] - _ON_BAR <= points[:, along, np.newaxis])
+        & (points[:, along, np.newaxis] <= lines[:, 2] + _ON_BAR)
+    )
+    same = np.array(
+        [[colour == other for other in line_colours] for colour in colours],
+        dtype=np.bool_,
+    ).reshape(on.shape)
+    # A bar through several points keeps those of its colour, if any.
+    on = np.where((on & same).any(axis=0), on & same, on)
+    # A point with several bars keeps those through it alone, or of its colour.
+    alone = on & (np.count_nonzero(on, axis=0) == 1)
+    on = np.where(alone.any(axis=1, keepdims=True), alone, on)
+    on = np.where((on & same).any(axis=1, keepdims=True), on & same, on)
+    return np.where(np.count_nonzero(on, axis=1) == 1, on.argmax(axis=1), -1)
+
+
+def _arrowhead(
+    path: _Path,
+    lines: Sequence[tuple[npt.NDArray[np.float64], list[Colour]]],
+    centres: Sequence[Point],
+) -> bool:
+    """Return whether a path is the arrowhead of a one-sided error bar.
+
+    That is a shape in a form whose origin lies at an end of a straight line
+    that may be an error bar, as ``_straight_lines`` gives them, and which
+    lies wholly beyond that end, while the line's other end lies at the
+    centre of a marker, one of ``centres``: matplotlib draws the arrowheads
+    of bars with ``lolims`` or ``uplims`` so, from the points they bound.
+    """
+    if path.anchor is None:
+        return False
+    points = np.vstack(path.subpaths)
+    anchor = np.array(path.anchor)
+    marked = np.array(centres, dtype=np.float64).reshape(-1, 2)
+    for along, (found, _) in enumerate(lines):
+        at = found[np.abs(found[:, 0] - anchor[1 - along]) <= _ON_BAR]
+        start, end = points[:, along].min(), points[:, along].max()
+        past_end = (np.abs(at[:, 2] - anchor[along]) <= _ON_BAR) & (
+            start >= at[:, 2] - _ON_BAR
+        )
+        past_start = (np.abs(at[:, 1] - anchor[along]) <= _ON_BAR) & (
+            end <= at[:, 1] + _ON_BAR
+        )
+        tails = np.empty((len(at), 2))
+        tails[:, 1 - along] = anchor[1 - along]
+        tails[:, along] = np.where(past_end, at[:, 1], at[:, 2])
+        tails = tails[past_end | past_start]
+        if np.any(np.abs(tails[:, np.newaxis] - marked).max(axis=2) <= _ON_BAR):
+            return True
+    return False
 
 
 def _same_shape(

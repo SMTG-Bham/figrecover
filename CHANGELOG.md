@@ -138,6 +138,20 @@ The first release.
   preview is drawn with OpenCV. `load_svg` and `render_svg` do the same in
   Python, and `examples/make_examples.py` saves five examples as SVG files,
   with and without text drawn as glyph outlines.
+- `--error-bars` reads the error bars of markers, and adds their bounds to
+  the CSV as `y_low` and `y_high` columns, and `x_low` and `x_high` if any
+  run across, in the plot's units, with a row for each marker; the preview
+  draws them. In images, the bars are followed from each colour's filled
+  markers, or with `-m` from the markers found, to their ends or caps, and
+  ends hidden by other colours are left empty. In PDF files, they are read
+  exactly, from the straight lines through the points, matched by where
+  they lie, including one-sided bars and bars in another colour than their
+  markers. Error bars and their caps are left out of the curves traced in
+  images, with or without the option, so bars longer on one side, or
+  across, no longer pull a curve away from its points, and the arrowheads
+  of one-sided bars in PDF files are not taken for markers. The library
+  has `find_error_bars`, `find_marker_error_bars` and `find_pdf_error_bars`,
+  which return an `ErrorBars` for each series.
 - `--preview` saves a faded copy of the image with each recovered curve drawn
   in its colour, and `--remove-grid` paints over grid lines before tracing.
 - Transparent pixels are treated as white, and plots with a dark background

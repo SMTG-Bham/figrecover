@@ -30,6 +30,8 @@ from .digitize import (
     Style,
     _greyscale,
     _left_out,
+    find_error_bars,
+    find_marker_error_bars,
     find_marker_series,
     find_series,
     load_image,
@@ -37,12 +39,14 @@ from .digitize import (
     trace_curves,
     trace_series,
 )
+from .errorbars import ErrorBars
 from .level import LEVEL_THRESHOLD, Levelling, level_image
 from .panels import Panel, read_panels
 from .pdf import (
     PREVIEW_SCALE,
     Box,
     Drawing,
+    find_pdf_error_bars,
     find_pdf_markers,
     find_pdf_series,
     load_pdf,
@@ -60,7 +64,11 @@ type Ring = tuple[Point, int, Colour]
 PLACE_PIXELS = 5
 """Pixels across which the x positions of markers are rounded, when printed."""
 
+BOUNDS = ("y_low", "y_high", "x_low", "x_high")
+"""The columns that --error-bars adds to the CSV, after x and y."""
+
 _SNIFF = 4096  # a file that is not named as one is an SVG file by this many bytes
+_CAP = 3  # an error bar's cap runs this many pixels each side of it in the preview
 
 SERIES_COLOURS: list[Colour] = [  # matplotlib's, to draw series of markers in
     (31, 119, 180),
@@ -302,6 +310,13 @@ def _build_parser() -> argparse.ArgumentParser:
         const=0.0,
         help="read the image as it is, for a plot drawn turned on purpose",
     )
+    parser.add_argument(
+        "--error-bars",
+        action="store_true",
+        help="also read the error bars of each marker, and add their bounds to "
+        "the CSV as y_low and y_high columns, and x_low and x_high if any run "
+        "across, in the plot's units",
+    )
     return parser
 
 
@@ -319,31 +334,7 @@ def _digitize(arguments: argparse.Namespace) -> None:
     if _is_drawing(arguments.image):
         _digitize_pdf(arguments)
         return
-    given = load_image(arguments.image)
-    _check_locations(arguments.markers, given, "-m position")
-    _check_locations(arguments.locations, given, "-l location")
-    if max(arguments.series or 1, len(arguments.colours)) > 1 and _greyscale(given):
-        message = (
-            "the image is greyscale, so curves of different colours may share a grey"
-        )
-        print(f"figrecover: {message}", file=sys.stderr)
-    locations = arguments.locations
-    if arguments.points and not locations:
-        locations = _click_locations(given, arguments.points)
-    image, levelling = _level(given, arguments.level)
-    # From here on, -m positions are those in the levelled image.
-    arguments.markers = _as_points(levelling.points(arguments.markers))
-    if arguments.points:
-        pixels = _as_points(levelling.points(locations))
-        calibration = Calibration.from_points(
-            arguments.points,
-            pixels,
-            x_log="x" in arguments.log,
-            y_log="y" in arguments.log,
-        )
-        plots = [_Plot(None, image, (0, 0), calibration, pixels, ("x", "y"))]
-    else:
-        plots = _read_panels(image, insets=not arguments.markers)
+    given, levelling, plots = _plots(arguments)
     if arguments.markers and len(plots) > 1:
         msg = (
             f"-m finds the markers of one plot, but the image has {len(plots)} "
@@ -357,7 +348,7 @@ def _digitize(arguments: argparse.Namespace) -> None:
     rings: list[Ring] = []
     for plot in plots:
         try:
-            traced, traced_colours, marked = _trace(plot, arguments)
+            traced, traced_colours, marked, bars = _trace(plot, arguments)
         except ValueError as error:
             if len(plots) == 1:
                 raise
@@ -365,10 +356,14 @@ def _digitize(arguments: argparse.Namespace) -> None:
             message = f"left out {called}, as its curves cannot be traced"
             print(f"figrecover: {message}: {error}", file=sys.stderr)
             continue
-        tables.append((plot, [plot.calibration.to_data(curve) for curve in traced]))
+        aligned = bool(arguments.markers)  # error bars through the markers traced
+        tables.append((plot, _data(plot.calibration, traced, bars, aligned=aligned)))
         x, y = plot.offset
         curves += [curve + np.array([x, y]) for curve in traced]
         colours += traced_colours
+        if bars is not None:  # drawn over the curves, in their colours
+            curves += _bar_dots(bars, (x, y))
+            colours += traced_colours
         rings += [
             ((cx + x, cy + y), radius, colour) for (cx, cy), radius, colour in marked
         ]
@@ -409,19 +404,65 @@ def _as_points(positions: npt.NDArray[np.float64]) -> list[Point]:
     return [(float(x), float(y)) for x, y in positions]
 
 
+def _plots(arguments: argparse.Namespace) -> tuple[Image, Levelling, list[_Plot]]:
+    """Load the image, level it, and find its plots, from the -p points or its axes.
+
+    The -l and -m positions are checked against the image as given, and
+    turned with it as it is levelled; -m positions are changed to those in
+    the levelled image. With several curves asked for, a greyscale image is
+    reported, as curves of different colours may share a grey in it.
+
+    Returns:
+        The image as given, how it was levelled, and its plots, in the
+        levelled image.
+    """
+    given = load_image(arguments.image)
+    _check_locations(arguments.markers, given, "-m position")
+    _check_locations(arguments.locations, given, "-l location")
+    if max(arguments.series or 1, len(arguments.colours)) > 1 and _greyscale(given):
+        message = (
+            "the image is greyscale, so curves of different colours may share a grey"
+        )
+        print(f"figrecover: {message}", file=sys.stderr)
+    locations = arguments.locations
+    if arguments.points and not locations:
+        locations = _click_locations(given, arguments.points)
+    image, levelling = _level(given, arguments.level)
+    # From here on, -m positions are those in the levelled image.
+    arguments.markers = _as_points(levelling.points(arguments.markers))
+    if not arguments.points:
+        return given, levelling, _read_panels(image, insets=not arguments.markers)
+    pixels = _as_points(levelling.points(locations))
+    calibration = Calibration.from_points(
+        arguments.points,
+        pixels,
+        x_log="x" in arguments.log,
+        y_log="y" in arguments.log,
+    )
+    return (
+        given,
+        levelling,
+        [_Plot(None, image, (0, 0), calibration, pixels, ("x", "y"))],
+    )
+
+
 def _trace(
     plot: _Plot, arguments: argparse.Namespace
-) -> tuple[list[npt.NDArray[np.float64]], list[Colour], list[Ring]]:
+) -> tuple[
+    list[npt.NDArray[np.float64]], list[Colour], list[Ring], list[ErrorBars] | None
+]:
     """Trace the curves of a plot, by colour or by markers.
 
     Returns:
         The pixel positions of the points of each curve, its colour in the
         preview, and the rings to draw in the preview around the reference
-        points or ticks, and the markers and legend keys.
+        points or ticks, and the markers and legend keys; and with
+        --error-bars, the error bars of each curve's markers.
     """
     traced = remove_grid(plot.image) if arguments.remove_grid else plot.image
     origin = plot.calibration.origin
     rings: list[Ring] = [(pixel, 6, (0, 0, 255)) for pixel in plot.pixels]
+    inks: list[Colour] = []  # the colour of each curve, as drawn
     if arguments.markers:
         curves = _found_markers(traced, arguments.markers, plot.calibration)
         colours = _series_colours(len(curves))
@@ -433,7 +474,8 @@ def _trace(
                 lambda colours: trace_curves(traced, colours, origin),
                 lambda colours: trace_series(traced, colours, origin),
             )
-        colours = _distinct([selector.colour for selector in arguments.colours])
+        inks = [selector.colour for selector in arguments.colours]
+        colours = _distinct(inks)
     else:
         found = _found(
             find_series(traced, origin),
@@ -442,8 +484,29 @@ def _trace(
             lambda: _left_out(traced, origin),
         )
         curves = [series.points for series in found]
-        colours = _distinct([series.colour for series in found])
-    return curves, colours, rings
+        inks = [series.colour for series in found]
+        colours = _distinct(inks)
+    bars = None
+    if arguments.error_bars and arguments.markers:
+        bars = find_marker_error_bars(traced, arguments.markers, origin)
+    elif arguments.error_bars:
+        bars = _bars_by_colour(traced, inks, origin)
+    return curves, colours, rings, bars
+
+
+def _bars_by_colour(
+    image: Image, colours: Sequence[Colour], origin: Point
+) -> list[ErrorBars]:
+    """Return the error bars of each curve's markers, found by the curve's colour.
+
+    Curves that share a colour, as markers and a line through them do, find
+    the same markers, so the first curve of a colour, its markers if it has
+    any, takes their error bars, and the others none.
+    """
+    first = list(dict.fromkeys(colours))
+    found = dict(zip(first, find_error_bars(image, first, origin), strict=True))
+    none = ErrorBars(np.empty((0, 2)), np.empty((0, 2)), np.empty((0, 2)))
+    return [found.pop(colour) if colour in found else none for colour in colours]
 
 
 @contextlib.contextmanager
@@ -507,6 +570,7 @@ def _digitize_pdf(arguments: argparse.Namespace) -> None:
         )
         curves = [series.points for series in found]
         colours = _distinct([series.colour for series in found])
+    bars = find_pdf_error_bars(drawing, curves) if arguments.error_bars else None
 
     if arguments.preview:
         corner = np.array(drawing.box[:2])
@@ -518,9 +582,12 @@ def _digitize_pdf(arguments: argparse.Namespace) -> None:
         if arguments.markers:
             keys = (np.array(arguments.markers) - corner) * PREVIEW_SCALE
             rings += _marker_rings([(x, y) for x, y in keys], pixels, colours)
+        if bars is not None:  # drawn over the curves, in their colours
+            pixels += _bar_dots(bars, -corner * PREVIEW_SCALE, PREVIEW_SCALE)
+            colours = [*colours, *colours]
         image = _render(drawing)
         _save_preview(arguments.preview, image, pixels, colours, rings)
-    data = [calibration.to_data(curve) for curve in curves]
+    data = _data(calibration, curves, bars, aligned=True)
     _write_csv(arguments.output or sys.stdout, [(None, data)], names)
 
 
@@ -882,6 +949,83 @@ def _marker_rings(
     return rings
 
 
+def _data(
+    calibration: Calibration,
+    curves: Sequence[npt.NDArray[np.float64]],
+    bars: Sequence[ErrorBars] | None,
+    *,
+    aligned: bool,
+) -> list[npt.NDArray[np.float64]]:
+    """Return the data of each curve, with the bounds of its error bars, if read.
+
+    Without error bars, a row of a curve's data holds a point's x and y.
+    With them, it also holds the bounds that ``BOUNDS`` names, lower first
+    even on a reversed axis, NaN where the point has none. If ``aligned``,
+    the error bars' points are the curves' own, as markers and the points in
+    a PDF are; otherwise each marker adds a row among those of its curve,
+    sorted by x, and the curve's own rows have no bounds.
+    """
+    data = [calibration.to_data(curve) for curve in curves]
+    if bars is None:
+        return data
+    flipped = np.array([calibration.x_scale < 0, calibration.y_scale < 0])
+    bounded = []
+    for series in bars:
+        low, high = calibration.to_data(series.low), calibration.to_data(series.high)
+        low, high = np.where(flipped, high, low), np.where(flipped, low, high)
+        points = calibration.to_data(series.points)
+        bounded.append(
+            np.column_stack([points, low[:, 1], high[:, 1], low[:, 0], high[:, 0]])
+        )
+    if aligned:
+        return bounded
+    merged = []
+    for rows, marked in zip(data, bounded, strict=True):
+        unbounded = np.column_stack([rows, np.full((len(rows), len(BOUNDS)), np.nan)])
+        both = np.vstack([unbounded, marked])
+        merged.append(both[np.argsort(both[:, 0], kind="stable")])
+    return merged
+
+
+def _bar_dots(
+    bars: Sequence[ErrorBars],
+    shift: tuple[float, float] | npt.NDArray[np.float64],
+    scale: float = 1,
+) -> list[npt.NDArray[np.float64]]:
+    """Return each series' error bars as dots a pixel apart, to draw in the preview.
+
+    Each bar runs from its point to one of its ends, with a cap across the
+    end, ``_CAP`` pixels each side, and positions are scaled, then shifted,
+    into the preview's pixels.
+    """
+    drawn = []
+    for series in bars:
+        points = series.points * scale + shift
+        dots = [np.empty((0, 2))]
+        for ends in (series.low * scale + shift, series.high * scale + shift):
+            for axis in (0, 1):
+                across = np.zeros(2)
+                across[1 - axis] = _CAP
+                for point, end in zip(points, ends[:, axis], strict=True):
+                    if not math.isnan(end):
+                        tip = point.copy()
+                        tip[axis] = end
+                        dots += [
+                            _dotted(point, tip),
+                            _dotted(tip - across, tip + across),
+                        ]
+        drawn.append(np.vstack(dots))
+    return drawn
+
+
+def _dotted(
+    start: npt.NDArray[np.float64], end: npt.NDArray[np.float64]
+) -> npt.NDArray[np.float64]:
+    """Return points a pixel apart, or less, along a line from start to end."""
+    count = math.ceil(math.dist(start, end)) + 1
+    return np.linspace(start, end, count)
+
+
 def _write(
     output: Path | None,
     tables: Sequence[tuple[_Plot, Sequence[npt.NDArray[np.float64]]]],
@@ -923,21 +1067,40 @@ def _write_csv(
 
     There is a panel column if the tables are named, rather than one named
     None for an image of one plot, and a series column if a table has
-    several curves.
+    several curves. Curves with the bounds of error bars, as ``_data`` gives
+    them, add the columns of ``BOUNDS``, those across only if some point has
+    them, and leave a bound that a point lacks empty.
     """
     series = any(len(curves) > 1 for _, curves in tables)
     named = tables[0][0] is not None
+    every = [curve for _, curves in tables for curve in curves]
+    width = max((curve.shape[1] for curve in every), default=len(names))
+    across = len(names) + BOUNDS.index("x_low")  # where bounds across start
+    if all(np.isnan(curve[:, across:]).all() for curve in every):
+        width = min(width, across)
     text = io.StringIO()
     writer = csv.writer(text, lineterminator="\n")
-    writer.writerow([*(["panel"] * named), *(["series"] * series), *names])
+    writer.writerow(
+        [
+            *(["panel"] * named),
+            *(["series"] * series),
+            *names,
+            *BOUNDS[: width - len(names)],
+        ]
+    )
     for name, curves in tables:
         for number, curve in enumerate(curves, start=1):
             start = [*([name] if name is not None else []), *[str(number)] * series]
-            writer.writerows([*start, f"{x:.6g}", f"{y:.6g}"] for x, y in curve)
+            writer.writerows([*start, *map(_cell, row)] for row in curve[:, :width])
     if isinstance(file, Path):
         file.write_text(text.getvalue(), encoding="utf-8")
     else:
         file.write(text.getvalue())
+
+
+def _cell(value: float) -> str:
+    """Return a value as written in the CSV, or nothing if it is NaN."""
+    return "" if math.isnan(value) else f"{value:.6g}"
 
 
 def _save_preview(

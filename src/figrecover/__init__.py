@@ -12,6 +12,8 @@ from .digitize import (
     Series,
     Style,
     find_colours,
+    find_error_bars,
+    find_marker_error_bars,
     find_marker_series,
     find_markers,
     find_series,
@@ -21,12 +23,14 @@ from .digitize import (
     trace_curves,
     trace_series,
 )
+from .errorbars import ErrorBars
 from .level import Levelling, find_skew, level_image
 from .panels import Panel, read_panels
 from .pdf import (
     Box,
     Drawing,
     find_pdf_colours,
+    find_pdf_error_bars,
     find_pdf_markers,
     find_pdf_series,
     load_pdf,
@@ -47,6 +51,7 @@ __all__ = [
     "Calibration",
     "Colour",
     "Drawing",
+    "ErrorBars",
     "Image",
     "Levelling",
     "MarkerSeries",
@@ -57,9 +62,12 @@ __all__ = [
     "Tick",
     "__version__",
     "find_colours",
+    "find_error_bars",
+    "find_marker_error_bars",
     "find_marker_series",
     "find_markers",
     "find_pdf_colours",
+    "find_pdf_error_bars",
     "find_pdf_markers",
     "find_pdf_series",
     "find_series",

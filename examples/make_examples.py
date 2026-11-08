@@ -24,7 +24,8 @@ from matplotlib.legend import Legend
 type Curve = Callable[[npt.NDArray[np.float64]], npt.NDArray[np.float64]]
 
 HERE = Path(__file__).parent
-ALSO_PDF = {"labelled", "logarithmic", "markers", "series", "styles"}  # and PDFs
+# Also saved as PDF files.
+ALSO_PDF = {"errorbars", "labelled", "logarithmic", "markers", "series", "styles"}
 # Also saved as SVG files: name.svg with text drawn as glyph outlines, as
 # matplotlib draws it by default, and name-text.svg with text as text.
 ALSO_SVG = {"labelled", "logarithmic", "markers", "series", "rasterised"}
@@ -99,6 +100,42 @@ def shallow(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
 def above(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
     """Return ``rising`` 0.05 higher, so its markers cover half of that one's."""
     return rising(x) + 0.05
+
+
+def swell(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return a slow sine wave about 3.4, the highest series with error bars."""
+    return 3.4 + np.sin(x) / 4
+
+
+def ebb(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return a slow cosine wave about 2.4, below ``swell``."""
+    return 2.4 + np.cos(x) / 4
+
+
+def drift(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return a slower sine wave about 1.5, below ``ebb``."""
+    return 1.5 + np.sin(x / 2) / 5
+
+
+def lull(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return a slower cosine wave about 0.6, the lowest series with error bars."""
+    return 0.6 + 0.15 * np.cos(x / 2)
+
+
+# The colour, format and curve of each series with error bars, and its errors:
+# symmetric, longer above than below, across and up and down, and without caps.
+ERROR_SERIES: list[tuple[str, str, Curve]] = [
+    ("tab:blue", "o-", swell),
+    ("tab:orange", "s-", ebb),
+    ("tab:green", "D", drift),
+    ("tab:red", "^-", lull),
+]
+ERRORS: list[dict[str, float | list[list[float]]]] = [
+    {"yerr": 0.2},
+    {"yerr": [[0.1], [0.3]]},
+    {"xerr": 0.3, "yerr": 0.15},
+    {"yerr": 0.2},
+]
 
 
 def draw(
@@ -189,6 +226,32 @@ def draw_scatter(name: str, errors: Curve, scattered: Curve) -> None:
     axes.legend(loc="center right")
     save_pdf(name, figure, axes, [(0, 0), (10, 0), (0, 1)])
     plt.close(figure)
+
+
+def draw_errorbars(name: str) -> None:
+    """Draw four series with error bars, and print the points.
+
+    The markers lie every unit of x from 0.5 to 9.5: blue circles on a line,
+    with symmetric bars; orange squares on a line, with bars longer above
+    than below; green diamonds alone, with bars across and up and down; and
+    red triangles on a line, with bars without caps. Each series keeps to a
+    band of y of its own, so none hides another's bars. Saved as a PDF too.
+    """
+    figure, axes = plt.subplots(figsize=(6.4, 4), dpi=100)
+    x = np.arange(0.5, 10, 1.0)
+    for (colour, fmt, curve), errors in zip(ERROR_SERIES, ERRORS, strict=True):
+        axes.errorbar(
+            x,
+            curve(x),
+            fmt=fmt,
+            color=colour,
+            linewidth=1,
+            capsize=0 if colour == "tab:red" else 3,
+            **errors,
+        )
+    axes.set(xlabel="Time (s)", ylabel="Voltage (mV)", xlim=(0, 10), ylim=(0, 4))
+    axes.spines[["top", "right"]].set_visible(False)
+    save(name, figure, axes, [(0, 0), (10, 0), (0, 1)])
 
 
 def draw_titled(name: str, curve: Curve, titles: tuple[str, str]) -> None:
@@ -516,3 +579,4 @@ draw_inset("inset")
 draw_skewed("skewed", damped, 1)
 draw_rasterised("rasterised", {"tab:blue": decay, "tab:orange": growth})
 draw_scatter("scatter", decay, growth)
+draw_errorbars("errorbars")

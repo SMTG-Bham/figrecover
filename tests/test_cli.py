@@ -69,6 +69,14 @@ MARKER_PDF_KEYS = [
     *("-m", "108.45,12.91", "-m", "187.85,12.91"),
     *("-m", "272.06,12.91", "-m", "347.51,12.91"),
 ]
+# The colours of the series with error bars in errorbars.png and .pdf, from
+# the top, and the pixel positions of POINTS in the image, and their
+# positions in the PDF, in points, that examples/make_examples.py prints.
+ERROR_COLOURS = ["-c", "1f77b4", "-c", "ff7f0e", "-c", "2ca02c", "-c", "d62728"]
+ERROR_LOCATIONS = ["-l", "80,44", "-l", "576,44", "-l", "80,121"]
+ERRORS = [str(EXAMPLES / "errorbars.png"), *ERROR_COLOURS, "--error-bars"]
+ERRORS_PDF = [str(EXAMPLES / "errorbars.pdf"), *ERROR_COLOURS, "--error-bars"]
+BOUNDED = "series,x,y,y_low,y_high,x_low,x_high"
 
 
 def spectrum(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
@@ -146,6 +154,32 @@ def read_csv(text: str, header: str = "x,y") -> npt.NDArray[np.float64]:
     first, _, body = text.partition("\n")
     assert first == header
     return np.loadtxt(body.splitlines(), delimiter=",", ndmin=2)
+
+
+def read_bounds(text: str, header: str = BOUNDED) -> npt.NDArray[np.float64]:
+    """Parse CSV output with the bounds of error bars, empty as NaN, and its header."""
+    first, _, body = text.partition("\n")
+    assert first == header
+    return np.genfromtxt(body.splitlines(), delimiter=",", ndmin=2)
+
+
+def error_bounds(series: int) -> tuple[npt.NDArray[np.float64], ...]:
+    """Return the points and bounds of a series that make_examples.py draws.
+
+    The series are those of errorbars.png, numbered from 1, from the top:
+    each marker's x and y, and its ``y_low``, ``y_high``, ``x_low`` and
+    ``x_high``, NaN where it has none.
+    """
+    curves: list[tuple[Curve, float, float, float]] = [
+        (lambda x: 3.4 + np.sin(x) / 4, 0.2, 0.2, np.nan),
+        (lambda x: 2.4 + np.cos(x) / 4, 0.1, 0.3, np.nan),
+        (lambda x: 1.5 + np.sin(x / 2) / 5, 0.15, 0.15, 0.3),
+        (lambda x: 0.6 + 0.15 * np.cos(x / 2), 0.2, 0.2, np.nan),
+    ]
+    curve, below, above, across = curves[series - 1]
+    x = np.arange(0.5, 10, 1.0)
+    y = curve(x)
+    return x, y, y - below, y + above, x - across, x + across
 
 
 def assert_follows(data: npt.NDArray[np.float64], curve: Curve) -> None:
@@ -996,6 +1030,81 @@ def test_writes_the_options_that_pick_each_series() -> None:
         "000000:dashed",
         "000000:solid2",
     ]
+
+
+def test_reads_error_bars_with_their_markers(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    preview = tmp_path / "preview.png"
+
+    arguments = [*ERRORS, *POINTS, *ERROR_LOCATIONS, "--preview", str(preview)]
+    assert main(arguments) == 0
+
+    data = read_bounds(capsys.readouterr().out)
+    # A unit of x is 49.6 pixels, and of y 77, so 2 pixels are 0.04 and 0.026.
+    for series in range(1, 5):
+        rows = data[data[:, 0] == series, 1:]
+        marked = rows[~np.isnan(rows[:, 2])]
+        assert len(marked) == 10  # a row for each marker, with its bounds
+        x, *bounds = error_bounds(series)
+        np.testing.assert_allclose(marked[:, 0], x, atol=0.04)
+        # The triangles' middles lie up to 2.4 pixels below their points.
+        steps = [0.033, 0.026, 0.026, 0.04, 0.04]
+        for column, (truth, step) in enumerate(zip(bounds, steps, strict=True)):
+            np.testing.assert_allclose(marked[:, column + 1], truth, atol=step)
+        assert np.isnan(rows[np.isnan(rows[:, 2]), 2:]).all()  # the line's own
+    image = cv2.imread(str(preview))
+    assert image is not None
+    # The cap of the first blue marker's bar, 330.5 pixels up, 104.8 across.
+    assert np.any(np.all(image[68:72, 101:109] == (180, 119, 31), axis=-1))
+
+
+def test_reads_error_bars_in_pdf_files_exactly(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    preview = tmp_path / "preview.png"
+
+    assert main([*ERRORS_PDF, "--preview", str(preview)]) == 0
+
+    captured = capsys.readouterr()
+    header = "series,Time (s),Voltage (mV),y_low,y_high,x_low,x_high"
+    data = read_bounds(captured.out, header)
+    for series in range(1, 5):
+        rows = data[data[:, 0] == series, 1:]
+        np.testing.assert_allclose(
+            rows, np.column_stack(error_bounds(series)), atol=1e-5
+        )
+    image = cv2.imread(str(preview))
+    assert image is not None
+    assert np.any(np.all(image == (40, 39, 214), axis=-1))  # the red bars
+
+
+def test_reads_error_bars_in_order_on_reversed_axes(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Both axes reversed: x from 10 to 0, and y from 4 down to 3 a unit up.
+    points = ["-p", "10,4", "-p", "0,4", "-p", "10,3"]
+    image = str(EXAMPLES / "errorbars.png")
+    assert main([image, "-c", "2ca02c", *points, *ERROR_LOCATIONS, "--error-bars"]) == 0
+
+    # The green markers, with bars across and up and down, from the right.
+    data = read_bounds(capsys.readouterr().out, "x,y,y_low,y_high,x_low,x_high")
+    marked = data[~np.isnan(data[:, 2])][::-1]
+    x, _, below, above, left, right = error_bounds(3)
+    np.testing.assert_allclose(marked[:, 0], 10 - x, atol=0.04)
+    for column, truth in enumerate([4 - above, 4 - below, 10 - right, 10 - left]):
+        np.testing.assert_allclose(marked[:, column + 2], truth, atol=0.04)
+
+
+def test_reads_no_error_bars_where_there_are_none(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main([*MARKERS, *MARKER_KEYS, "--error-bars"]) == 0
+
+    # The lines through the markers are not bars, and none run across.
+    data = read_bounds(capsys.readouterr().out, header="series,x,y,y_low,y_high")
+    assert len(data) >= 4 * 18
+    assert np.isnan(data[:, 3:]).all()
 
 
 @pytest.mark.usefixtures("without_pdf")
