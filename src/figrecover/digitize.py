@@ -1657,14 +1657,16 @@ def _uncover(
     inked = [levels >= _CONTRAST / 255 for levels in area]
     while around:
         known = [*placed, *added]
-        covered = _footprints(area[0].shape, known)
+        hiding = []  # what covers markers of each colour
+        for colour in range(len(area)):
+            covered = _footprints(area[0].shape, known)
+            for other, ink in enumerate(inked):
+                if other != colour:
+                    covered |= ink
+            hiding.append(covered)
         candidates = []
         for marker, (index, key) in itertools.product(around, enumerate(found)):
-            hidden = covered.copy()
-            for colour, ink in enumerate(inked):
-                if colour != key.colour:
-                    hidden |= ink
-            pair = _hidden(area[key.colour], hidden, found, index, marker)
+            pair = _hidden(area[key.colour], hiding[key.colour], found, index, marker)
             if (
                 pair is not None
                 and not _at_key(found, pair[1].row, pair[1].column)
@@ -1698,12 +1700,12 @@ def _rethink(
 ) -> list[_Marker]:
     """Look again for markers probably hidden altogether, where series share x.
 
-    Where ``_missing`` finds a series' marker probably hidden, under a marker
-    of another key of its colour, its key's marker is fitted there, as
-    ``_fit`` fits it, and the story around it told, as ``_story`` tells it,
-    given the other markers. If the story holds a marker of the other's key
-    too, and differs less from the image than the other alone, as
-    ``_misfits`` measures them, the story replaces the other, as when the
+    Where ``_missing`` finds a series' marker probably hidden, under the
+    nearest marker of another key of its colour, its key's marker is fitted
+    there, as ``_fit`` fits it, and the story around it told, as ``_story``
+    tells it, given the other markers. If the story holds a marker of the
+    other's key too, and differs less from the image than the other alone,
+    as ``_misfits`` measures them, the story replaces the other, as when the
     other was taken to lie where the hidden marker does.
 
     Returns:
@@ -1717,7 +1719,8 @@ def _rethink(
                 (
                     marker
                     for marker in markers
-                    if found[marker.key].colour == colour
+                    if marker.key != index
+                    and found[marker.key].colour == colour
                     and math.dist((row, column), (marker.row, marker.column))
                     < (found[index].size + found[marker.key].size) / 2
                 ),
