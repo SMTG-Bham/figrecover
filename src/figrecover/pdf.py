@@ -5,7 +5,7 @@ import functools
 import itertools
 import math
 import os
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Collection, Iterator, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -42,10 +42,13 @@ from .digitize import (
     AXIS_MARGIN,
     Colour,
     Image,
+    Series,
+    Style,
     _curve_colours,
     remove_grid,
     trace_curves,
 )
+from .errorbars import ErrorBars
 
 type Box = tuple[float, float, float, float]
 """A rectangle's left, bottom, right and top edges, in points."""
@@ -67,6 +70,10 @@ _MARKER_SIZE = 36  # a marker is at most this many points across
 _SAME_SHAPE = 0.01  # outlines whose points lie this many points apart are the same
 _LABEL_REACH = 4  # a legend's label lies within this many of its heights of its key
 _KEY_REACH = 10  # a key lies within this many points of the marker it picks
+_DOT = 2  # a dash at most this many line widths long is a dot
+_CHAIN = 3  # a line carries on one ending this many times the longer's length away,
+_BEND = 30  # turning by this many degrees or less from the ends of both
+_ON_BAR = 0.01  # a point this many points or less from a straight line lies on it
 _WHITE: Colour = (255, 255, 255)
 _SUPERSCRIPTS = str.maketrans(
     "0123456789+-\u2212=()ni",
@@ -93,7 +100,9 @@ class _Path:
     and ``clip`` is the box beyond which it is hidden. ``anchor`` is where
     the origin of the form that holds the path lies, or None if the page
     holds it; a form drawn as a marker is placed with its origin at the
-    point it marks.
+    point it marks. ``width`` is the width of its outline, and ``dashes``
+    the lengths of the dashes and gaps that it is stroked with, in turn from
+    a dash, both in points on the page; a solid line has no dashes.
     """
 
     subpaths: tuple[npt.NDArray[np.float64], ...]
@@ -103,6 +112,8 @@ class _Path:
     fill: Colour | None
     clip: Box
     anchor: Point | None
+    width: float = 1
+    dashes: tuple[float, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,11 +199,36 @@ class _Char:
 
 @dataclass(frozen=True, slots=True)
 class _Series:
-    """A curve in a plot: its colour, its points, and its length, in points."""
+    """A curve in a plot: its colour, its points, and its length, in points.
+
+    ``style`` and ``width`` are those of ``Series``.
+    """
 
     colour: Colour
     points: npt.NDArray[np.float64]
     length: float
+    style: Style = "solid"
+    width: float = 0
+
+    def public(self) -> Series:
+        """Return the curve as a ``Series``."""
+        return Series(self.colour, self.style, self.width, self.points)
+
+
+@dataclass(frozen=True, slots=True)
+class _Chain:
+    """Paths stroked in one style that draw one line, as ``find_pdf_series`` joins them.
+
+    ``paths`` holds their indices among the paths of a page, in the order
+    they are drawn, ``colour`` and ``width`` are the colour and width of
+    their outlines, and ``pattern`` the dashes they are drawn with, as
+    ``_pattern`` gives them.
+    """
+
+    colour: Colour
+    width: float
+    pattern: tuple[float, ...]
+    paths: list[int]
 
 
 @functools.cache
@@ -428,7 +464,7 @@ def find_pdf_colours(
     Raises:
         ValueError: If there are fewer than ``count`` curves.
     """
-    series = _series(drawing, origin)
+    series = _colour_series(drawing, origin)
     if len(series) < count:
         msg = f"found only {len(series)} of {count} curves"
         raise ValueError(msg if series else "no curve found")
@@ -456,7 +492,9 @@ def trace_pdf_curves(
     drawn, and its lines are left out, as a line through markers passes
     through the same points. A marker is a shape at most ``_MARKER_SIZE``
     points across, other than a straight horizontal or vertical line, such
-    as the cap of an error bar, drawn at least twice. A form holding it, as
+    as the cap of an error bar, drawn at least twice; nor is an arrowhead
+    lying wholly beyond one end of a straight line whose other end lies at a
+    marker, as one-sided error bars have. A form holding it, as
     matplotlib draws markers, marks the point where the form's origin lies,
     if within the shape; otherwise the shape must be filled or closed, as a
     piece of a curve is not, and marks the middle of its box. Paths drawn
@@ -485,18 +523,72 @@ def trace_pdf_curves(
         ValueError: If no curve has one of the colours, or two of them match
             the same curve.
     """
-    series = _series(drawing, origin)
-    indices = [_nearest(series, colour) for colour in colours]
-    for (first, index), (second, other) in itertools.combinations(
-        zip(colours, indices, strict=True), 2
-    ):
-        if index == other:
-            msg = (
-                f"colours #{bytes(first).hex()} and #{bytes(second).hex()} both "
-                f"match the curve of colour #{bytes(series[index].colour).hex()}"
-            )
-            raise ValueError(msg)
+    series = _colour_series(drawing, origin)
+    indices = _matched([curve.colour for curve in series], colours)
     return [series[index].points for index in indices]
+
+
+def find_pdf_series(drawing: Drawing, origin: Point = (0, 0)) -> list[Series]:
+    """Find every curve and series of markers in a plot on a page of a PDF.
+
+    Curves are told apart by how they are drawn, as well as by colour: by
+    the colour, width and dashes of the paths' outlines. Their style is
+    solid without dashes, dotted if each dash is at most ``_DOT`` times the
+    width long, as dots are, dashed if none is, and dashdot if some are.
+    Paths drawn in one style make one curve where each carries on the last,
+    starting where it ends, or as the dashes of a line drawn one by one do,
+    at most ``_CHAIN`` times the longer one's length beyond its end, in a
+    direction that turns by at most ``_BEND`` degrees from where each runs
+    there; other paths, such as two solid black lines drawn apart, are
+    curves of their own. Markers are told apart by their colours and shape,
+    as ``find_pdf_markers`` tells them apart, and curves drawn in images by
+    colour. A line in a colour drawn with markers, which ``trace_pdf_curves``
+    leaves out, is a curve of its own, as a fit to the markers is, unless it
+    passes through their centres alone, as a line through markers does, by
+    ``_through``. See ``trace_pdf_curves`` for which paths, markers and
+    images make the curves and series of markers.
+
+    Args:
+        drawing: What is drawn on the page, as ``load_pdf`` returns it.
+        origin: Position where the axes cross, in points.
+
+    Returns:
+        Every curve and series of markers, longest first, by the length of
+        the lines through their points, as ``trace_pdf_curves`` gives their
+        points, but a line in a colour drawn with markers after them. The
+        width of a curve is that of its outline, and of a series of markers
+        the size of the largest, both in points.
+    """
+    return [curve.public() for curve in _series(drawing, origin)]
+
+
+def trace_pdf_series(
+    drawing: Drawing, colours: Sequence[Colour], origin: Point = (0, 0)
+) -> list[list[Series]]:
+    """Find the curves and series of markers of each colour in a plot on a PDF's page.
+
+    They are told apart as ``find_pdf_series`` tells them apart, and each
+    colour picks the series whose colour is nearest, as in
+    ``trace_pdf_curves``.
+
+    Args:
+        drawing: What is drawn on the page, as ``load_pdf`` returns it.
+        colours: The colours of the series.
+        origin: Position where the axes cross, in points.
+
+    Returns:
+        For each colour, its curves and series of markers, longest first.
+
+    Raises:
+        ValueError: If no series has one of the colours, or two of them
+            match the same series.
+    """
+    series = _series(drawing, origin)
+    found = list(dict.fromkeys(curve.colour for curve in series))
+    return [
+        [curve.public() for curve in series if curve.colour == found[index]]
+        for index in _matched(found, colours)
+    ]
 
 
 def find_pdf_markers(
@@ -552,6 +644,58 @@ def find_pdf_markers(
             origin,
         ).points
         for key in picked
+    ]
+
+
+def find_pdf_error_bars(
+    drawing: Drawing, points: Sequence[npt.NDArray[np.float64]]
+) -> list[ErrorBars]:
+    """Find the error bars through the points of each series in a plot on a page.
+
+    Error bars are straight vertical or horizontal lines, stroked but not
+    filled, that pass through a point, to within ``_ON_BAR`` points across
+    and between their ends; matplotlib draws each as a subpath of its own.
+    Their ends are the bounds, exactly as drawn, even beyond the limits of
+    the axes. A one-sided bar, as matplotlib draws with ``lolims`` or
+    ``uplims``, ends at its point. Caps across the ends of bars, and the
+    arrowheads of one-sided bars, add nothing.
+
+    Bars are matched to points by where they lie, not by colour, so bars
+    drawn in another colour than their markers are found too. Colour only
+    settles which point a bar belongs to where it is in doubt, as where
+    series share an x: a bar through several points belongs to those with a
+    marker drawn in its colour, if any, and a point with several bars one
+    way takes the one through it alone, or else the one in its marker's
+    colour; if that leaves more than one, the point has no bar that way.
+    Lines that run from one edge of their clip to the other, as grid lines
+    and reference lines do across the axes, are not bars.
+
+    Args:
+        drawing: What is drawn on the page, as ``load_pdf`` returns it.
+        points: The points of each series, in points, such as
+            ``trace_pdf_curves`` or ``find_pdf_markers`` returns.
+
+    Returns:
+        The error bars of each series, through the points given, with the
+        ends of their bars in points, or NaN where a point has no bar that
+        way.
+    """
+    every = np.vstack([np.empty((0, 2)), *points])
+    low, high = np.full_like(every, np.nan), np.full_like(every, np.nan)
+    markers = _markers(drawing)
+    centres = np.array([marker.centre for marker in markers]).reshape(-1, 2)
+    near = np.abs(every[:, np.newaxis] - centres).max(axis=2) <= _ON_BAR
+    colours = [
+        markers[int(np.argmax(row))].colour if row.any() else None for row in near
+    ]
+    for along, (lines, line_colours) in enumerate(_straight_lines(drawing)):
+        chosen = _bars_through(every, colours, lines, line_colours, along)
+        low[chosen >= 0, along] = lines[chosen[chosen >= 0], 1]
+        high[chosen >= 0, along] = lines[chosen[chosen >= 0], 2]
+    ends = np.cumsum([0, *(len(series) for series in points)])
+    return [
+        ErrorBars(every[start:end], low[start:end], high[start:end])
+        for start, end in itertools.pairwise(ends)
     ]
 
 
@@ -729,7 +873,9 @@ def _path(
 
     ``matrix`` maps from the path's own space to the page's, ``clip`` is the
     box it is shown in, or None if it is hidden, and ``anchor`` where the
-    origin of the form that holds it lies, as ``_Path`` has it.
+    origin of the form that holds it lies, as ``_Path`` has it. PDFium gives
+    the width of its outline and its dashes in its own space too, which the
+    matrix scales by the square root of its determinant.
     """
     raw = _pdfium().raw
     fill, stroke = ctypes.c_int(), ctypes.c_int()
@@ -746,7 +892,25 @@ def _path(
         or _overlap(clip, (*points.min(axis=0), *points.max(axis=0))) is None
     ):
         return []
-    return [_Path(subpaths, closed, segments, stroke_colour, fill_colour, clip, anchor)]
+    width = ctypes.c_float()
+    raw.FPDFPageObj_GetStrokeWidth(handle, width)
+    count = max(raw.FPDFPageObj_GetDashCount(handle), 0)
+    dashes = (ctypes.c_float * count)()
+    raw.FPDFPageObj_GetDashArray(handle, dashes, count)
+    scale = math.sqrt(abs(np.linalg.det(matrix[:2, :2])))
+    return [
+        _Path(
+            subpaths,
+            closed,
+            segments,
+            stroke_colour,
+            fill_colour,
+            clip,
+            anchor,
+            width.value * scale,
+            tuple(dash * scale for dash in dashes),
+        )
+    ]
 
 
 def _outline(
@@ -935,41 +1099,232 @@ def _y_title(
     return _title(_lines(column))
 
 
-def _series(drawing: Drawing, origin: Point) -> list[_Series]:
+def _colour_series(drawing: Drawing, origin: Point) -> list[_Series]:
     """Return the curves in a plot on a page, longest first, by colour.
 
     See ``trace_pdf_curves`` for which paths, markers and points make the
     curves. Curves in a colour with no points shown are left out.
     """
     marked: dict[Colour, list[_Marker]] = {}
-    for marker in _markers(drawing):
-        if not _in_legend(marker, drawing.texts, origin):
-            marked.setdefault(marker.colour, []).append(marker)
-    parts: dict[Colour, list[tuple[npt.NDArray[np.float64], float]]] = {}
-    for path in drawing.paths:
-        if path.stroke is None or path.fill is not None or path.stroke in marked:
-            continue
-        for points, closed in zip(path.subpaths, path.closed, strict=True):
-            if closed or np.ptp(points, axis=0).min() <= _FLAT:
-                continue
-            shown = _shown(points, path.clip, origin)
-            parts.setdefault(path.stroke, []).append(
-                (points[shown], _length(points, shown))
-            )
+    for marker in _plotted(drawing, origin):
+        marked.setdefault(marker.colour, []).append(marker)
+    drawn: dict[Colour, list[int]] = {}
+    for chain in _chains(drawing, marked):
+        drawn.setdefault(chain.colour, []).extend(chain.paths)
     series = [
-        _Series(
-            colour,
-            np.vstack([points for points, _ in pieces]),
-            sum(length for _, length in pieces),
-        )
-        for colour, pieces in parts.items()
+        _Series(colour, *_line(drawing, sorted(paths), origin))
+        for colour, paths in drawn.items()
     ]
     series += [_dots(colour, markers, origin) for colour, markers in marked.items()]
     series += _traced(drawing, origin)
+    return _longest(series)
+
+
+def _series(drawing: Drawing, origin: Point) -> list[_Series]:
+    """Return the curves and series of markers in a plot on a page, longest first.
+
+    See ``find_pdf_series`` for how they are told apart. Series with no
+    points shown are left out.
+    """
+    styles: list[list[_Marker]] = []  # the markers of each style
+    for marker in _plotted(drawing, origin):
+        for markers in styles:
+            if _same_style(markers[0], marker):
+                markers.append(marker)
+                break
+        else:
+            styles.append([marker])
+    series = [_dots(markers[0].colour, markers, origin) for markers in styles]
+    marked: dict[Colour, list[_Marker]] = {}
+    for markers in styles:
+        marked.setdefault(markers[0].colour, []).extend(markers)
+    series += [
+        _Series(
+            chain.colour,
+            *_line(drawing, chain.paths, origin),
+            _dash_style(chain.pattern, chain.width),
+            chain.width,
+        )
+        for chain in _chains(drawing, ())
+        if not _through(drawing, chain, marked.get(chain.colour, []))
+    ]
+    series += _traced(drawing, origin)
+    # A line in a colour drawn with markers comes after them.
+    marking: dict[Colour, float] = {}
+    for curve in series[: len(styles)]:
+        marking[curve.colour] = max(marking.get(curve.colour, 0), curve.length)
+
+    def rank(curve: _Series) -> tuple[float, bool]:
+        if curve.style == "markers" or curve.colour not in marking:
+            return -curve.length, False
+        return -min(curve.length, marking[curve.colour]), True
+
+    return sorted((curve for curve in series if len(curve.points)), key=rank)
+
+
+def _through(drawing: Drawing, chain: _Chain, markers: Sequence[_Marker]) -> bool:
+    """Return whether a line passes through the centres of markers alone.
+
+    It does if each point its paths' pieces of a curve pass through lies
+    within ``_SAME_SHAPE`` of a marker's centre, across and along, as a line
+    through markers does.
+    """
+    if not markers:
+        return False
+    centres = np.array([marker.centre for marker in markers], dtype=np.float64)
+    points = np.vstack(
+        [piece for index in chain.paths for piece in _pieces(drawing.paths[index])]
+    )
+    apart = np.abs(points[:, np.newaxis] - centres).max(axis=2).min(axis=1)
+    return bool(np.all(apart <= _SAME_SHAPE))
+
+
+def _longest(series: Sequence[_Series]) -> list[_Series]:
+    """Return the series with points shown, longest first."""
     return sorted(
         (curve for curve in series if len(curve.points)),
         key=lambda curve: -curve.length,
     )
+
+
+def _plotted(drawing: Drawing, origin: Point) -> list[_Marker]:
+    """Return the markers drawn on a page, less those in a legend, in drawing order."""
+    return [
+        marker
+        for marker in _markers(drawing)
+        if not _in_legend(marker, drawing.texts, origin)
+    ]
+
+
+def _chains(drawing: Drawing, marked: Collection[Colour]) -> list[_Chain]:
+    """Return the paths drawn as lines, joined as ``find_pdf_series`` joins them.
+
+    The paths are those stroked and not filled, in colours not drawn with
+    markers, that have pieces of a curve, as ``_pieces`` finds them. Each
+    path carries on the line of its style whose last path it carries on
+    nearest, by ``_gap``, or else starts a line of its own.
+    """
+    chains: list[_Chain] = []
+    for index, path in enumerate(drawing.paths):
+        stroke = path.stroke
+        if stroke is None or path.fill is not None or stroke in marked:
+            continue
+        if not _pieces(path):
+            continue
+        pattern = _pattern(path.dashes)
+        gaps = [
+            (gap, chain)
+            for chain in chains
+            if (chain.colour, chain.width, chain.pattern)
+            == (stroke, path.width, pattern)
+            and (gap := _gap(drawing.paths[chain.paths[-1]], path)) is not None
+        ]
+        if gaps:
+            min(gaps, key=lambda pair: pair[0])[1].paths.append(index)
+        else:
+            chains.append(_Chain(stroke, path.width, pattern, [index]))
+    return chains
+
+
+def _pieces(path: _Path) -> list[npt.NDArray[np.float64]]:
+    """Return the subpaths of a path that may be pieces of a curve.
+
+    Those left out are closed, such as frames, or lie along one straight
+    horizontal or vertical line, such as axis lines, tick marks, grid lines
+    and the lines in a legend's keys.
+    """
+    return [
+        points
+        for points, closed in zip(path.subpaths, path.closed, strict=True)
+        if not closed and np.ptp(points, axis=0).min() > _FLAT
+    ]
+
+
+def _gap(first: _Path, then: _Path) -> float | None:
+    """Return how far a path starts from where another ends, if it carries it on.
+
+    It does if it starts where the other ends, or at most ``_CHAIN`` times the
+    longer one's length beyond its end, in a direction that turns by at most
+    ``_BEND`` degrees from where each runs at that end, as the dashes of a
+    line drawn one by one do. Lengths are those of the paths' pieces of a
+    curve, and None means that it does not carry it on.
+    """
+    end, start = _pieces(first)[-1], _pieces(then)[0]
+    gap = start[0] - end[-1]
+    distance = float(np.linalg.norm(gap))
+    if distance <= _SLACK:
+        return distance
+    longest = max(
+        sum(
+            float(np.linalg.norm(np.diff(points, axis=0), axis=1).sum())
+            for points in pieces
+        )
+        for pieces in (_pieces(first), _pieces(then))
+    )
+    if (
+        distance <= _CHAIN * longest
+        and _turn(_heading(end), gap) <= _BEND
+        and _turn(_heading(start[::-1]), -gap) <= _BEND
+    ):
+        return distance
+    return None
+
+
+def _heading(points: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return the way a line through points runs at its end, from a point before."""
+    apart = np.flatnonzero(np.any(points != points[-1], axis=1))
+    return np.asarray(points[-1] - points[apart[-1]], dtype=np.float64)
+
+
+def _turn(first: npt.NDArray[np.float64], second: npt.NDArray[np.float64]) -> float:
+    """Return the angle between two directions, in degrees."""
+    cosine = np.dot(first, second) / (np.linalg.norm(first) * np.linalg.norm(second))
+    return math.degrees(math.acos(float(np.clip(cosine, -1, 1))))
+
+
+def _line(
+    drawing: Drawing, paths: Sequence[int], origin: Point
+) -> tuple[npt.NDArray[np.float64], float]:
+    """Return the points of paths on a page that are shown, and the length between.
+
+    The points are those of the paths' pieces of a curve, as ``_pieces``
+    finds them, that are shown, and the length that of the lines between
+    neighbouring points of a piece that are both shown.
+    """
+    points: list[npt.NDArray[np.float64]] = []
+    length = 0.0
+    for index in paths:
+        path = drawing.paths[index]
+        for piece in _pieces(path):
+            shown = _shown(piece, path.clip, origin)
+            points.append(piece[shown])
+            length += _length(piece, shown)
+    return np.vstack(points), length
+
+
+def _pattern(dashes: Sequence[float]) -> tuple[float, ...]:
+    """Return the lengths of the dashes and gaps of a line, in turn from a dash.
+
+    An odd number of lengths repeats, as in a PDF file, and a line without
+    gaps is solid, with none.
+    """
+    pattern = tuple(dashes) * (1 + len(dashes) % 2)
+    return pattern if any(gap > 0 for gap in pattern[1::2]) else ()
+
+
+def _dash_style(pattern: Sequence[float], width: float) -> Style:
+    """Return the style of a line drawn with a pattern of dashes, as ``_pattern`` gives.
+
+    A line without dashes is solid, and one whose dashes are each at most
+    ``_DOT`` times its width long dotted, as round dots are; one with no such
+    dash is dashed, and one with both dashdot.
+    """
+    if not pattern:
+        return "solid"
+    dots = [dash <= _DOT * width for dash in pattern[::2]]
+    if all(dots):
+        return "dotted"
+    return "dashdot" if any(dots) else "dashed"
 
 
 def _traced(drawing: Drawing, origin: Point) -> list[_Series]:
@@ -1010,11 +1365,13 @@ def _markers(drawing: Drawing) -> list[_Marker]:
     """
     markers: list[_Marker] = []
     last = -1  # the index of the path that gave the last marker
+    lines = _straight_lines(drawing)
+    centres = [m.centre for m in map(_marker, drawing.paths) if m is not None]
     for index, path in enumerate(drawing.paths):
         marker = _marker(path)
-        if marker is None:
+        if marker is None or _arrowhead(path, lines, centres):
             continue
-        if last == index - 1 and markers[-1].centre == marker.centre:
+        if markers and last == index - 1 and markers[-1].centre == marker.centre:
             first = markers.pop()  # one marker, drawn in two paths
             marker = _Marker(
                 marker.centre,
@@ -1057,6 +1414,108 @@ def _marker(path: _Path) -> _Marker | None:
     # With the middles of its straight pieces, a square's outline is not a cross's.
     outline = np.vstack([points, (path.segments[:, :2] + path.segments[:, 2:]) / 2])
     return _Marker(centre, outline - middle, path.stroke, path.fill, path.clip)
+
+
+def _straight_lines(
+    drawing: Drawing,
+) -> list[tuple[npt.NDArray[np.float64], list[Colour]]]:
+    """Return the straight lines on a page that may be error bars, and their colours.
+
+    The lines run along x, then along y: those level, then those upright.
+    Each way, a row of each line holds where it lies across that way, and
+    where it starts and ends along it. See ``find_pdf_error_bars`` for which
+    lines may be error bars.
+    """
+    found: list[list[tuple[float, float, float]]] = [[], []]
+    colours: list[list[Colour]] = [[], []]
+    for path in drawing.paths:
+        if path.stroke is None or path.fill is not None:
+            continue
+        for points, closed in zip(path.subpaths, path.closed, strict=True):
+            spans = np.ptp(points, axis=0)
+            if closed or np.count_nonzero(spans <= _FLAT) != 1:
+                continue
+            along = int(np.argmax(spans))
+            start, end = points[:, along].min(), points[:, along].max()
+            clip = path.clip[along], path.clip[along + 2]
+            if start <= clip[0] + _SLACK and end >= clip[1] - _SLACK:
+                continue  # across the axes, as a grid line
+            found[along].append((float(points[0, 1 - along]), start, end))
+            colours[along].append(path.stroke)
+    return [
+        (np.array(lines, dtype=np.float64).reshape(-1, 3), way)
+        for lines, way in zip(found, colours, strict=True)
+    ]
+
+
+def _bars_through(
+    points: npt.NDArray[np.float64],
+    colours: Sequence[Colour | None],
+    lines: npt.NDArray[np.float64],
+    line_colours: Sequence[Colour],
+    along: int,
+) -> npt.NDArray[np.intp]:
+    """Return the index of the error bar through each point one way, or -1 if none.
+
+    ``lines`` are those along x, if ``along`` is 0, or y, as
+    ``_straight_lines`` gives them, and ``colours`` those of the markers at
+    the points, or None. See ``find_pdf_error_bars`` for which bar a point
+    takes.
+    """
+    if not len(lines):
+        return np.full(len(points), -1, dtype=np.intp)
+    on = (
+        (np.abs(points[:, 1 - along, np.newaxis] - lines[:, 0]) <= _ON_BAR)
+        & (lines[:, 1] - _ON_BAR <= points[:, along, np.newaxis])
+        & (points[:, along, np.newaxis] <= lines[:, 2] + _ON_BAR)
+    )
+    same = np.array(
+        [[colour == other for other in line_colours] for colour in colours],
+        dtype=np.bool_,
+    ).reshape(on.shape)
+    # A bar through several points keeps those of its colour, if any.
+    on = np.where((on & same).any(axis=0), on & same, on)
+    # A point with several bars keeps those through it alone, or of its colour.
+    alone = on & (np.count_nonzero(on, axis=0) == 1)
+    on = np.where(alone.any(axis=1, keepdims=True), alone, on)
+    on = np.where((on & same).any(axis=1, keepdims=True), on & same, on)
+    return np.where(np.count_nonzero(on, axis=1) == 1, on.argmax(axis=1), -1)
+
+
+def _arrowhead(
+    path: _Path,
+    lines: Sequence[tuple[npt.NDArray[np.float64], list[Colour]]],
+    centres: Sequence[Point],
+) -> bool:
+    """Return whether a path is the arrowhead of a one-sided error bar.
+
+    That is a shape in a form whose origin lies at an end of a straight line
+    that may be an error bar, as ``_straight_lines`` gives them, and which
+    lies wholly beyond that end, while the line's other end lies at the
+    centre of a marker, one of ``centres``: matplotlib draws the arrowheads
+    of bars with ``lolims`` or ``uplims`` so, from the points they bound.
+    """
+    if path.anchor is None:
+        return False
+    points = np.vstack(path.subpaths)
+    anchor = np.array(path.anchor)
+    marked = np.array(centres, dtype=np.float64).reshape(-1, 2)
+    for along, (found, _) in enumerate(lines):
+        at = found[np.abs(found[:, 0] - anchor[1 - along]) <= _ON_BAR]
+        start, end = points[:, along].min(), points[:, along].max()
+        past_end = (np.abs(at[:, 2] - anchor[along]) <= _ON_BAR) & (
+            start >= at[:, 2] - _ON_BAR
+        )
+        past_start = (np.abs(at[:, 1] - anchor[along]) <= _ON_BAR) & (
+            end <= at[:, 1] + _ON_BAR
+        )
+        tails = np.empty((len(at), 2))
+        tails[:, 1 - along] = anchor[1 - along]
+        tails[:, along] = np.where(past_end, at[:, 1], at[:, 2])
+        tails = tails[past_end | past_start]
+        if np.any(np.abs(tails[:, np.newaxis] - marked).max(axis=2) <= _ON_BAR):
+            return True
+    return False
 
 
 def _same_shape(
@@ -1112,12 +1571,16 @@ def _picked(markers: Sequence[_Marker], key: Point) -> _Marker:
 
 
 def _dots(colour: Colour, markers: Sequence[_Marker], origin: Point) -> _Series:
-    """Return the points that markers mark, those shown, as a series of a colour."""
+    """Return the points that markers mark, those shown, as a series of a colour.
+
+    Its width is the size of the largest marker, across its box.
+    """
     points = np.array([marker.centre for marker in markers], dtype=np.float64)
     clips = np.array([marker.clip for marker in markers], dtype=np.float64)
     points, clips = points.reshape(-1, 2), clips.reshape(-1, 4)
     shown = _shown(points, clips, origin)
-    return _Series(colour, points[shown], _length(points, shown))
+    size = max((float(np.ptp(m.outline, axis=0).max()) for m in markers), default=0)
+    return _Series(colour, points[shown], _length(points, shown), "markers", size)
 
 
 def _shown(
@@ -1141,9 +1604,29 @@ def _length(points: npt.NDArray[np.float64], shown: npt.NDArray[np.bool_]) -> fl
     return float(steps[shown[1:] & shown[:-1]].sum())
 
 
-def _nearest(series: Sequence[_Series], colour: Colour) -> int:
-    """Return the index of the curve whose colour is nearest to ``colour``."""
-    distances = [math.dist(colour, curve.colour) for curve in series]
+def _matched(found: Sequence[Colour], colours: Sequence[Colour]) -> list[int]:
+    """Return the index of the colour found nearest to each colour.
+
+    Raises:
+        ValueError: If no colour found lies within ``_MATCH_DISTANCE`` of
+            one of the colours, or two of them pick the same.
+    """
+    indices = [_nearest(found, colour) for colour in colours]
+    for (first, index), (second, other) in itertools.combinations(
+        zip(colours, indices, strict=True), 2
+    ):
+        if index == other:
+            msg = (
+                f"colours #{bytes(first).hex()} and #{bytes(second).hex()} both "
+                f"match the curve of colour #{bytes(found[index]).hex()}"
+            )
+            raise ValueError(msg)
+    return indices
+
+
+def _nearest(found: Sequence[Colour], colour: Colour) -> int:
+    """Return the index of the colour found nearest to ``colour``."""
+    distances = [math.dist(colour, other) for other in found]
     if not distances or min(distances) > _MATCH_DISTANCE:
         msg = f"no curve of colour #{bytes(colour).hex()} found"
         raise ValueError(msg)

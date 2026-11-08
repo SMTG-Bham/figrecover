@@ -34,9 +34,12 @@ _WRITTEN = 1.5  # words this much wider than tall run across, or taller, upwards
 _TALL = 1.2  # labels of 2 characters or more this much taller than wide run up or down
 _LINE_SPACING = 1.25  # a title's lines lie this many line heights apart or less
 _WORD_SPACING = 1  # the words of a line lie this many line heights apart or less
-_TILT = 15  # labels in boxes tilted this many degrees or more may be slanted
+_TILT = 15  # labels whose characters slant this many degrees or more are slanted
+_STEEP = 75  # labels whose characters slant this many degrees or more run up or down
 _SLANT = 30  # text tilted this many degrees or more is slanted, not raised
-_TURN = 45  # slanted labels are read again turned this many degrees each way
+_SMALL = 0.85  # a raised digit at most this fraction of the others' height is smaller
+_GLYPH = 0.4  # pieces of ink this fraction of a label's largest or more are characters
+_GAP = 1.5  # labels in line this many times their spacing apart lack one between
 _SIDEWAYS = 90  # text written upwards is slanted this many degrees, downwards minus
 _NUMBER = re.compile(  # 1, -2.5, 1,000, 2.5e-3 or 10%
     r"([+-]?(?:[1-9]\d{0,2}(?:,\d{3})+(?:\.\d*)?|\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)%?",
@@ -44,6 +47,8 @@ _NUMBER = re.compile(  # 1, -2.5, 1,000, 2.5e-3 or 10%
 )
 _SWAP = str.maketrans(",.", ".,")  # decimal commas to points, and back
 _TRAILING_DASH = re.compile(r"(.*\d%?)-+")  # a tick mark after a y-axis label
+_RUN = re.compile(r"(?<=\d)(?=[+-])")  # between numbers run together
+_PIECES = {"%": 3, "^": 0}  # pieces of ink drawn for characters not drawn in one
 _POWER = re.compile(  # 10^2, 10^{2}, 10-2, 2x10^2 or 2^5: a power, as OCR reads it
     r"(?:(\d+(?:\.\d*)?|\.\d+)[x\u00d7])?"
     r"(?:(\d+(?:\.\d*)?|\.\d+)\^\{?|10(?=[+-]))([+-]?\d+)\}?"
@@ -191,13 +196,19 @@ def read_axes(image: Image) -> Axes:
     An axis is logarithmic if more of its labels fall in line on a logarithmic
     scale than on a linear one.
 
-    OCR misreads x-axis tick labels written at a slant, as rotated labels
-    are, so if it has, they are read again turned level, as by
+    OCR misreads tick labels written at a slant, or upwards or downwards, as
+    rotated labels are, or misses some. If the characters of the x-axis tick
+    labels slant, and OCR did not read them well, they are read again turned
+    level, or a quarter turn each way if written up or down, as by
     ``_with_slanted_labels``, and their digits are not taken for exponents.
     OCR runs y-axis tick labels written upwards or downwards together, and
-    misreads some, so if most are tall, they are read again turned a quarter
+    misreads some, so if most are tall, or their characters run up or down
+    and OCR did not read them well, they are read again turned a quarter
     turn, the way that OCR reads them more surely, as by
-    ``_with_vertical_labels``.
+    ``_with_vertical_labels``. OCR can also lose characters of a label, such
+    as its decimal point, reading 0.5 and 1.0 as 5 and 10, so labels read as
+    fewer characters than are drawn in their boxes are dropped, and an axis
+    left with too few is refused, as by ``_whole``.
 
     The axes cross where the axis lines run beside the tick labels. Without
     an axis line, its place is taken to be just beyond the tick labels and
@@ -205,7 +216,8 @@ def read_axes(image: Image) -> Axes:
     axis, so a curve along that tick is kept. Where the labels are not
     centred on tick marks drawn outside an axis line, but end at them, as
     rotated labels do, each tick lies at the mark nearest the end of its
-    label.
+    label; and where rotated labels are centred on such marks, at the mark
+    nearest its middle, as OCR's boxes fit rotated text less well.
 
     The titles are the nearest lines of text beyond the tick labels, centred
     along their axes, from where the axes cross to the far end of the axis
@@ -233,9 +245,9 @@ def read_axes(image: Image) -> Axes:
 
     Raises:
         ModuleNotFoundError: If the ``ocr`` extra is not installed.
-        ValueError: If an axis has too few tick labels in line, an offset to
-            add to its tick values, or the plot has a second y-axis, on the
-            right, with other values.
+        ValueError: If an axis has too few tick labels in line, or read
+            whole, an offset to add to its tick values, or the plot has a
+            second y-axis, on the right, with other values.
     """
     return _read_axes(image, _read_text(image))
 
@@ -245,13 +257,14 @@ def _read_axes(image: Image, texts: list[_Text]) -> Axes:
 
     See ``read_axes``.
     """
-    texts = _with_vertical_labels(image, _with_slanted_labels(image, texts))
+    ink = ink_mask(image)
+    texts = _with_slanted_labels(image, ink, texts)
+    texts = _with_vertical_labels(image, ink, texts)
     if _decimal_comma(texts):
         texts = [_with_decimal_points(text) for text in texts]
-    ink = ink_mask(image)
     numbers = [text for text in texts if _number(_reading(text))]
-    x_row = _lowest_row(numbers)
-    y_column = _leftmost_column(_above(numbers, x_row))
+    x_row = _whole(_lowest_row(numbers), ink, "x")
+    y_column = _whole(_leftmost_column(_above(numbers, x_row)), ink, "y")
     # Tick marks run beside the y-axis labels, so they keep the usual height.
     height = float(np.median([text.top - text.bottom for text in y_column]))
     x_labels, x_values, x_log = _in_line(x_row, lambda t: t.x, "x", ink, height)
@@ -262,11 +275,13 @@ def _read_axes(image: Image, texts: list[_Text]) -> Axes:
     if y_line is not None:  # the x-axis line, with the x-axis ticks
         marks = _x_marks(ink > 0, y_line, float(np.median([t.right for t in y_labels])))
         ends = [[label.left for label in x_labels], [label.right for label in x_labels]]
-        x_pixels = _snap([x_pixels, *map(np.array, ends)], marks)
+        rotated = abs(_glyph_slant(ink, x_labels)) >= _TILT
+        x_pixels = _snap([x_pixels, *map(np.array, ends)], marks, rotated=rotated)
     if x_line is not None:
         marks = _y_marks(ink > 0, x_line, float(np.median([t.top for t in x_labels])))
         ends = [[label.bottom for label in y_labels], [label.top for label in y_labels]]
-        y_pixels = _snap([y_pixels, *map(np.array, ends)], marks)
+        rotated = abs(_glyph_slant(ink, y_labels)) >= _TILT
+        y_pixels = _snap([y_pixels, *map(np.array, ends)], marks, rotated=rotated)
     origin = (
         x_line
         if x_line is not None
@@ -328,14 +343,16 @@ def _engine() -> Any:
     return RapidOCR(params={"Global.log_level": "critical"})
 
 
-def _read_text(image: Image) -> list[_Text]:
+def _read_text(image: Image, *, flip: bool = True) -> list[_Text]:
     """Find the lines of text in an image, as ``_boxed`` gives them.
 
-    OCR turns a line that it takes for upside down before reading it.
+    OCR turns a line that it takes for upside down before reading it, unless
+    ``flip`` is false: then it reads each line as it lies, and one upside
+    down less surely.
     """
     # The engine keeps the options of its last call, so each call gives them.
     found = _engine()(
-        cv2.cvtColor(image, cv2.COLOR_RGB2BGR), use_cls=True, return_word_box=False
+        cv2.cvtColor(image, cv2.COLOR_RGB2BGR), use_cls=flip, return_word_box=False
     )
     if found.boxes is None:
         return []
@@ -400,20 +417,26 @@ def _normal(text: str) -> str:
     return _RAISED_SIGN.sub(lambda sign: "\u207a" if sign[0] == "+" else "\u207b", text)
 
 
-def _with_slanted_labels(image: Image, texts: list[_Text]) -> list[_Text]:
+def _with_slanted_labels(
+    image: Image, ink: npt.NDArray[np.uint8], texts: list[_Text]
+) -> list[_Text]:
     """Return texts with the x-axis tick labels read again turned, if slanted.
 
     OCR misreads tick labels written at a slant, as rotated labels are, such
-    as 2 as a Chinese character and 6 as 9, but reads them well turned level.
-    The labels are the texts level with the lowest row of numbers, and along
-    it, and they are taken to be slanted if one is no number and the box of
-    one tilts ``_TILT`` degrees or more. The image below a label's height
-    above the row, so that the tops of the labels are kept, is then read
-    again, turned ``_TURN`` degrees each way. Each label takes the text of
-    the number read turned whose middle lies in its box, as slanted, keeping
-    its box, which fits the label better than one turned back. If more
-    labels are then numbers, those of the turn that makes the most replace
-    the labels.
+    as 2 as a Chinese character and 6 as 9, or misses them, but reads them
+    well turned level. The labels are the texts level with the lowest row of
+    numbers, and along it, and they are slanted if their characters slant
+    ``_TILT`` degrees or more, as ``_glyph_slant`` finds from the ink.
+    Unless OCR read them well, as ``_well_read`` finds, the image below a
+    label's height above the row, so that the tops of the labels are kept,
+    is read again by ``_read_turned``, turned by minus their slant, which
+    lays them level. Labels written upwards or downwards, slanted ``_STEEP``
+    degrees or more, are read turned a quarter turn each way, as their
+    characters do not show which way they run, and the turn that puts more
+    of them in line wins, or that OCR reads more surely, as it reads them
+    less surely upside down. The numbers read turned in the row are merged
+    into the labels by ``_merged``, and if more of them are then in line,
+    they replace the labels.
     """
     try:
         row = _lowest_row([text for text in texts if _number(_reading(text))])
@@ -424,58 +447,249 @@ def _with_slanted_labels(image: Image, texts: list[_Text]) -> list[_Text]:
     labels = [
         text for text in texts if bottom <= text.y <= top and left <= text.x <= right
     ]
-    if all(_number(_reading(label)) for label in labels) or all(
-        abs(label.slant) < _TILT for label in labels
-    ):
+    slant = _glyph_slant(ink, labels)
+    if abs(slant) < _TILT:
         return texts
+    others = [text for text in texts if text not in labels]
     height = float(np.median([text.top - text.bottom for text in row]))
-    best = row
-    for angle in (-_TURN, _TURN):
+    if _well_read(labels, _across, ink, height):
+        return others + labels
+    turns = (-_SIDEWAYS, _SIDEWAYS) if abs(slant) >= _STEEP else (-slant,)
+    best = labels
+    most = (len(_in_line_along(labels, _across, ink, height)), math.inf)
+    for angle in turns:
         turned = [
             text
             for text in _read_turned(image, top + height, angle)
-            if _number(_reading(text))
+            if bottom <= text.y <= top and _number(_reading(text))
         ]
-        read = [
-            next(
-                (
-                    replace(label, text=text.text, slant=text.slant)
-                    for text in turned
-                    if label.left <= text.x <= label.right
-                    and label.bottom <= text.y <= label.top
-                ),
-                label,
+        read = _merged(labels, turned)
+        count = len(_in_line_along(read, _across, ink, height))
+        score = _score(turned) if turned else 0.0
+        if count > most[0] or (count == most[0] and score > most[1]):
+            best, most = read, (count, score)
+    if best is labels:
+        return others + labels
+    return others + [label for label in best if _number(_reading(label))]
+
+
+def _glyph_slant(ink: npt.NDArray[np.uint8], texts: Iterable[_Text]) -> float:
+    """Return the slant of the characters of texts, from their ink, in degrees.
+
+    A character drawn upright, such as a digit, is taller than wide, so the
+    long axis of its ink, found from its second moments, runs upwards, and
+    it turns with the character. The characters are the pieces of ink in
+    each text's box at least ``_GLYPH`` as large as the largest, which
+    leaves out points and minus signs. The slant is the median angle,
+    anticlockwise, from upwards to each character's long axis, from -90 to
+    90 degrees, so text written upwards and text written downwards both
+    slant about 90 degrees, one way or the other; or 0 if there is no ink.
+    The angles are taken about their mean direction, so that slants of
+    nearly 90 degrees one way and the other count as alike, as they are.
+    """
+    height = ink.shape[0]
+    slants: list[npt.NDArray[np.float64]] = []
+    for text in texts:
+        box = ink[
+            max(height - math.ceil(text.top), 0) : height - math.floor(text.bottom),
+            max(math.floor(text.left), 0) : math.ceil(text.right),
+        ]
+        count, pieces, stats, _ = cv2.connectedComponentsWithStats(box)
+        areas = stats[1:, cv2.CC_STAT_AREA]  # the first piece is the background
+        if not len(areas):
+            continue
+        rows, columns = np.indices(box.shape, dtype=np.float64)
+        each = np.asarray(pieces, dtype=np.intp).ravel()
+        sums = [
+            np.bincount(each, weights.ravel(), count)[1:]
+            for weights in (
+                np.ones_like(rows),
+                columns,
+                rows,
+                columns**2,
+                rows**2,
+                columns * rows,
             )
-            for label in labels
         ]
-        numbers = [label for label in read if _number(_reading(label))]
-        if len(numbers) > len(best):
-            best = numbers
-    if best is row:
-        return texts
-    return [text for text in texts if text not in labels] + best
+        area, x, y, xx, yy, xy = sums
+        across, down, both = xx - x * x / area, yy - y * y / area, xy - x * y / area
+        # The long axis, anticlockwise from across, as rows count downwards.
+        axis = np.degrees(np.arctan2(-2 * both, across - down)) / 2
+        characters = areas >= _GLYPH * areas.max()
+        slants.append(axis[characters] % 180 - 90)
+    if not slants:
+        return 0.0
+    each = np.concatenate(slants)
+    # Slants of 89 and -89 degrees differ by 2, so each is taken as a turn
+    # from their mean direction, found by doubling them, the shorter way.
+    doubled = np.radians(2 * each)
+    mean = math.degrees(math.atan2(np.sin(doubled).sum(), np.cos(doubled).sum())) / 2
+    turns = (each - mean + 90) % 180 - 90
+    return float((mean + np.median(turns) + 90) % 180 - 90)
 
 
-def _with_vertical_labels(image: Image, texts: list[_Text]) -> list[_Text]:
+def _in_line_along(
+    labels: Sequence[_Text],
+    position: Callable[[_Text], float],
+    ink: npt.NDArray[np.uint8],
+    height: float,
+) -> list[_Text]:
+    """Return the tick labels in line, as ``_in_line`` finds them, if any.
+
+    Labels that are no numbers are left out, and if fewer than ``MIN_TICKS``
+    are in line, none are.
+    """
+    numbers = [label for label in labels if _number(_reading(label))]
+    if len(numbers) < MIN_TICKS:
+        return []
+    try:
+        return _in_line(numbers, position, "", ink, height)[0]
+    except ValueError:
+        return []
+
+
+def _well_read(
+    labels: Sequence[_Text],
+    position: Callable[[_Text], float],
+    ink: npt.NDArray[np.uint8],
+    height: float,
+) -> bool:
+    """Return whether OCR read an axis's tick labels well.
+
+    That is, whether each is a number in line with the others, as
+    ``_in_line_along`` finds them, none is missing between them, as one is
+    where two lie ``_GAP`` times their shortest spacing apart or more, and
+    OCR lost no characters of any, as ``_lost_characters`` finds.
+    """
+    in_line = _in_line_along(labels, position, ink, height)
+    if len(in_line) < len(labels) or any(
+        _lost_characters(label, ink) for label in labels
+    ):
+        return False
+    spacings = np.diff([position(label) for label in in_line])
+    return bool(spacings.max() < _GAP * spacings.min())
+
+
+def _lost_characters(label: _Text, ink: npt.NDArray[np.uint8]) -> bool:
+    """Return whether OCR lost characters of a label, such as its decimal point.
+
+    The characters drawn are the pieces of ink wholly inside the label's box,
+    as ink that runs out of it, such as a tick mark joining an axis line, or
+    a curve, is none; but ``_PIECES`` counts some characters as drawn in
+    several pieces, or none. OCR lost some if more are drawn than it read,
+    as when it reads 0.5 as 5 or 05. It may read fewer drawn, as at low
+    resolution a point can touch the digit beside it. OCR may also miss the
+    raised minus sign of an exponent, but a label of digits whose last is
+    raised, as ``_exponent`` finds, is a power, whose signs are read from
+    the ink, so it lost none. Nor did a label slanted ``_TILT`` degrees or
+    more, read turned level, as its box, upright, can hold ink of others.
+    """
+    if abs(label.slant) >= _TILT or (
+        _DIGITS.fullmatch(_reading(label)) and _exponent(ink, label)
+    ):
+        return False
+    height = ink.shape[0]
+    box = ink[
+        max(height - math.ceil(label.top), 0) : height - math.floor(label.bottom),
+        max(math.floor(label.left), 0) : math.ceil(label.right),
+    ]
+    stats = cv2.connectedComponentsWithStats(box)[2][1:]  # the first is background
+    left, top, width, tall = stats[:, :4].T
+    inside = (
+        (left > 0)
+        & (top > 0)
+        & (left + width < box.shape[1])
+        & (top + tall < box.shape[0])
+    )
+    read = sum(_PIECES.get(character, 1) for character in label.plain)
+    return int(np.count_nonzero(inside)) > read
+
+
+def _whole(
+    labels: Sequence[_Text], ink: npt.NDArray[np.uint8], name: str
+) -> list[_Text]:
+    """Return tick labels without those that OCR lost characters of.
+
+    ``_lost_characters`` finds them. Such a label is misread, so it is left
+    out, as one out of line is.
+
+    Raises:
+        ValueError: If fewer than ``MIN_TICKS`` labels are left, as when OCR
+            lost the decimal point of every label, reading 0.5, 1.0 and 1.5
+            as 5, 10 and 15, whose values would be ten times too large.
+    """
+    whole = [label for label in labels if not _lost_characters(label, ink)]
+    if len(whole) < MIN_TICKS:
+        lost = len(labels) - len(whole)
+        msg = (
+            f"OCR lost characters, such as decimal points, of {lost} of the "
+            f"{len(labels)} {name}-axis tick labels, so their values cannot be "
+            "trusted"
+        )
+        raise ValueError(msg)
+    return whole
+
+
+def _merged(labels: Sequence[_Text], turned: Sequence[_Text]) -> list[_Text]:
+    """Return labels with the texts of the numbers read turned in their boxes.
+
+    A label whose box holds the middle of one number read turned, and of no
+    other, takes its text, its score and its slant, but keeps its box, which
+    fits the label better than one turned back. A number whose middle lies
+    in no label's box, as OCR missed the label at first, or in the boxes of
+    two, as OCR split the label in two, or in a box with another, joins the
+    labels in the box it was read in, turned back, without the labels whose
+    boxes hold its middle. Other labels are kept as they are.
+    """
+    holders = {
+        number: [
+            label
+            for label in labels
+            if label.left <= number.x <= label.right
+            and label.bottom <= number.y <= label.top
+        ]
+        for number in turned
+    }
+    held = Counter(label for found in holders.values() for label in found)
+    merged = [
+        replace(found[0], text=number.text, score=number.score, slant=number.slant)
+        if len(found) == 1 and held[found[0]] == 1
+        else number
+        for number, found in holders.items()
+    ]
+    return [label for label in labels if label not in held] + merged
+
+
+def _with_vertical_labels(
+    image: Image, ink: npt.NDArray[np.uint8], texts: list[_Text]
+) -> list[_Text]:
     """Return texts with y-axis tick labels written up or down read again turned.
 
     OCR reads tick labels written upwards or downwards, as labels rotated a
     quarter turn are, as it does a column of text: it runs labels one above
-    another together, as in 1.25 1.50 1.75, and misreads some, as 2.5 as 25.
+    another together, as in 1.25 1.50 1.75, or -0.25-0.50 without a space,
+    and misreads some, as 2.5 as 25, or a 6 written downwards as 9.
     The labels are the texts reaching above the lowest row of numbers, as
-    ``_above`` finds them, whose words are all numbers. They are written up
-    or down if most of those above the row, counting the numbers that each
-    holds, are ``_TALL`` times taller than wide; only those of more than one
-    character count, as a digit written across is that tall too. The strip
-    of the image left of the tall labels' right edge is then read again, as
-    by ``_read_sideways``, turned each way. Turned the way they are written,
-    the labels run across and OCR reads them surely, but turned the other
-    way they are upside down, and OCR reads them less surely. So the numbers
-    read the way OCR is surer of, by their lines' scores on average, each
-    word a label, replace the texts in the column of the tall labels reaching
-    above the row. Only numbers in that column count, as the title beside the
-    labels may hold one; but all of them, as OCR may have missed a label at
-    either end, or read one as no number.
+    ``_above`` finds them, whose words are all numbers, or numbers run
+    together. They are written up or down if most of those above the row,
+    counting the numbers that each holds, are ``_TALL`` times taller than
+    wide; only those of more than one character count, as a digit written
+    across is that tall too. They are written up or down too if the
+    characters of the leftmost column of numbers above the row slant
+    ``_STEEP`` degrees or more, as ``_glyph_slant`` finds them, as those of
+    single digits do, which OCR reads in boxes wider than tall; but those
+    are read again only if OCR did not read them well, as ``_well_read``
+    finds.
+    The strip of the image left of these labels' right edge is then read
+    again, as by ``_read_sideways``, turned each way. Turned the way they are
+    written, the labels run across and OCR reads them surely, but turned the
+    other way they are upside down, and OCR reads them less surely. So the
+    numbers read the way OCR is surer of, by their lines' scores on average,
+    each word a label, or each number of a word of numbers run together, as
+    ``_split`` parts them, replace the texts in the column of these labels
+    reaching above the row. Only numbers in that column count, as the title
+    beside the labels may hold one; but all of them, as OCR may have missed
+    a label at either end, or read one as no number.
     """
     try:
         row = _lowest_row([text for text in texts if _number(_reading(text))])
@@ -493,16 +707,27 @@ def _with_vertical_labels(image: Image, texts: list[_Text]) -> list[_Text]:
         if label.top - label.bottom >= _TALL * (label.right - label.left)
     ]
     if 2 * _count(tall) <= _count(labels):
-        return texts
+        try:
+            tall = _leftmost_column(
+                [text for text in above if text not in row and _number(_reading(text))]
+            )
+        except ValueError:
+            return texts  # no y-axis to read
+        height = float(np.median([text.top - text.bottom for text in tall]))
+        if abs(_glyph_slant(ink, tall)) < _STEEP or _well_read(
+            tall, _upwards, ink, height
+        ):
+            return texts
     left, right = min(t.left for t in tall), max(t.right for t in tall)
     best: list[_Text] = []
     for upwards in (True, False):
+        read = _read_sideways(image, math.ceil(right), upwards=upwards)
         words = [
-            word
-            for word in _above(
-                _read_sideways(image, math.ceil(right), upwards=upwards), row
-            )
-            if left <= word.x <= right and _numbers(word)
+            number
+            for word in _above(read, row)
+            if left <= word.x <= right
+            for number in _split(word, ink)
+            if _numbers(number)
         ]
         if words and (not best or _score(words) > _score(best)):
             best = words
@@ -512,17 +737,88 @@ def _with_vertical_labels(image: Image, texts: list[_Text]) -> list[_Text]:
     return [text for text in texts if text not in column] + best
 
 
+def _across(text: _Text) -> float:
+    """Return the middle of a text's box from left to right."""
+    return text.x
+
+
+def _upwards(text: _Text) -> float:
+    """Return the middle of a text's box from bottom to top."""
+    return text.y
+
+
 def _count(texts: Iterable[_Text]) -> int:
-    """Return how many words texts hold."""
-    return sum(len(text.text.split()) for text in texts)
+    """Return how many words texts hold, as ``_parted`` parts them."""
+    return sum(len(_parted(text)) for text in texts)
+
+
+def _parted(text: _Text) -> list[str]:
+    """Return the words of a text, plain, parting numbers run together.
+
+    Numbers run together, as in -0.25-0.50, each start with a sign after a
+    digit.
+    """
+    return [
+        number
+        for word in text.text.split()
+        for number in _RUN.split(replace(text, text=word).plain)
+    ]
 
 
 def _numbers(text: _Text) -> bool:
-    """Return whether each word of a text reads as a number, with points or commas."""
+    """Return whether each word of a text reads as a number, with points or commas.
+
+    A word of numbers run together, as ``_parted`` parts them, reads as
+    numbers too.
+    """
     return all(
-        _number(_reading(_with_decimal_points(replace(text, text=word))))
-        for word in text.text.split()
+        _number(_reading(_with_decimal_points(replace(text, text=number))))
+        for number in _parted(text)
     )
+
+
+def _split(word: _Text, ink: npt.NDArray[np.uint8]) -> list[_Text]:
+    """Return a word written up or down that holds numbers run together, parted.
+
+    OCR runs labels written up or down that lie close together into one word
+    without a space, as in -0.25-0.50, as ``_read_sideways`` reads it, and
+    ``_parted`` parts the numbers. Written up or down, the characters lie one
+    above another, apart, so the rows of the word's box that hold ink make a
+    run for each character, the first lowest if the word is written upwards
+    and highest if downwards, and each number lies along the runs of its
+    characters, keeping the word's width, score and slant. A word whose ink
+    makes another number of runs is left out, as its numbers cannot be
+    placed; a word of one number is returned as it is.
+    """
+    numbers = _parted(word)
+    if len(numbers) == 1:
+        return [word]
+    height = ink.shape[0]
+    bottom = math.floor(word.bottom)
+    box = ink[
+        max(height - math.ceil(word.top), 0) : height - bottom,
+        max(math.floor(word.left), 0) : math.ceil(word.right),
+    ]
+    marked = box.any(axis=1)[::-1].astype(np.int8)  # from the bottom up
+    edges = np.flatnonzero(np.diff(np.concatenate(([0], marked, [0]))))
+    starts, ends = edges[::2], edges[1::2]
+    if len(starts) != sum(map(len, numbers)):
+        return []
+    if word.slant < 0:  # written downwards, so read from the top
+        starts, ends = starts[::-1], ends[::-1]
+    lasts = np.cumsum([len(number) for number in numbers])
+    return [
+        _Text(
+            number,
+            word.left,
+            bottom + float(starts[last - len(number) : last].min()),
+            word.right,
+            bottom + float(ends[last - len(number) : last].max()),
+            word.score,
+            word.slant,
+        )
+        for number, last in zip(numbers, lasts, strict=True)
+    ]
 
 
 def _read_turned(image: Image, top: float, angle: float) -> list[_Text]:
@@ -530,8 +826,10 @@ def _read_turned(image: Image, top: float, angle: float) -> list[_Text]:
 
     The strip of the image below ``top`` is turned anticlockwise about its
     middle on a square of its background, wide enough to hold it at any
-    angle. Each text read is placed where it lies in the image, in the box
-    around the corners of its box turned back, slanted at minus ``angle``.
+    angle, and read as it lies, as ``_read_text`` reads it without flipping
+    lines, so that text turned upside down is read less surely. Each text
+    read is placed where it lies in the image, in the box around the corners
+    of its box turned back, slanted at minus ``angle``.
     """
     height = image.shape[0]
     first = max(height - math.ceil(top), 0)
@@ -549,7 +847,7 @@ def _read_turned(image: Image, top: float, angle: float) -> list[_Text]:
     )
     back = cv2.invertAffineTransform(turn)
     texts = []
-    for text in _read_text(level):
+    for text in _read_text(level, flip=False):
         # The box's corners, from the square's top-left corner, turned back.
         corners = np.array(
             [
@@ -694,15 +992,15 @@ def _lowest_row(numbers: Sequence[_Text]) -> list[_Text]:
     Numbers written up or down, as ``_read_sideways`` reads them, are left
     out: they are y-axis tick labels, though the lowest may lie level with
     the row, and be in line with it, as 0 at the corner where both axes
-    start at 0 is.
+    start at 0 is. But if no row is found without them, they are kept, as
+    the x-axis tick labels may be written up or down too.
     """
     across = [text for text in numbers if abs(text.slant) != _SIDEWAYS]
-    rows = [
-        row for row in _groups(across, lambda text: text.y) if len(row) >= MIN_TICKS
-    ]
-    if not rows:
-        raise _NoTicksError("x")
-    return rows[0]
+    for texts in (across, numbers):
+        rows = [row for row in _groups(texts, lambda t: t.y) if len(row) >= MIN_TICKS]
+        if rows:
+            return rows[0]
+    raise _NoTicksError("x")
 
 
 def _above(texts: Iterable[_Text], row: Sequence[_Text]) -> list[_Text]:
@@ -887,7 +1185,10 @@ def _exponent(ink: npt.NDArray[np.uint8], label: _Text) -> tuple[int, int] | Non
     characters' height or more above the lowest bottom. The base is the
     characters that are not raised, leaving out tick marks above the label,
     and the last character, the one ending furthest right, is an exponent if
-    it is raised and starts after the middle of the base's last character.
+    it is raised, starts after the middle of the base's last character, and
+    is at most ``_SMALL`` as tall as the base's tallest, as exponents are
+    drawn smaller: a digit as tall, raised, is slanted, as the 0 of 10 is
+    written rising to the right.
     The characters of a label written upwards, as rotated tick labels can
     be, stand one above another, so its last one is raised but no exponent.
     The exponent is negative if a flat piece, at least twice as wide as tall,
@@ -915,7 +1216,11 @@ def _exponent(ink: npt.NDArray[np.uint8], label: _Text) -> tuple[int, int] | Non
     base = characters[~raised[characters]]
     middles = top + tall / 2
     centres = left + width / 2
-    if not raised[last] or left[last] <= centres[base].max():
+    if (
+        not raised[last]
+        or left[last] <= centres[base].max()
+        or tall[last] > _SMALL * tall[base].max()
+    ):
         return None
     minus = (
         (tall < tall.max() / 3)
@@ -984,14 +1289,15 @@ def _axis_lines(
     """Find the x-coordinate of the y-axis line and the y-coordinate of the x-axis's.
 
     The y-axis line is the leftmost column, from the right of the y-axis tick
-    labels to just past the first x-axis tick, with ink along ``_LINE_COVER``
-    of the span of the y-axis ticks, as a flat stretch of a curve on the first
-    tick seldom has. The labels end where most of them do, as OCR can stretch
-    the box of one over the axis line, such as the label at the corner beside
-    a wide x-axis label. The x-axis line is found the same way, but further
-    past the first y-axis tick label, by ``_SNAP_REACH`` of the tick spacing,
-    as rotated y-axis tick labels lie beside their ticks, as ``_snap`` finds.
-    An axis without such a line gives None.
+    labels to just past the middle of the first x-axis tick label, or to its
+    right end, with ink along ``_LINE_COVER`` of the span of the y-axis
+    ticks, as a flat stretch of a curve on the first tick seldom has. The
+    labels end where most of them do, as OCR can stretch the box of one over
+    the axis line, such as the label at the corner beside a wide x-axis
+    label. The x-axis line is found the same way, but further past the first
+    y-axis tick label, by ``_SNAP_REACH`` of the tick spacing, or to its top,
+    as rotated tick labels lie beside their ticks, or end at them, as
+    ``_snap`` finds. An axis without such a line gives None.
     """
     height = ink.shape[0]
     first_x, last_x = x_labels[0].x, x_labels[-1].x
@@ -1001,12 +1307,13 @@ def _axis_lines(
     # Columns run from the labels to the plot; so do rows, read bottom to top.
     start = math.ceil(np.median([label.right for label in y_labels]))
     rows = slice(height - math.floor(last_y), height - math.ceil(first_y) + 1)
-    columns = ink[rows, start : math.floor(first_x) + _AXIS_REACH + 1]
+    end = max(first_x + _AXIS_REACH, x_labels[0].right)
+    columns = ink[rows, start : math.floor(end) + 1]
     x = _first_line(columns.sum(axis=0), last_y - first_y, start + 0.5)
 
     start = math.ceil(np.median([label.top for label in x_labels]))
-    reach = _AXIS_REACH + _SNAP_REACH * spacing
-    rows = slice(height - math.floor(first_y + reach), height - start + 1)
+    end = max(first_y + _AXIS_REACH + _SNAP_REACH * spacing, y_labels[0].top)
+    rows = slice(height - math.floor(end), height - start + 1)
     lines = ink[rows, math.ceil(first_x) : math.floor(last_x) + 1][::-1]
     y = _first_line(lines.sum(axis=1), last_x - first_x, start - 0.5)
     return x, y
@@ -1119,14 +1426,23 @@ def _middles(marked: npt.NDArray[np.bool_]) -> npt.NDArray[np.float64]:
 
 
 def _snap(
-    anchors: Sequence[npt.NDArray[np.float64]], marks: npt.NDArray[np.float64]
+    anchors: Sequence[npt.NDArray[np.float64]],
+    marks: npt.NDArray[np.float64],
+    *,
+    rotated: bool,
 ) -> npt.NDArray[np.float64]:
     """Return where the tick of each label lies, from anchors and tick marks.
 
     The anchors are points of each label by which it may be aligned with its
-    tick: first its middle, then its ends. Ticks lie at the labels' middles,
-    unless those lie more than ``_SNAP_SLACK`` from the marks, by their median
-    distance. Labels may then lie alike to one side of their marks, as
+    tick: first its middle, then its ends. Labels are centred on their ticks
+    if their middles lie within ``_SNAP_SLACK`` of the marks, by their median
+    distance. Their ticks then lie at their middles: plotting libraries may
+    move marks to whole pixels, half a pixel from where the curves are drawn,
+    and OCR's box fits a label written across to a pixel. But if the labels
+    are ``rotated``, with characters slanting ``_TILT`` degrees or more, as
+    ``_glyph_slant`` finds, OCR's boxes can put their middles two pixels
+    off, so each moves to the mark nearest its middle. Labels may otherwise lie alike
+    to one side of their marks, as
     rotated y-axis labels do: if their middles, moved by the median of the
     distances from each to the mark nearest it, lie within ``_SNAP_SLACK`` of
     the marks, and the move is within ``_SNAP_REACH`` of the tick spacing,
@@ -1137,9 +1453,8 @@ def _snap(
     the ends at one side lie at most half as far from the marks as the
     middles, and within ``_SNAP_REACH`` of the tick spacing, labels end at
     their ticks, as rotated x-axis labels do, and each moves to the mark
-    nearest that end. A label moves only to a mark that close. Tick marks
-    are not always exactly where the ticks are, as plotting libraries may
-    move them to whole pixels, so centred labels stay.
+    nearest that end. A label moves only to a mark that close, and otherwise
+    stays where it is, as do labels that lie none of these ways.
     """
     middles, *ends = anchors
     spacing = float(np.median(np.diff(np.sort(middles))))
@@ -1155,10 +1470,12 @@ def _snap(
     def offset(points: npt.NDArray[np.float64]) -> float:
         return float(np.median(offsets(points)))
 
-    if offset(middles) <= _SNAP_SLACK:
-        return middles
     shift = float(np.median(nearest(middles) - middles))
-    if (
+    if offset(middles) <= _SNAP_SLACK:
+        if not rotated:
+            return middles
+        best = middles
+    elif (
         offset(middles + shift) <= _SNAP_SLACK
         and abs(shift) <= _SNAP_REACH * spacing
         and 2 * np.diff(np.sort(marks)).min() >= spacing

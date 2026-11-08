@@ -3,7 +3,7 @@
 Recover data from images of plots. figrecover finds the curves in a picture of
 a plot, such as a scanned figure or a screenshot, and writes their points as
 CSV in the plot's own units. Curves are told apart by colour. It reads plots in
-PDF files too, exactly, from what they draw rather than from pixels.
+PDF and SVG files too, exactly, from what they draw rather than from pixels.
 
 It suits batches of similar plots: calibrate once, then digitize every image
 the same way from the command line.
@@ -41,6 +41,9 @@ PDF reader. Extras combine, as in `figrecover[ocr,pdf]`:
 uv tool install "figrecover[pdf] @ git+https://github.com/SMTG-Bham/figrecover"
 ```
 
+SVG files (see [SVG files](#svg-files)) need no extra: figrecover reads them
+with Python's own XML parser.
+
 ## Usage
 
 ### 1. Prepare the image
@@ -53,7 +56,9 @@ filled areas and grid lines. Insets and legends inside a frame, as matplotlib
 draws them, are painted out first, with all they hold; a legend without one
 is traced too if it is the same colour as a curve, so crop or paint it out,
 unless the series are told apart by their [markers](#markers). Dark
-backgrounds work as well as light ones. To have figrecover read the axes,
+backgrounds work as well as light ones, and an image turned by a few
+degrees, as scans often are, is levelled first; see
+[Turned images](#turned-images). To have figrecover read the axes,
 keep their tick labels and titles in the image. A figure of several plots,
 such as panels labelled (a) and (b), or a plot with an inset, needs no
 cropping when figrecover reads the axes; see [Several panels](#several-panels).
@@ -70,7 +75,10 @@ labels instead; see [Reading the axes](#reading-the-axes). For logarithmic
 axes, see [Logarithmic axes](#logarithmic-axes).
 
 figrecover traces the part of the image above and right of the lowest and
-leftmost reference points, so take them on the axis lines. A reversed axis,
+leftmost reference points, so take them on the axis lines. If they lie a
+little below or left of an axis line, up to 12 pixels, the part traced still
+starts just beyond the line, as if they had been taken on it, though the
+points are calibrated as given. A reversed axis,
 whose values fall from left to right or from bottom to top, starts at its
 largest value, so take the corner where the axes cross rather than the
 origin, and ticks on the axis lines.
@@ -114,12 +122,15 @@ in blue, so you can check the result at a glance:
 | `-p`, `--point X,Y` | Data coordinates of a reference point. Repeat for at least three. Default: [read the axes](#reading-the-axes). |
 | `-l`, `--location X,Y` | Pixel position of each reference point, in the same order. Default: click on them. |
 | `--log AXES` | The axes of the `-p` reference points that are logarithmic: `x`, `y` or `xy`. Default: neither. |
-| `-n`, `--series N` | Trace the N most common curve colours, and print the matching `-c` options. Default: 1. |
-| `-c`, `--colour RRGGBB` | Hexadecimal colour of a curve to trace, such as `1f77b4`. Repeat for several curves. |
-| `-m`, `--marker X,Y` | Pixel position of the marker in a series' legend key, or in a PDF file its position in points, to find the series by its markers' shape. Repeat for each series. See [Markers](#markers). |
+| `-n`, `--series N` | Trace N curves, those of the most common colours first, or in a PDF file the longest, and print the matching `-c` options. Default: 1. |
+| `-c`, `--colour RRGGBB[:STYLE]` | Hexadecimal colour of a curve to trace, such as `1f77b4`, with a style to pick one of several curves of that colour, such as `000000:dashed`. Repeat for several curves. See [Several curves](#several-curves). |
+| `-m`, `--marker X,Y` | Pixel position of the marker in a series' legend key, or in a PDF file its position in points, to find the series by its markers' shape and colour. Repeat for each series. See [Markers](#markers). |
 | `-o`, `--output FILE` | CSV file to write. Default: standard output. |
 | `--preview IMAGE` | Also save a faded copy of the image with the recovered curves drawn on it. |
 | `--remove-grid` | Paint over grid lines before tracing. |
+| `--level DEGREES` | The angle by which the image's axes are turned anticlockwise, or clockwise if negative, to turn it back by. Default: find it; see [Turned images](#turned-images). |
+| `--no-level` | Read the image as it is, without levelling it. |
+| `--error-bars` | Also read the error bars of each marker, and add their bounds to the CSV. See [Error bars](#error-bars). |
 | `--page N` | The page of a PDF file to read, from 1. Default: 1. |
 | `--box X0,Y0,X1,Y1` | The part of a PDF file's page to read, such as one figure, as its left, bottom, right and top edges in points. Default: the whole page. |
 
@@ -134,10 +145,11 @@ figrecover examples/series.png \
 ```
 
 figrecover traces the four most common colours that stand out from the
-background, longest curve first, and prints their colours as `-c` options:
+background, the curve with the most pixels first, and prints their colours as
+`-c` options:
 
 ```text
-figrecover: colours: -c 2ea12e -c ff7f0e -c 1f77b4 -c 040404
+figrecover: colours: -c 2ca02c -c 1f77b4 -c ff7f0e -c 000000
 ```
 
 The CSV gains a `series` column that numbers the curves in that order:
@@ -151,24 +163,109 @@ series,x,y
 
 ![Four crossing curves, each recovered in its own colour](examples/series.preview.png)
 
-Which curve is longest can change from one plot to the next, so for a batch,
-pass the printed `-c` options instead of `-n`. They fix the order of the
-series, and each picks the curve whose colour is nearest, so they also work on
-similar plots whose colours differ slightly, such as JPEG files. Give only the
-`-c` options of the curves you want. The colours of plotting libraries work
-too, such as `-c 1f77b4` for matplotlib's first colour.
+Which curve has the most pixels can change from one plot to the next, so for
+a batch, pass the printed `-c` options instead of `-n`. They fix the order of
+the series, and each picks the curve whose colour is nearest, so they also
+work on similar plots whose colours differ slightly, such as JPEG files. Give
+only the `-c` options of the curves you want. The colours of plotting
+libraries work too, such as `-c 1f77b4` for matplotlib's first colour.
+
+Lines thinner than a pixel never show their full colour, as antialiasing
+blends them with the background, nor do lines drawn translucent: a
+`tab:blue` line at half opacity shows as `#8ebad9`. figrecover finds such
+lines by the direction of their colour from the background, which their
+blends share, and prints the strongest colour each shows, such as `eda2a3`
+for a `tab:red` line a quarter of a point wide at 100 dots per inch. A `-c`
+colour picks such a line too, as the line shows part of it: `-c d62728` picks
+that line, and `-c 1f77b4` the translucent one.
 
 `-n` skips colours that fill areas, those drawn mostly as straight lines
-across the plot, such as grid lines, and very pale ones, less than 64 levels
-from the background; trace a pale curve with `-c` instead. Curves in
-neighbouring colours of a colour map, such as viridis, are told apart, and two
-`-c` colours that match the same curve are an error.
+across the plot, such as grid lines, dashed or not and even with curves drawn
+over them, those where two translucent colours overlap, such as two shaded
+bands, and very pale ones, less than 64 levels from the background; trace a
+pale curve with `-c` instead. Curves in neighbouring colours of a colour map,
+such as viridis, are told apart, and two `-c` colours that match the same
+curve are an error. When `-n` finds too few curves, it says which it found
+and which colours it left out, and why, with how many pixels show each:
+
+```text
+figrecover: error: found only 1 of 3 curves, #000000 (1286 pixels); left out
+#646464 (2041 pixels), as it is drawn in lines across the plot, as grid lines
+are; #c8dcf0 (1732 pixels), as it is too pale, 54 levels from the background
+```
+
+In a greyscale image, such as a photocopy, colours that differed may have
+become one grey, and the edges of a dark curve, blended with the background,
+show the lighter greys of other curves. figrecover leaves those edges out of
+the lighter curves, and with several curves asked for, says that the image
+is greyscale, as curves of different colours may then share a grey. Such
+curves are told apart as other curves of one colour are, below: in a
+greyscale copy of `examples/series.png`, the blue and green curves both
+become `#5c5c5c`, and `-n 4` gives them as `-c 5c5c5c:solid` and
+`-c 5c5c5c:solid2`. Series can be found by their [markers](#markers) too.
+
+Curves that share a colour are told apart by how they are drawn and where
+they run. figrecover follows each curve of a colour across the image,
+through the places where it crosses or touches another, and across the gaps
+between its dashes, and names its style from its dashes: `solid`, `dashed`,
+`dotted` or `dashdot`. `-n` lists each as a curve of its own, and prints the
+`-c` option that picks it, the colour followed by the style:
+
+```bash
+figrecover examples/styles.png \
+    -p 0,0 -p 10,0 -p 0,1 -l 80,44 -l 576,44 -l 80,147 \
+    -n 3 --preview styles.preview.png
+```
+
+```text
+figrecover: the image is greyscale, so curves of different colours may share a grey
+figrecover: colours: -c 000000:solid -c 000000:dashed -c 000000:dotted
+```
+
+![Three crossing black curves, solid, dashed and dotted, each recovered in a colour of its own](examples/styles.preview.png)
+
+Colours of one curve come in their usual order, and the curves of a colour of
+several come in among them by their pixels, most first: so the mean of pale
+replicates, drawn in the full colour, comes before the replicates, which cross
+one another and break into many pieces. The preview draws curves that share a
+colour in colours of their own. A dashed or dotted curve gives a point in
+every column, those between its dashes on the straight line across the gap. On
+a plot of black solid, dashed and dotted curves at 1.5 points and 100 dots per
+inch, each curve lies within 0.005 of the y-axis range of the true curve in
+98% of the columns, and two black lines that cross, as an X, keep to their own
+lines.
+
+In a PDF file, the style is read exactly from the dashes that each line is
+drawn with, a dash at most two line widths long being a dot, and lines of
+other widths, or drawn apart, are curves of their own:
+
+```bash
+figrecover examples/styles.pdf -n 3
+```
+
+```text
+figrecover: colours: -c 000000:dotted -c 000000:dashed -c 000000:solid
+```
+
+A second curve of the same colour and style is numbered, such as
+`-c 000000:solid2`, and the colour alone, `-c 000000`, still takes every curve
+of that colour, as one, and warns if that one crosses most columns more than
+once, as several solid curves do, or a loop.
+
+A colour drawn with filled markers and a line, such as data points and a curve
+fitted to them, gives the markers first, as a series of their own in the style
+`markers`, with a point at the middle of each marker, and then the line. On a
+plot of 19 points scattered about a fitted line, all in one colour, `-n 2`
+gives the 19 points, each within a pixel, and the line, within 0.005 of the
+y-axis range in 99% of the columns. In a PDF file, likewise, a line in the
+colour of markers is a curve of its own unless it passes through the markers
+alone, as a line joining them does.
 
 ### Markers
 
-When the series share a colour and differ in their markers, as in many
-spreadsheet charts, give the pixel position of the marker in each series'
-legend key with `-m`, measured from the bottom-left corner like `-l`:
+When the series are told apart by their markers, as in many spreadsheet
+charts, give the pixel position of the marker in each series' legend key with
+`-m`, measured from the bottom-left corner like `-l`:
 
 ```bash
 figrecover examples/markers.png \
@@ -176,13 +273,14 @@ figrecover examples/markers.png \
     -m 148,18 -m 260,18 -m 377,18 -m 483,18 --preview markers.preview.png
 ```
 
-figrecover cuts each key's marker out of the legend, leaving out the line
-through it, and finds the markers of that shape in the plot. The CSV has a
-point at the middle of each marker, numbered by series in the order of the
-`-m` options, and figrecover prints how many markers each series has:
+figrecover cuts each key's marker out of the legend, in its colour, leaving
+out the line through it, and finds the markers of that shape and colour in
+the plot. The CSV has a point at the middle of each marker, numbered by series
+in the order of the `-m` options, and figrecover prints how many markers each
+series has:
 
 ```text
-figrecover: markers found in each series: 18, 19, 18, 18
+figrecover: markers found in each series: 19, 19, 19, 19
 ```
 
 The preview rings each marker, and each key, in a colour for its series:
@@ -190,16 +288,119 @@ The preview rings each marker, and each key, in a colour for its series:
 ![Four series told apart by their markers](examples/markers.preview.png)
 
 - The markers can be filled or open, such as squares, diamonds, triangles,
-  circles and crosses, but each series needs a shape of its own. Use `-c`
-  instead for series in different colours.
-- Lines and error bars that cross a marker are allowed for, but a marker
-  covered by another, as where series cross or crowd together, is missed or
-  taken for the other's. Three markers are missed where the series above
-  cross. Check the preview.
+  circles and crosses. Each series needs a shape or a colour of its own:
+  series of one shape in several colours, as in `examples/coloured.png`,
+  are told apart, and so are series that mix shapes and colours.
+- Shapes that look alike at the image's size are told apart by fitting
+  each to the marker to a fraction of a pixel. In `examples/similar.png`,
+  whose circles, pentagons, hexagons and octagons are 6 points, or 8
+  pixels, across, every marker is found in its series, and figrecover warns
+  of the circles' keys, alike with the hexagons' and the octagons':
+
+  ```text
+  figrecover: the markers of the keys at 98,339 and 270,339 look alike at this size, so some may be taken for each other
+  figrecover: the markers of the keys at 98,339 and 355,339 look alike at this size, so some may be taken for each other
+  ```
+
+  A marker that another key's marker fits almost as well is ambiguous, and
+  figrecover prints how many each series has, and where, in the plot's x
+  units, such as `series 1: 19 found, 2 of them ambiguous near x = 3.5, 7`.
+- Lines and error bars that cross a marker are allowed for. A marker partly
+  covered by another, as where series cross or crowd together, is found by
+  what shows of it. Where the other series have markers at an x and a
+  series has none, under another's marker, its marker is probably hidden
+  there, and figrecover says so. In `examples/overlapping.png`, diamonds
+  cover the tops of the circles below them, and the four series cross at
+  x = 5:
+
+  ```bash
+  figrecover examples/overlapping.png -p 0,0 -p 10,0 -p 0,1 \
+      -l 80,44 -l 576,44 -l 80,147 -m 98,339 -m 184,339 -m 270,339 -m 355,339
+  ```
+
+  ```text
+  figrecover: markers found in each series: 16, 20, 17, 18
+  figrecover: series 1: 16 found, 3 probably hidden near x = 4, 5, 5.5
+  figrecover: series 3: 17 found, 2 probably hidden near x = 4.5, 5.5
+  figrecover: series 4: 18 found, 1 probably hidden near x = 5
+  ```
+
+  The circle at x = 5 lies wholly under a square, and those at 4 and 5.5
+  show half and a third of their ink between others. Markers mostly hidden
+  can also be taken for another's: there, one square is a triangle, one
+  triangle a diamond and one diamond a circle. Check the preview.
+- A series without markers gets a warning, as its `-m` position or the axes
+  may be wrong.
+- Compressed images work too: `examples/markers.png` saved as a JPEG of
+  quality 25 gives the same markers.
 - The legend must be in the image, but may be in the plot area: its keys are
   not taken for markers. Nor are markers in an inset with a frame.
 - In a PDF file, markers are read exactly, from what the PDF draws; see
   [PDF files](#pdf-files).
+
+### Error bars
+
+With `--error-bars`, figrecover also reads the error bars drawn through
+each marker, and writes their ends in the plot's units:
+
+```bash
+figrecover examples/errorbars.png -n 4 --error-bars \
+    -o errorbars.csv --preview errorbars.preview.png
+```
+
+Each colour drawn with markers and a line gives its markers first, as a
+series of their own (see [Several curves](#several-curves)), so `-n 4`
+gives the four series of markers, and `-n 7` adds the three lines:
+
+```text
+figrecover: colours: -c 2ca02c -c ff7f0e:markers -c 1f77b4:markers -c d62728:markers
+```
+
+The CSV gains `y_low` and `y_high` columns, the lower and upper ends of
+each marker's vertical bar, and, if any marker has a horizontal bar,
+`x_low` and `x_high` columns, its left and right ends. Each marker has a
+row at its middle. The rows of a line traced between markers leave the
+bounds empty, as does a marker for a bar it does not have, or whose end
+cannot be seen:
+
+```text
+series,Time (s),Voltage (mV),y_low,y_high,x_low,x_high
+1,0.521097,1.54329,1.40044,1.69914,0.218809,0.823385
+1,1.50857,1.6342,1.47836,1.79004,1.22644,1.81086
+...
+2,0.521097,2.62121,2.51731,2.91991,,
+...
+```
+
+The preview draws each bar, with a short line across each end, in its
+series' colour:
+
+![Four series of markers with error bars, each bar recovered in its series' colour](examples/errorbars.preview.png)
+
+- A marker is a filled shape of its series' colour, a pixel or more
+  thicker each side than the series' lines, and its point is the middle of
+  its box. Its bars run up, down and across from its edges, in its colour,
+  to their ends, or to the middles of their caps. Open markers, and lines
+  drawn without markers, give no bounds; give `-m` for open markers.
+- Bars are left out of the curves traced, with or without `--error-bars`,
+  so bars longer on one side, or across, no longer pull a curve away from
+  its points. On `examples/errorbars.png`, the orange line, whose bars run
+  further above than below, strays up to 0.007 of the y range from the
+  line through its points, where it strayed 0.025 with them, and the green
+  markers, with bars across, give points only within their markers.
+- A bar may cross a line of another colour, but an end hidden by another
+  colour, by its marker or beyond the axes is left empty. A bar without a
+  cap must run 5 pixels beyond its marker, and be straight, so that a line
+  through a marker is not taken for one. A horizontal bar along a line of
+  its colour that runs level through its markers cannot be told from it,
+  and is left empty, as is a bar in another colour than its marker.
+- With `-m`, the bars of each series' markers are followed in ink of any
+  colour, as such series often share one.
+- Bounds are the ends of the bars as drawn, not distances from the point.
+  On `examples/errorbars.png` every end lies within 2 pixels of the truth,
+  and the markers' points within a pixel, but the triangles' points within
+  2.5, as their boxes' middles lie lower than their points.
+- In a PDF file, error bars are read exactly; see [PDF files](#pdf-files).
 
 ### Grids
 
@@ -237,7 +438,7 @@ and names the CSV columns after the axis titles:
 
 ```text
 Time (s),Voltage (mV)
-0.00688239,0.996743
+0.00688239,0.999744
 ...
 ```
 
@@ -291,23 +492,35 @@ work as before.
   converted, so a column titled `Voltage (mV)` stays in millivolts.
 - Each tick lies at the middle of its label, or at a tick mark: for labels
   that end at their tick marks rather than centring on them, as rotated
-  x-axis labels do, at the mark at that end, and for labels that lie alike
-  to one side of their marks, as matplotlib draws rotated y-axis labels, at
-  the mark beside each.
-  Labels written upwards on the x-axis, turned a quarter turn, are read as
-  well as those written across. On the y-axis, labels written upwards or
-  downwards are read too, though OCR runs them together, as in
-  `1.25 1.50 1.75`, and misreads some, such as `2.5` as `25`: when most of
-  them are taller than wide, figrecover reads them again with the image left
-  of them turned a quarter turn each way, which takes about a second more,
-  and takes the turn that OCR reads more surely, as it reads them less surely
-  upside down. Labels of a single digit are read as they are. OCR often
-  misreads x-axis labels at a slant, such as 45°, so if it misreads one and
-  finds another's box tilted, figrecover reads the labels again with the
-  image turned 45° each way, which takes about a second more, and takes their
-  texts from the turn that reads the most of them as numbers. Labels at 60°
-  can still be missed, and those misread, such as a 6 written downwards or
-  at a slant on the y-axis, are dropped.
+  x-axis labels do, at the mark at that end; for labels that lie alike to
+  one side of their marks, as matplotlib draws rotated y-axis labels, at the
+  mark beside each; and for rotated labels centred on their marks, at the
+  mark, as OCR's boxes put the middles of rotated text up to 2.4 pixels off.
+  Labels written across stay at their middles, which OCR finds to about a
+  pixel: matplotlib draws its marks on whole pixels, on average half a pixel
+  from where it draws the curves, so they are no surer.
+- Tick labels can be rotated to any angle, on either axis. figrecover finds
+  how far the labels slant from their ink, from the long axis of each
+  character, and if OCR misread a slanted label, missed one, or lost
+  characters of one, it reads the labels again with the image turned to lay
+  them level, which takes one more OCR pass, about half a second. Labels
+  written upwards or downwards are read again turned a quarter turn each
+  way, two passes, about a second, and the turn that puts more of them in
+  line wins, or that OCR reads more surely, as it reads them less surely
+  upside down. On the y-axis, OCR runs such labels together, as in
+  `1.25 1.50 1.75` or `-0.25-0.50`, and misreads some, such as `2.5` as `25`
+  or a 6 as 9, so they are read again whenever most are taller than wide,
+  or OCR did not read them well. On test plots with labels at 30°, 45°, 60°
+  and 90° either way, on axes from 0 to 1, 10 or 1000, -1 to 1 and of years,
+  every tick was read, but for one at the end of an axis that OCR missed,
+  and placed at its mark, and the curves lay within 0.0023 of the y-axis's
+  range by the median. Labels that OCR misreads even turned are dropped.
+- OCR can lose characters of a label, such as its decimal point, reading
+  0.5, 1.0 and 1.5 as `5`, `10` and `15`: values in line, but ten times too
+  large. So a label read as fewer characters than there are pieces of ink
+  wholly inside its box is dropped, and an axis left with fewer than three
+  labels is not read: figrecover stops with `OCR lost characters, such as
+  decimal points, of 3 of the 5 y-axis tick labels`.
 - figrecover traces the curves from the axis lines, not from the first ticks,
   so the margins that plotting libraries leave inside the axes are kept. If
   there are no axis lines, it starts just beyond the tick labels and their
@@ -325,7 +538,11 @@ work as before.
   under each number, are read by their first lines, and their other lines are
   not taken for the x-axis title. A y-axis title written upwards, as most are,
   is read again with the text left of the tick labels turned upright, which
-  OCR reads more surely; one written across is read as it is. A column without
+  OCR reads more surely, and so is one written downwards, as titles of
+  right-hand axes are, as OCR turns it the right way up; one written across
+  is read as it is. A title drawn over the tick labels, as matplotlib draws
+  one turned to 270° without more padding, cannot be read, nor can the
+  labels it covers. A column without
   a title is named `x` or `y`. Titles of a single letter are easily misread,
   such as `x` as `X`, or missed.
 - Titles keep their Greek letters, symbols, superscripts and subscripts, such
@@ -358,6 +575,20 @@ turned level:
 
 ```bash
 figrecover examples/slanted.png
+```
+
+```text
+figrecover: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10
+figrecover: y-axis "Voltage (mV)" with ticks at 0, 0.5, 1, 1.5, 2, 2.5
+```
+
+So are those of `examples/tilted.png`, at 30° on the x-axis and 45° on the
+y-axis, and `examples/steep.png`, at 60° on the x-axis and upwards on the
+y-axis. Those of `examples/downwards.png` are written downwards on both
+axes, as is its y-axis title:
+
+```bash
+figrecover examples/downwards.png
 ```
 
 ```text
@@ -557,6 +788,57 @@ reading order, such as `inset1` and `inset2`.
   before.
 - Each panel takes about as long to read as a plot, about two seconds.
 
+### Turned images
+
+A scanned or photocopied plot is seldom quite level, and a turn of a quarter
+of a degree, two pixels across a plot, is enough for its axis lines or frame
+to be traced as part of a curve. So figrecover finds the angle by which an
+image's axes are turned, and turns the image back before reading it:
+
+```bash
+figrecover examples/skewed.png --preview skewed.preview.png
+```
+
+```text
+figrecover: turned the image 1.00° clockwise to level its axes
+figrecover: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10
+figrecover: y-axis "Voltage (mV)" with ticks at 0, 0.5, 1, 1.5, 2, 2.5, 3
+```
+
+The preview is drawn on the image as given, with the curves and the ticks
+turned back onto it:
+
+![A damped oscillation recovered from a plot turned by 1°](examples/skewed.preview.png)
+
+- The angle is that of the image's long straight lines, within 10° of
+  horizontal or vertical, such as the axis lines, a frame and grid lines,
+  each measured to a fraction of a pixel along its length. The straight
+  stretches of curves are lines too, so it is the angle that most of the
+  lines' length agrees on, and only if horizontal and vertical lines agree
+  on it, as the axis lines do. On plots turned by 0.25° to 5°, it is found
+  within 0.01°.
+- An image turned less than 0.1° is read as it is, as it reads as well as
+  it would levelled, so the results for level images are as they were. So
+  is an image without both a horizontal and a vertical line that agree,
+  such as a plot without axis lines; give `--level` for it.
+- The image is turned about its middle, onto an image large enough to hold
+  all of it, its corners filled in its background colour, and moved by up
+  to half a pixel so that the axis lines run along rows and columns of
+  pixels, as they were drawn, rather than blurred across two.
+- `-l` and `-m` positions are those in the image as given, as are those
+  printed when you click, and are turned with it.
+- On a framed plot and one with only a left and a bottom axis line, turned
+  by 0.25° to 5° either way, no axis line or frame is traced, and the curves
+  are as close as in the plots drawn level: within 0.002 of the y-axis's
+  span by the median, both from `-p` and `-l` and with the axes read, and
+  0.009 at most.
+- `--level DEGREES` sets the angle by hand: the angle by which the axes are
+  turned anticlockwise, or clockwise if negative. `--no-level` reads the
+  image as it is, for a plot drawn turned on purpose.
+- Finding the angle takes about 0.02 s for an image of 640 × 400 pixels,
+  and 0.1 s for one of 1920 × 1200, as a plot scanned at 300 dpi is; turning
+  the image takes about half as long again.
+
 ### PDF files
 
 With the `pdf` extra installed, give a PDF file instead of an image, and
@@ -604,22 +886,36 @@ its ends.
   characters. The axis lines are the straight lines nearest the tick labels,
   and each tick lies exactly at its tick mark, or its grid line: the mark
   nearest the middle of its label, or, for rotated labels, the end.
-- Curves are told apart by the colour they are drawn in, and `-n` and `-c`
-  work as they do for images; `-n` ranks curves by their length. Lines
-  straight along an axis, such as axis lines, tick marks, grid lines and the
-  lines in a legend's keys, are left out, as are closed shapes, such as
-  frames, filled areas, and points hidden beyond the limits of the axes.
+- Curves are told apart by the colour, width and dashes they are drawn with,
+  as [Several curves](#several-curves) shows, and `-n` ranks them by their
+  length. Paths of one style make one curve where each starts at the end of
+  the last, or carries it on a little beyond, as the dashes of a line drawn
+  dash by dash do. Lines straight along an axis, such as axis lines, tick
+  marks, grid lines and the lines in a legend's keys, are left out, as are
+  closed shapes, such as frames, filled areas, and points hidden beyond the
+  limits of the axes.
 - Markers, as in scatter plots and lines with markers, give the points they
   mark, exactly: matplotlib places each marker on the page at its point. A
   colour drawn with markers gives their points, in the order they are drawn,
   rather than the line through them, and `-n` and `-c` tell such series apart
   by colour too: a marker's colour is its fill, or its outline's for open
-  markers. Series that share a colour, as in `examples/markers.pdf`, are told
+  markers. With `-n`, or `-c` and a style, a line in that colour that does
+  not pass through the markers alone, such as a fit, is a curve of its own,
+  after them. Series that share a colour, as in `examples/markers.pdf`, are told
   apart by their markers' shapes with `-m`, given the position in points of
   each series' marker in the legend, or of any of its markers. The markers
-  in a legend, with their labels beside them, and the caps of error bars are
-  left out. On `examples/markers.pdf` and `examples/scatter.pdf`, every
-  marker is found, even where series cross, within 3×10⁻⁶ of its point.
+  in a legend, with their labels beside them, the caps of error bars and
+  the arrowheads of one-sided ones are left out. On `examples/markers.pdf`
+  and `examples/scatter.pdf`, every marker is found, even where series
+  cross, within 3×10⁻⁶ of its point.
+- With `--error-bars`, error bars are read exactly, from the straight
+  vertical and horizontal lines that pass through each point, as
+  matplotlib draws them. They are matched to the points by where they lie,
+  so bars in another colour than their markers are read too, and so are
+  the bars of lines drawn without markers. Their ends are the bounds, even
+  beyond the limits of the axes; a one-sided bar, as matplotlib draws with
+  `lolims` or `uplims`, ends at its point. On `examples/errorbars.pdf`,
+  every end lies within 1.3×10⁻⁶ of the truth.
 
 ```bash
 figrecover examples/markers.pdf \
@@ -647,6 +943,72 @@ figrecover examples/rasterised.pdf -n 2
 ```text
 figrecover: colours: -c ff7f0e -c 1f77b4
 ```
+
+### SVG files
+
+Give an SVG file, and figrecover reads it as it reads a PDF file, exactly,
+from what it draws: its text, its paths, through their transforms and clip
+paths, and its images. It needs no extra. Files compressed with gzip, such as
+`.svgz` and `.svg.gz` files, are read too, and a file named otherwise is taken
+for an SVG file if it starts with a tag, and an `<svg` tag in its first 4 KiB:
+
+```bash
+figrecover examples/labelled.svg
+```
+
+```text
+figrecover: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10
+figrecover: y-axis "Voltage (mV)" with ticks at -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1
+```
+
+The examples `labelled`, `logarithmic`, `series`, `markers` and `rasterised`
+are saved as SVG files twice: `name.svg` with its text drawn as glyph outlines,
+as matplotlib draws it by default, and `name-text.svg` with
+`svg.fonttype: none`, as text. On both, the recovered points lie within
+4×10⁻⁸ of the true curves, as matplotlib writes positions to six decimal places
+of a point, every marker within 2×10⁻⁸ of its point, and the curves drawn as an
+image in `rasterised.svg` as closely as in `rasterised.pdf`.
+
+- Positions in an SVG file are in points from the bottom-left corner of its
+  drawing, as in a PDF file: so are `-l` locations and `--box`, which chooses
+  part of the drawing to read; `--page` is refused. A user unit, in which an
+  SVG file places what it draws, is a CSS pixel, 0.75 points, unless the
+  root's `width`, `height` and `viewBox` make it otherwise: matplotlib's are
+  points, so its SVG and PDF files share their positions.
+- Text is read from `<text>` and `<tspan>` elements, each character placed by
+  its `x`, `y`, `dx` and `dy`, through `transform`s, so rotated titles read as
+  in a PDF file. Superscripts and subscripts are found by their sizes and
+  heights, raised or lowered by `baseline-shift`, or by `dy` as Plotly raises
+  its exponents. An SVG file does not give the widths of its characters, so
+  each is taken to be 0.6 of its font size wide, 0.7 for capitals, or 0.3 or
+  0.9 for narrow and wide ones: a label anchored at its middle or end, as
+  tick labels usually are, lies exactly where it is drawn, and its tick at
+  its tick mark.
+- matplotlib's text drawn as glyph outlines is read from the comment that
+  matplotlib writes before each line of it, in a group whose id starts
+  `text_`, with mathtext such as `$\mathdefault{10^{-1}}$` written as plain
+  text, `10⁻¹`, and the box of the outlines. So is its mathtext written as
+  text, which matplotlib writes a character at a time, grouped by font rather
+  than in the order they are read.
+- Markers drawn with `<use>`, as matplotlib draws them, mark the point at the
+  `x` and `y` of the `<use>`, as a form marks its origin in a PDF file; other
+  markers, such as `<circle>` elements or Plotly's paths of arcs, mark the
+  middles of their boxes. Arcs pass through their points at each quarter turn
+  of their ellipses, as do circles and ellipses.
+- Colours come from presentation attributes, such as `stroke="#1f77b4"`, and
+  `style` attributes, as elements inherit them, in hexadecimal, `rgb()` or by
+  name, including `currentColor`; `opacity` and `stroke-opacity` of 0 hide a
+  path. Each path keeps its stroke width and dash pattern, and a gradient
+  paints in its first colour.
+- Images, given as data URIs or as files beside the SVG file, are traced as in
+  a PDF file, placed and turned as they are shown: matplotlib draws them
+  upside down and turns them over.
+- The preview is drawn by figrecover itself, with OpenCV: the paths, the
+  images and the text, in a font of its own.
+- Files that declare XML entities are refused, as their entities can expand
+  to fill the memory: the "billion laughs" is refused in a tenth of a
+  millisecond. So are files of more than 64 MiB, decompressed, and those
+  that draw more than a million elements, counting each `<use>`.
 
 ### Python
 
@@ -707,6 +1069,21 @@ curves = trace_curves(image, colours, calibration.origin)
 data = [calibration.to_data(curve) for curve in curves]
 ```
 
+`find_series` returns every curve as a `Series`, telling those that share a
+colour apart by style and where they run, and `trace_series` the curves of
+each of the given colours. A `Series` has its `colour`; its `style`, one of
+`STYLES`: `"solid"`, `"dashed"`, `"dotted"` or `"dashdot"` for a line, or
+`"markers"`; its `width`, that of its line or the size of its markers, in
+pixels, or in a PDF file in points; its `points`; and its `name`, such as
+`040404-dashed`:
+
+```python
+from figrecover import find_series, load_image
+
+for series in find_series(load_image("examples/styles.png"), (80, 44)):
+    print(series.name, len(series.points))  # 040404-solid 493, ...
+```
+
 For series told apart by their markers, `find_markers` takes the pixel
 position of each series' legend key, and returns the middle of each marker of
 that shape:
@@ -724,11 +1101,55 @@ markers = find_markers(image, keys, calibration.origin)
 data = [calibration.to_data(series) for series in markers]
 ```
 
+`find_marker_series` takes the same arguments and gives more: for each
+series, a `MarkerSeries` with its markers' `points`, whether each is
+`ambiguous`, and where its markers are probably `hidden`, in pixels. Keys
+whose markers look alike at the image's size give a `UserWarning`.
+
+`find_error_bars` finds the filled markers of each colour and their error
+bars, as `--error-bars` does, and returns an `ErrorBars` for each colour:
+its `points`, the middles of the markers, and the `low` and `high` ends of
+their bars, as rows of x and y like the points': the x of the left end of
+each marker's horizontal bar and the y of the lower end of its vertical
+one, then the right and upper ends, NaN where a marker has no such bar, or
+its end cannot be seen. On a reversed axis, the lower end is the larger
+value:
+
+```python
+from figrecover import find_error_bars
+
+for bars in find_error_bars(image, colours, calibration.origin):
+    points = calibration.to_data(bars.points)
+    low, high = calibration.to_data(bars.low), calibration.to_data(bars.high)
+```
+
+`find_marker_error_bars(image, keys, origin)` does the same for the
+markers that `find_markers` finds.
+
 `load_image` returns an RGB array, and `remove_grid(image)` paints over grid
 lines first, if needed.
 
+`level_image` levels an image whose axes are turned, as the command does. It
+returns the levelled image, and a `Levelling`, whose `angle` is the angle the
+image was turned back by, or 0 if it was left as it is, and whose `points`
+and `back` methods find where pixel positions lie in the levelled image, and
+back:
+
+```python
+from figrecover import Calibration, level_image, load_image, trace_curve
+
+image, levelling = level_image(load_image("examples/skewed.png"))
+pixels = levelling.points([(82.8, 39.8), (578.7, 48.5), (81.0, 142.5)])
+calibration = Calibration.from_points([(0, 0), (10, 0), (0, 1)], pixels)
+data = calibration.to_data(trace_curve(image, calibration.origin))
+```
+
+`level_image(image, angle)` turns the image back by a given angle, and
+`find_skew(image)` returns the angle alone.
+
 With the `pdf` extra, `load_pdf` reads what a page of a PDF file draws, and
-the same steps work on it, in points from the page's bottom-left corner:
+the same steps work on it, in points from the page's bottom-left corner; so
+does `load_svg`, for an SVG file, without the extra:
 
 ```python
 from figrecover import find_pdf_colours, load_pdf, read_pdf_axes, trace_pdf_curves
@@ -746,18 +1167,48 @@ as an image, at 2 pixels to the point, and `remove_pdf_grid(drawing)` paints
 over grid lines in the images that it draws. `find_pdf_markers(drawing, keys,
 origin)` finds series by the shapes of their markers, as `find_markers` does
 in an image, from the position of a marker of each series in points.
+`load_svg(path, box)` takes the part of an SVG file's drawing to read in the
+same way, and `render_svg(drawing)` draws what it read, with OpenCV.
+
+`find_pdf_series(drawing, origin)` returns every curve and series of markers
+on the page, longest first, each as a `Series`, told apart by how it is drawn
+as well as by colour, and `trace_pdf_series(drawing, colours, origin)` the
+series of each colour:
+
+```python
+from figrecover import find_pdf_series, load_pdf
+
+for series in find_pdf_series(load_pdf("examples/styles.pdf"), (57.6, 31.68)):
+    print(series.name, series.width)  # 000000-dotted 1.5, 000000-dashed 1.5, ...
+```
+
+`find_pdf_error_bars(drawing, points)` finds the error bars through the
+points of each series, such as `trace_pdf_curves` or `find_pdf_markers`
+returns, exactly, as an `ErrorBars` for each.
 
 ## How it works
 
 1. The image is read in colour and stretched to the full 0–255 range.
-   Transparent pixels become white.
+   Transparent pixels become white. If its axes are turned, it is levelled:
+   lines at least a fifth of the image's shorter side long, within 10° of
+   horizontal or vertical and at most 8 pixels thick, are found in its ink
+   with a probabilistic Hough transform. In each column across a line close
+   to horizontal, or each row across one close to vertical, the line's middle
+   is the mean position of the ink within 4 pixels of it, weighted by its
+   darkness, and the line's angle that of the straight line through its
+   middles by least squares, leaving out those where other ink meets it. The
+   angle that most of the lines' length agrees on, within 0.05°, is the
+   image's, if both horizontal and vertical lines agree on it, and if it is
+   0.1° or more, the image is turned back by it with Lanczos interpolation.
 2. A least-squares fit through the reference points gives a linear map from
    pixels to data for each axis, or to the logarithm of the data for a
    logarithmic axis. The leftmost and lowest reference points mark the axes.
 3. Pixels left of and below the axes are ignored, which drops the axes, their
-   ticks and labels. A frame closing the axes, a thin line along the top from
-   the y-axis that meets one down the right, is dropped with everything
-   beyond it. Frames inside what remains, such as those of insets and
+   ticks and labels. So are axis lines up to 12 pixels inside the axes
+   given: rows or columns of ink near them that run unbroken from the other
+   axis across 60% of the plot. A frame closing the axes, a thin line along
+   the top half from the y-axis that meets one down the right, is dropped
+   with everything beyond it. Frames inside what remains, such as those of insets and
    legends, are painted in the background colour with all they hold, and 3
    pixels around them, so an inset's curve or a legend's key is not traced
    as part of a curve of its colour. A frame is a box of four straight lines
@@ -785,44 +1236,135 @@ in an image, from the position of a marker of each series in points.
    then the most common colour is a filled area. Antialiasing blends the edges
    of each curve with the background, and a blend can be common too, so a
    colour whose pixels mostly touch those of a colour further from the
-   background is dropped.
-5. The curves are the common colours that differ from the background by at
-   least 64 levels in some channel, most pixels first, except those whose
-   pixels lie mostly more than 4 pixels inside their shapes, which fill areas,
-   and those drawn mostly as straight lines across 60% of the plot, as grid
-   lines are. `-c` instead picks the common colour nearest to each given
-   colour, up to 96 levels away.
-6. Each pixel belongs to the common colour that it best matches when blended
+   background is dropped. So is a colour whose pixels show several inks along
+   separate lines, as the pale blends of thin lines of several colours do
+   when counted as one: a pixel's ink is its direction from the background,
+   which antialiasing and transparency leave as it is, and directions less
+   than 6 degrees apart are one ink's.
+5. A thin line never reaches its full colour, and its shades are each too
+   rare to count. So the pixels that show some ink, 16 levels or more from
+   the background, that no common colour claims, other than the pale edges
+   of its own pixels, are taken by their inks, and an ink whose pixels,
+   weighted by their strength, add up to half a pixel for each column of the
+   plot at full strength is a colour too. Each colour is then the strongest
+   its pixels show along its direction, but for a fiftieth of them, so an
+   opaque line gives its own colour, and a thinner one its strongest shade.
+6. The curves are the colours that differ from the background by at least
+   64 levels in some channel, most pixels first, except those whose pixels
+   lie mostly more than 4 pixels inside their shapes, which fill areas; those
+   drawn mostly as straight lines across 60% of the plot, as grid lines are;
+   and those that blend two other colours, a tenth of each or more, half of
+   whose surrounding pixels show those two, as where translucent bands
+   overlap. `-c` instead picks the colour nearest to each given colour, up to
+   96 levels away, or failing that the nearest whose direction lies within
+   12 degrees of its own, no further from the background: a thin or
+   translucent line of that colour.
+7. Each pixel belongs to the colour that it best matches when blended
    with the background, if it is at least half-way there, so a curve's
    antialiased edges count towards it, and within 96 levels of the blend, so
    ink of other colours, such as the black text and arrows of annotations
-   among coloured curves, is not taken for the nearest curve. Specks of fewer
-   than four pixels, such as where two other curves cross, are ignored.
-7. In each image column, a curve's pixels form runs, split by gaps of more
-   than 6 pixels, and runs that overlap one to one in neighbouring columns
-   form branches. Each run of a branch across at least 5% of the plot gives a
-   point at its median height, so both sides of a loop are traced, and shorter
-   pieces beside a longer branch, such as the caps of error bars, are ignored.
-   A column without such a run gives one point at the median height of all
-   its pixels.
+   among coloured curves, is not taken for the nearest curve. A pixel of a
+   colour that touches those of a stronger colour of the same ink, within 12
+   degrees, is that colour's edge, such as the pale grey edge of a black
+   curve, and belongs to neither. Specks of fewer than four pixels, such as
+   where two other curves cross, are ignored.
+8. A colour's filled markers are its shapes whose middles lie a pixel or
+   more deeper inside it than the middles of its lines, and are wider and
+   taller there than a line, as where lines cross they are not; a marker's
+   box is that of its middle, widened by how deep that lies. Its error bars
+   run from the edges of its box along its middle column and row, while
+   the colour lies within a line's width of them, across ink of other
+   colours up to 6 pixels wide, and most of their rows are no wider than a
+   line. A bar ends where the colour does, or at the middle of its cap: its
+   last rows, no more of them than the bar is wide, wider than the bar and
+   centred on it within a pixel. Without a cap, a bar must run 5 pixels,
+   with the middles of its rows within a pixel of one another, and must
+   not end where a line of the colour leaves its path, within 2 pixels of
+   it. The bars and caps are left out of the colour before its curve is
+   traced, and with `--error-bars` their ends are the bounds; an end
+   hidden by another colour or the edge of the plot is not known.
+9. In each image column, a curve's pixels form runs, split by gaps of more
+   than 6 pixels, and runs that overlap in neighbouring columns are followed
+   as tracks. Where runs merge or part, as where curves cross, each track
+   carries on the way it was headed, fitted to its last six points where its
+   line was clear of others. Each run of a track across at least 5% of the
+   plot gives a point at its median height, so both sides of a loop are
+   traced, and shorter pieces beside a longer track, such as the caps of
+   error bars, are ignored. A column without such a run gives one point at
+   the median height of all its pixels.
+10. To tell the curves of a colour apart, tracks also carry on across gaps:
+   up to 12 line widths, the median height of the colour's runs, turning by
+   at most 25°, or, from a dot, which heads no way, up to 3 line widths
+   whichever way. A track that shares a run holding one line, headed a line
+   width beyond it, waits for its next dash. Tracks that share a run keep
+   their order while it is more than one and a half lines tall, as where
+   curves touch, each at the edge on its side, and otherwise share its rows
+   by where they are headed. Tracks across 5% of the plot are curves, those
+   that part or meet heading 90° apart or more, as the sides of a loop, are
+   one, and so are those where one starts as another ends. Markers come
+   out first: three or more blobs of like size, within a factor of two, whose
+   cores lie deeper inside than half the line's width and 1.5 pixels more,
+   taking the line's width to be the height that a quarter of the colour's
+   runs reach. A colour with markers and a curve gives their middles as a
+   series of its own, before its curves. A curve inked
+   along 90% of its length is solid; otherwise it is dotted if three quarters
+   of its dashes are at most two line widths long, less the width, dashed if
+   three quarters are longer, and dashdot if neither.
 
-With `-m`, steps 4 to 7 give way to these:
+With `-m`, steps 4 to 10 give way to these:
 
-1. Each key's marker is the piece of ink, 64 levels or more from the
-   background, nearest the key's position. A key at least twice as wide as
-   tall has a line through its marker, along the rows with ink across half
-   the key or more; these rows are left out of the marker, as lines cross the
-   markers in the plot at other angles.
-2. A marker lies where a key's marker correlates with the plot by 0.6 or
-   more, and the plot has at least 60% of the key's ink. Where the markers of
-   several keys match less than three quarters of a marker's width apart, the
-   best match wins. Each marker's middle is placed to a fraction of a pixel.
+1. Each key's colour is the direction, seen from the background, of the
+   strongest ink of the piece nearest the key's position, and keys whose
+   colours lie 10 degrees apart or less share one. Each pixel shows the key
+   colour whose direction lies nearest its own, if 20 degrees away or less,
+   and none of the others, so series of one shape are told apart by colour,
+   and ink of other colours is left out.
+2. Each key's marker is the piece of ink in its colour, 64 levels or more
+   from the background, nearest the key's position, leaving out specks of
+   fewer than four pixels. A key at least 1.5 times as wide as tall may have
+   a line through its marker: the rows with ink within 3 pixels of its ends.
+   It does if they are fewer than the marker's rows, the other rows with ink
+   at least half as strong as the strongest, as compression leaves fainter
+   ink beside the line. The line is masked out of the marker, as lines cross
+   the markers in the plot at other angles, except where the marker hides
+   it, differing from the line's level by more than a quarter of the range,
+   as an open marker's face does. Keys of one colour whose markers, fitted
+   to each other as in step 4, differ by less than 5% look alike, and give a
+   warning.
+3. A marker lies where a key's marker correlates with the plot by 0.6 or
+   more, and the plot has at least 60% of the ink of each half of the
+   marker, top, bottom, left and right, so a thin marker, such as a cross,
+   is not found along a line. Matches are taken best first, leaving out those
+   less than three quarters of a marker's width from a marker already found.
+4. Where other keys' markers score within 0.05 of a match, up to 2 pixels
+   away, each is fitted to the plot, shifted by the match's fraction of a
+   pixel, where it differs least by the normalised sum of squared
+   differences, which, unlike a correlation, tells circles from octagons.
+   With it, up to two markers that it partly hides, or that partly hide it,
+   are found, as in step 5, and it is moved to fit what they leave
+   uncovered. The marker that, with those, differs least from the plot
+   wins, and is ambiguous if another differs less than 30% more.
+5. Markers partly hidden under those found, or over them, are then looked
+   for around each, in what all those found leave uncovered: what shows
+   must hold a fifth or more of the key's ink, correlate with the key's
+   marker by 0.75 or more, and explain the plot under it at least 60%
+   better than the markers found alone.
+6. Series usually share x positions. Where two of a series' markers lie
+   further apart than one and a half times their usual spacing, and other
+   series have markers at an x between them, the series' marker would lie
+   there, on the straight line between its two. If another series' marker
+   lies over that place, the marker is looked for again there, as in step
+   4, and is otherwise reported as probably hidden.
+7. Each marker's middle is placed to a fraction of a pixel.
+8. With `--error-bars`, each marker's box is the size of its key's marker,
+   and its bars are followed as in step 8 above, in ink of any colour, 64
+   levels or more from the background.
 
 On the examples, the recovered values are within 0.03 of the true curves, about
 three pixels at the steepest point, and the markers within 0.02 of the points
 they mark, about two pixels.
 
-With a PDF file, steps 1 to 7 give way to these:
+With a PDF file, steps 1 to 10 give way to these:
 
 1. [PDFium](https://pdfium.googlesource.com/pdfium/), through pypdfium2, reads
    the characters, paths and images that the page draws, each with the matrix
@@ -841,39 +1383,102 @@ With a PDF file, steps 1 to 7 give way to these:
    aligned by the ends nearest the marks, as rotated labels are. Each tick
    lies at the mark nearest its label's middle or end, within a quarter of the
    tick spacing.
-4. The curves are the paths that are stroked but not filled, by colour,
-   without their subpaths that are closed or that lie along a straight
-   horizontal or vertical line. Points left of or below the axes, or outside
-   the path's clip, are left out. Curved pieces give their ends, not their
-   control points. Curves are ranked by the length of the lines through their
-   points.
+4. The curves are the paths that are stroked but not filled, without their
+   subpaths that are closed or that lie along a straight horizontal or
+   vertical line. Points left of or below the axes, or outside the path's
+   clip, are left out. Curved pieces give their ends, not their control
+   points. Curves are told apart by the colour, width and dashes of their
+   paths, scaled to the page, and named by their dashes: solid without gaps,
+   dotted if each dash is at most twice the width long, dashed if none is,
+   and dashdot if some are. A path carries on the curve of its style whose
+   last path it starts at the end of, or at most three times the longer
+   one's length beyond, in a direction turning by at most 30° from both;
+   others are curves of their own. With `-c` and a colour alone, every curve
+   of that colour is one. Curves are ranked by the length of the lines
+   through their points.
 5. Markers are shapes at most 36 points across, other than a straight
    horizontal or vertical line, drawn at least twice. A form that holds one,
    as matplotlib draws them, marks the point where its origin lies; a marker
    drawn as a filled or closed path marks the middle of its box. Markers with
    a text level with them, right of and above the axes, beginning or ending
    within four of its heights, are a legend's keys and left out. A colour
-   drawn with markers gives their points in place of its lines, ranked by the
-   length of the line through them. With `-m`, the marker nearest each
-   position, within 10 points, picks those of the same colours whose outlines
-   lie within 0.01 points of its own.
+   drawn with markers gives their points in place of its lines, a series for
+   each shape and fill, ranked by the length of the line through them; with
+   `-n`, a line in its colour that passes through any point other than the
+   markers' centres, within 0.01 points, comes after them, as a curve of its
+   own. With `-m`, the marker nearest each position, within 10 points, picks
+   those of the same colours whose outlines lie within 0.01 points of its own.
 6. Each image drawn on the page, with any transparency on white, is traced as
    an image of a plot from where the axes cross in it, or from its edges if
    they cross outside it, and its curves are ranked with those drawn as paths.
+7. With `--error-bars`, a point's error bars are the straight vertical and
+   horizontal lines, stroked and not filled, that pass through it to within
+   0.01 points, other than those that run from one edge of their clip to
+   the other, as grid lines do. A bar through several points belongs to
+   those with a marker drawn in its colour, if any, and a point with
+   several bars one way takes the one through it alone, or else the one in
+   its marker's colour, or none. A shape lying wholly beyond one end of
+   such a line, whose other end lies at a marker, is the arrowhead of a
+   one-sided bar, not a marker.
+
+With an SVG file, step 1 gives way to this:
+
+1. Python's XML parser reads the file, refusing it at the first declaration
+   of an entity. Each element is drawn through the transforms of those that
+   hold it, and the viewBoxes of the `<svg>` elements, into points from the
+   bottom-left corner, taking the properties it inherits from them. A
+   `<use>` draws its target with its origin at its `x` and `y`, as a form
+   marks a marker in a PDF file. A path passes through the ends of its
+   pieces, and an arc through the points at each quarter turn of its
+   ellipse; its clip is the box around its clip path's shapes, within those
+   of the elements that hold it. The characters of `<text>` and `<tspan>`
+   elements are placed after one another, 0.6 font sizes apart, 0.7 for
+   capitals, or 0.3 or 0.9 for narrow and wide ones, unless an `x` or `y`
+   places them, and each run of them is moved back by half its width or all
+   of it if anchored at its middle or end, then joined into texts as a PDF
+   file's are. Each line that matplotlib writes after a comment, as glyph
+   outlines or as mathtext a character at a time, is a text of its own: the
+   comment, with its mathtext written plainly, in the box of its outlines or
+   characters.
 
 ## Limitations
 
-- Curves are told apart by colour, or by the shapes of their markers, so
-  curves of the same colour without markers are traced as one, and line
-  styles are ignored. Series told apart by their markers give only the
-  markers that can be seen, not the lines between them.
-- A curve needs enough pixels to span the plot, so short curves and sparse
-  dotted lines may not be found.
+- In an image, curves of one colour are told apart by their dashes and
+  where they run, not by the widths of their lines. Curves that run together
+  for long stretches, or touch so closely that their lines overlap by more
+  than half, may swap where they meet, as may a solid curve where the dash
+  of another curve of its colour lies along it as they cross, if the lines
+  are thick. Of two curves drawn from one point, the one that parts from the
+  other starts where they part. Translucent curves, such as pale replicates
+  about their mean, darken where they cross, so they break into pieces there,
+  each a series of its own, often named `dashed`. Series told apart by their
+  markers give only the markers that can be seen, not the lines between them,
+  and each key's marker is taken to be of one colour, that of its strongest
+  ink. In a greyscale image, curves of one grey are told apart only by their
+  dashes and where they run, and a lighter curve loses a few pixels where it
+  touches a darker one. Halftone screens, as in printed and photocopied
+  figures, are not undone.
+- A curve needs enough pixels to span the plot, so short curves may not be
+  found, and dots of fewer than four pixels are ignored, so sparse dotted
+  lines may not be either.
 - Where curves cross, the one drawn underneath loses a few pixels, and its
   points there can be a pixel or two out.
-- The axes must be horizontal and vertical, with linear or logarithmic scales,
-  though either may be reversed. To read the axes, the x-axis must lie below
-  the plot and the y-axis left of it.
+- The axes must be horizontal and vertical, or turned alike by up to 10°, as
+  in a scan, which figrecover levels (see [Turned images](#turned-images)),
+  with linear or logarithmic scales, though either may be reversed. To read
+  the axes, the x-axis must lie below the plot and the y-axis left of it. A
+  photo of a page or a screen, in perspective, is not made square, nor is a
+  page scanned sideways turned upright.
+- An image is levelled only if it has long straight lines both horizontal
+  and vertical that agree on its angle, such as the two axis lines: a plot
+  without axis lines, or one with only an x-axis line and horizontal grid
+  lines, as many spreadsheet charts draw, is read as it is, unless given
+  `--level`. Images in PDF files are not levelled.
+- Levelling an image blurs its lines a little, as each pixel is made from
+  several. A dark grid's lines then vary in shade along their length, and
+  can be traced as a curve: give `--remove-grid`. Markers drawn in thin
+  lines, such as crosses, can be missed with `-m`, or found a pixel or two
+  off.
 - Each column gives one point per branch of a curve, so steep peaks come out
   slightly lower, vertical lines in the plot area become single points, and
   the two sides of a loop merge into one point where they come within 6
@@ -883,7 +1488,8 @@ With a PDF file, steps 1 to 7 give way to these:
 - Panels are found by axis lines that meet, so a figure of plots without
   them, or of plots whose axes touch, as plots sharing an axis can, is read
   as one plot. Legends shared by several panels are not read. Panels and
-  insets are found in images only: in a PDF file, give `--box` to read one.
+  insets are found in images only: in a PDF or SVG file, give `--box` to read
+  one.
 - Insets and legends are painted out only inside a frame of four lines that
   stands clear of the axes' own frame: an inset in the corner of the axes,
   sharing two of their lines, is traced as part of the plot, and not read as
@@ -901,18 +1507,41 @@ With a PDF file, steps 1 to 7 give way to these:
   inset is then painted out, unread, without a warning, as a legend is.
 - In a PDF file, the text must be text to read the axes: text drawn as
   outlines, as some programs export it, has none to read, so give `-p` and
-  `-l`.
+  `-l`. So it must be in an SVG file, other than matplotlib's glyph outlines:
+  glyphs that cairo draws, in `<use>` elements of targets whose ids start
+  `glyph`, are left out.
+- In an SVG file, only presentation attributes and `style` attributes give
+  colours: `<style>` sheets are not read, so a file styled by classes, as
+  Adobe Illustrator writes one, is read with SVG's defaults, filled in
+  black. Filters, masks and patterns are not read, and a gradient is its
+  first colour. A clip path clips to the box around it, and a label that is
+  not anchored at its middle or end lies up to a few tenths of a font size
+  from where it is drawn, as its characters' widths are estimated.
 - In a PDF file, lines that are straight along an axis are left out, as grid
   lines are, so a constant curve drawn as a single horizontal line is too.
-- In a PDF file, a colour drawn with markers gives only the points they mark,
-  so a line of the same colour is left out, even one through more points
-  than are marked, or a fitted line. A shape drawn only once is not taken for
+- In a PDF file, a colour drawn with markers gives with `-c` and its colour
+  alone only the points they mark, so a line of the same colour, such as a
+  fit, is left out; `-n`, or `-c` with the style `solid`, gives it. In an
+  image, markers are told from a line of their colour only if they are
+  filled and three or more, and at least 1.5 pixels thicker than half the
+  line: open markers and crosses are traced as part of the line, and a
+  colour of markers alone gives a point per column, as before, not one per
+  marker. A shape drawn only once is not taken for
   a marker, markers each in a colour of their own, as a colour map draws
   them, make series of one point each, and a marker with a text level with it
   close by, right of and above the axes, is taken for a legend's key.
 - A plot drawn turned on its page, as on a landscape page that the PDF shows
   turned with its `/Rotate` setting, is read as drawn, and its axes cannot be
   read.
+- In an image, error bars are read only through filled markers, or with
+  `-m`, so the bars of open markers, without `-m`, and of lines drawn
+  without markers are not read, and are traced as part of their curves.
+  Nor are bars in another colour than their markers, or horizontal bars
+  along a line that runs level through its markers. A bar that runs beside
+  a steep line of its colour can run on along the line, and end in the
+  wrong place; check the preview. The arrowheads of one-sided bars, as
+  matplotlib draws with `lolims` or `uplims`, are taken for markers of
+  their own.
 
 ## Development
 
@@ -943,6 +1572,13 @@ fake, so they run without a display. They check the recovered data against the
 curves that `examples/make_examples.py` draws; after changing that script,
 redraw the examples with `uv run examples/make_examples.py`, which also prints
 their `-l` options.
+
+`examples/benchmark_colours.py` measures how well figrecover finds and traces
+several series by colour, over plots of 2 to 12 series in several palettes,
+line widths, resolutions and JPEG qualities, with and without grids and
+legends. Run it with `uv run --with matplotlib examples/benchmark_colours.py`,
+which takes about 15 seconds, before and after changing how colours are
+found.
 
 `pyproject.toml` declares the oldest supported dependency versions and
 `uv.lock` pins the versions used in development and CI. Dependabot refreshes
@@ -976,8 +1612,11 @@ protection.
 │   ├── panels.py            # finding the panels of a figure and their insets, and reading each
 │   ├── calibration.py       # pixel-to-data mapping
 │   ├── digitize.py          # image loading, grid removal, curve colours and tracing
+│   ├── errorbars.py         # following error bars from markers in images
+│   ├── level.py             # levelling images whose axes are turned
 │   ├── interactive.py       # window for clicking on reference points
 │   ├── pdf.py               # reading plots from PDF files, from their drawing
+│   ├── svg.py               # reading plots from SVG files, from their drawing
 │   └── cli.py               # the figrecover command
 └── tests/
 ```

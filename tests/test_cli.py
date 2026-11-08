@@ -1,6 +1,7 @@
 """Tests for the command-line interface, using the example plots."""
 
 import dataclasses
+import gzip
 import runpy
 import sys
 import warnings
@@ -16,14 +17,16 @@ from figrecover import (
     Axes,
     Calibration,
     Image,
+    MarkerSeries,
     Panel,
     Point,
+    Series,
     __version__,
     cli,
     interactive,
     load_image,
 )
-from figrecover.cli import _names, main
+from figrecover.cli import _names, _options, main
 
 type Curve = Callable[[npt.NDArray[np.float64]], npt.NDArray[np.float64]]
 
@@ -35,12 +38,16 @@ GRID_LOCATIONS = ["-l", "80,44", "-l", "576,44", "-l", "80,167"]
 SPECTRUM = [str(EXAMPLES / "spectrum.png"), *POINTS]
 GRID = [str(EXAMPLES / "grid.png"), *POINTS]
 SERIES = [str(EXAMPLES / "series.png"), *POINTS, *LOCATIONS]
+STYLES = [str(EXAMPLES / "styles.png"), *POINTS, *LOCATIONS]
 LABELLED = str(EXAMPLES / "labelled.png")
 # The pixel positions of POINTS, and of the legend's markers, that
 # examples/make_examples.py prints.
 MARKER_LOCATIONS = ["-l", "55,83", "-l", "627,83", "-l", "55,185"]
 MARKER_KEYS = ["-m", "148,18", "-m", "260,18", "-m", "377,18", "-m", "483,18"]
 MARKERS = [str(EXAMPLES / "markers.png"), *POINTS, *MARKER_LOCATIONS]
+# The positions of the legend's markers in similar.png, overlapping.png and
+# coloured.png, which examples/make_examples.py prints with LOCATIONS.
+KEYED = ["-m", "98,339", "-m", "184,339", "-m", "270,339", "-m", "355,339"]
 LOGARITHMIC = str(EXAMPLES / "logarithmic.png")
 BINARY = str(EXAMPLES / "binary.png")
 PANELS = str(EXAMPLES / "panels.png")
@@ -51,13 +58,25 @@ LABELLED_PDF = str(EXAMPLES / "labelled.pdf")
 PDF_LOCATIONS = ["-l", "57.6,31.68", "-l", "414.72,31.68", "-l", "57.6,105.6"]
 SERIES_PDF = [str(EXAMPLES / "series.pdf"), *POINTS, *PDF_LOCATIONS]
 MARKERS_PDF = str(EXAMPLES / "markers.pdf")
+STYLES_PDF = str(EXAMPLES / "styles.pdf")
+# styles.pdf has the axes of series.pdf.
+STYLES_AT_POINTS = [STYLES_PDF, *POINTS, *PDF_LOCATIONS]
 # The positions of POINTS, and of the legend's markers, in markers.pdf, in
 # points, that examples/make_examples.py prints.
 MARKER_PDF_LOCATIONS = ["-l", "39.89,59.29", "-l", "451.44,59.29", "-l", "39.89,133.26"]
+LABELLED_SVG = str(EXAMPLES / "labelled.svg")
 MARKER_PDF_KEYS = [
     *("-m", "108.45,12.91", "-m", "187.85,12.91"),
     *("-m", "272.06,12.91", "-m", "347.51,12.91"),
 ]
+# The colours of the series with error bars in errorbars.png and .pdf, from
+# the top, and the pixel positions of POINTS in the image, and their
+# positions in the PDF, in points, that examples/make_examples.py prints.
+ERROR_COLOURS = ["-c", "1f77b4", "-c", "ff7f0e", "-c", "2ca02c", "-c", "d62728"]
+ERROR_LOCATIONS = ["-l", "80,44", "-l", "576,44", "-l", "80,121"]
+ERRORS = [str(EXAMPLES / "errorbars.png"), *ERROR_COLOURS, "--error-bars"]
+ERRORS_PDF = [str(EXAMPLES / "errorbars.pdf"), *ERROR_COLOURS, "--error-bars"]
+BOUNDED = "series,x,y,y_low,y_high,x_low,x_high"
 
 
 def spectrum(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
@@ -105,11 +124,62 @@ def trend(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
     return 0.4 + 0.2 * x
 
 
+def ripple(level: int) -> Curve:
+    """Return a curve that examples/make_examples.py draws in similar.png."""
+    return lambda x: 0.3 + 0.66 * level + 0.1 * np.sin(x + level)
+
+
+def rising(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return a line that examples/make_examples.py draws in overlapping.png."""
+    return 1.5 + 0.15 * (x - 5)
+
+
+def falling(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return a line that examples/make_examples.py draws in overlapping.png."""
+    return 1.5 - 0.15 * (x - 5)
+
+
+def shallow(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return a line that examples/make_examples.py draws in overlapping.png."""
+    return 1.5 + 0.05 * (x - 5)
+
+
+def above(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return a line that examples/make_examples.py draws in overlapping.png."""
+    return rising(x) + 0.05
+
+
 def read_csv(text: str, header: str = "x,y") -> npt.NDArray[np.float64]:
     """Parse CSV output, checking its header."""
     first, _, body = text.partition("\n")
     assert first == header
     return np.loadtxt(body.splitlines(), delimiter=",", ndmin=2)
+
+
+def read_bounds(text: str, header: str = BOUNDED) -> npt.NDArray[np.float64]:
+    """Parse CSV output with the bounds of error bars, empty as NaN, and its header."""
+    first, _, body = text.partition("\n")
+    assert first == header
+    return np.genfromtxt(body.splitlines(), delimiter=",", ndmin=2)
+
+
+def error_bounds(series: int) -> tuple[npt.NDArray[np.float64], ...]:
+    """Return the points and bounds of a series that make_examples.py draws.
+
+    The series are those of errorbars.png, numbered from 1, from the top:
+    each marker's x and y, and its ``y_low``, ``y_high``, ``x_low`` and
+    ``x_high``, NaN where it has none.
+    """
+    curves: list[tuple[Curve, float, float, float]] = [
+        (lambda x: 3.4 + np.sin(x) / 4, 0.2, 0.2, np.nan),
+        (lambda x: 2.4 + np.cos(x) / 4, 0.1, 0.3, np.nan),
+        (lambda x: 1.5 + np.sin(x / 2) / 5, 0.15, 0.15, 0.3),
+        (lambda x: 0.6 + 0.15 * np.cos(x / 2), 0.2, 0.2, np.nan),
+    ]
+    curve, below, above, across = curves[series - 1]
+    x = np.arange(0.5, 10, 1.0)
+    y = curve(x)
+    return x, y, y - below, y + above, x - across, x + across
 
 
 def assert_follows(data: npt.NDArray[np.float64], curve: Curve) -> None:
@@ -149,6 +219,17 @@ def test_writes_csv_to_standard_output(capsys: pytest.CaptureFixture[str]) -> No
     assert_recovers(capsys.readouterr().out, spectrum)
 
 
+def test_reads_reference_points_taken_a_little_below_the_axis(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # 5 pixels below the x-axis line, where tracing once crashed (#32).
+    assert main([*SPECTRUM, "-l", "80,39", "-l", "576,39", "-l", "80,147"]) == 0
+    data = read_csv(capsys.readouterr().out)
+    # The points are those traced from the axis line, though the reference
+    # points calibrate them as given, 5 pixels low.
+    np.testing.assert_allclose(data[:, 1], spectrum(data[:, 0]), atol=0.1)
+
+
 def test_writes_csv_and_preview_files(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -175,9 +256,30 @@ def test_traces_several_series_and_prints_their_colours(
     assert main([*SERIES, "-n", "4"]) == 0
 
     captured = capsys.readouterr()
-    colours = "-c 2ea12e -c ff7f0e -c 1f77b4 -c 040404"  # the longest first
+    colours = "-c 2ca02c -c 1f77b4 -c ff7f0e -c 000000"  # the most pixels first
     assert captured.err == f"figrecover: colours: {colours}\n"
-    assert_recovers_series(captured.out, [wave, growth, decay, trend])
+    assert_recovers_series(captured.out, [wave, decay, growth, trend])
+
+
+def test_says_when_the_image_is_greyscale(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The blue and green curves of series.png become the same grey.
+    image = tmp_path / "grey.png"
+    grey = cv2.imread(str(EXAMPLES / "series.png"), cv2.IMREAD_GRAYSCALE)
+    assert grey is not None
+    cv2.imwrite(str(image), grey)
+
+    assert main([str(image), *POINTS, *LOCATIONS, "-n", "4"]) == 0
+
+    # The two curves of one grey are told apart by where they run.
+    captured = capsys.readouterr()
+    assert captured.err == (
+        "figrecover: the image is greyscale, so curves of different colours may "
+        "share a grey\n"
+        "figrecover: colours: -c 919191 -c 000000 -c 5c5c5c:solid -c 5c5c5c:solid2\n"
+    )
+    assert_recovers_series(captured.out, [growth, trend, decay, wave])
 
 
 def test_traces_the_given_colours(
@@ -209,19 +311,173 @@ def test_finds_series_by_their_markers(
     counts = [np.count_nonzero(data[:, 0] == series) for series in range(1, 5)]
     found = ", ".join(map(str, counts))
     assert captured.err == f"figrecover: markers found in each series: {found}\n"
-    for series, curve in enumerate([decay, growth, wave, trend], start=1):
-        points = data[data[:, 0] == series, 1:]
-        # The markers lie every half unit from 0.5 to 9.5. Some are hidden
-        # where the series cross.
-        assert len(points) >= 18
-        np.testing.assert_allclose(
-            points[:, 0], np.round(2 * points[:, 0]) / 2, atol=0.03
-        )
-        np.testing.assert_allclose(points[:, 1], curve(points[:, 0]), atol=0.03)
+    # The markers lie every half unit from 0.5 to 9.5, even where the series
+    # cross.
+    assert_marks(data, [decay, growth, wave, trend], [19, 19, 19, 19])
     image = cv2.imread(str(preview))
     assert image is not None
     for red, green, blue in cli.SERIES_COLOURS[:4]:  # each series' colour
         assert np.any(np.all(image == (blue, green, red), axis=-1))
+
+
+def assert_marks(
+    data: npt.NDArray[np.float64], curves: Sequence[Curve], counts: Sequence[int]
+) -> None:
+    """Check how many of each series' markers lie on its true curve.
+
+    The markers lie every half unit from 0.5 to 9.5, and each series gives
+    ``counts`` of them, within 0.03 of its curve, and no others.
+    """
+    for series, (curve, count) in enumerate(zip(curves, counts, strict=True), 1):
+        points = data[data[:, 0] == series, 1:]
+        on_curve = (np.abs(points[:, 0] - np.round(2 * points[:, 0]) / 2) < 0.03) & (
+            np.abs(points[:, 1] - curve(points[:, 0])) < 0.03
+        )
+        assert np.count_nonzero(on_curve) == count
+        assert len(points) == count
+
+
+def test_tells_apart_markers_alike_in_shape(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main([str(EXAMPLES / "similar.png"), *POINTS, *LOCATIONS, *KEYED]) == 0
+
+    captured = capsys.readouterr()
+    # Circles look like hexagons and octagons at 6 points, but are told apart.
+    assert captured.err == (
+        "figrecover: the markers of the keys at 98,339 and 270,339 look alike at "
+        "this size, so some may be taken for each other\n"
+        "figrecover: the markers of the keys at 98,339 and 355,339 look alike at "
+        "this size, so some may be taken for each other\n"
+        "figrecover: markers found in each series: 19, 19, 19, 19\n"
+    )
+    data = read_csv(captured.out, header="series,x,y")
+    assert_marks(data, [ripple(level) for level in range(4)], [19] * 4)
+
+
+def test_tells_apart_markers_of_one_shape_by_colour(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main([str(EXAMPLES / "coloured.png"), *POINTS, *LOCATIONS, *KEYED]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.err == "figrecover: markers found in each series: 19, 19, 19, 19\n"
+    data = read_csv(captured.out, header="series,x,y")
+    assert_marks(data, [ripple(level) for level in range(4)], [19] * 4)
+
+
+def test_finds_markers_partly_hidden_and_reports_those_hidden(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    image = str(EXAMPLES / "overlapping.png")
+
+    assert main([image, *POINTS, *LOCATIONS, *KEYED]) == 0
+
+    # Diamonds cover the tops of the circles; the series cross at x = 5, where
+    # a square hides a circle altogether, and two markers hide the circle at
+    # 5.5 and at 4, but for the lower edge.
+    captured = capsys.readouterr()
+    assert captured.err == (
+        "figrecover: markers found in each series: 16, 20, 17, 18\n"
+        "figrecover: series 1: 16 found, 3 probably hidden near x = 4, 5, 5.5\n"
+        "figrecover: series 3: 17 found, 2 probably hidden near x = 4.5, 5.5\n"
+        "figrecover: series 4: 18 found, 1 probably hidden near x = 5\n"
+    )
+    data = read_csv(captured.out, header="series,x,y")
+    on_curves = [16, 19, 16, 17]
+    for series, (curve, count) in enumerate(
+        zip([rising, falling, shallow, above], on_curves, strict=True), start=1
+    ):
+        points = data[data[:, 0] == series, 1:]
+        assert (
+            np.count_nonzero(np.abs(points[:, 1] - curve(points[:, 0])) < 0.03) == count
+        )
+
+
+@pytest.mark.parametrize("quality", [60, 25])
+def test_finds_markers_in_compressed_images(
+    quality: int, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    compressed = tmp_path / "markers.jpg"
+    image = cv2.imread(MARKERS[0])
+    assert image is not None
+    cv2.imwrite(str(compressed), image, [cv2.IMWRITE_JPEG_QUALITY, quality])
+
+    assert main([str(compressed), *MARKERS[1:], *MARKER_KEYS]) == 0
+
+    data = read_csv(capsys.readouterr().out, header="series,x,y")
+    assert_marks(data, [decay, growth, wave, trend], [19, 19, 19, 19])
+
+
+def test_reports_markers_ambiguous_hidden_or_missing(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # On markers.png, x runs from 0 at pixel 55 to 10 at 627.
+    found = [
+        MarkerSeries(
+            np.array([[112.2, 100], [140.8, 100]]),
+            np.array([True, False]),
+            np.empty((0, 2)),
+        ),
+        MarkerSeries(
+            np.array([[112.2, 120], [198, 120]]),
+            np.array([False, True]),
+            np.array([[140.8, 120], [169.6, 120]]),
+        ),
+        MarkerSeries(np.empty((0, 2)), np.empty(0, dtype=np.bool_), np.empty((0, 2))),
+    ]
+
+    def find(
+        _image: Image, _keys: Sequence[Point], _origin: Point
+    ) -> list[MarkerSeries]:
+        warnings.warn("two keys look alike", stacklevel=2)
+        return found
+
+    monkeypatch.setattr(cli, "find_marker_series", find)
+    assert main([*MARKERS, *MARKER_KEYS[:6]]) == 0
+
+    assert capsys.readouterr().err == (
+        "figrecover: two keys look alike\n"
+        "figrecover: markers found in each series: 2, 2, 0\n"
+        "figrecover: series 3: found no markers like the key at 377,18\n"
+        "figrecover: series 1: 2 found, 1 of them ambiguous near x = 1\n"
+        "figrecover: series 2: 2 found, 1 of them ambiguous near x = 2.5, and 2 "
+        "probably hidden near x = 1.5, 2\n"
+    )
+
+
+def test_tells_curves_of_one_colour_apart_by_style(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main([*STYLES, "-n", "3"]) == 0
+
+    captured = capsys.readouterr()
+    options = "-c 000000:solid -c 000000:dashed -c 000000:dotted"  # most pixels first
+    assert captured.err == (
+        "figrecover: the image is greyscale, so curves of different colours may "
+        f"share a grey\nfigrecover: colours: {options}\n"
+    )
+    assert_recovers_styles(captured.out, [decay, growth, wave])
+
+
+def test_traces_the_given_styles(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main([*STYLES, "-c", "000000:dotted", "-c", "000000:solid"]) == 0
+
+    assert_recovers_styles(capsys.readouterr().out, [wave, decay])
+
+
+def assert_recovers_styles(text: str, curves: Sequence[Curve]) -> None:
+    """Check that each series in CSV output follows its true curve, in order.
+
+    A dashed or dotted curve may start and end a gap in from the axes.
+    """
+    data = read_csv(text, header="series,x,y")
+    assert set(data[:, 0]) == set(range(1, len(curves) + 1))
+    for series, curve in enumerate(curves, start=1):
+        x, y = data[data[:, 0] == series, 1:].T
+        assert x.min() < 0.15
+        assert x.max() > 9.85
+        np.testing.assert_allclose(y, curve(x), atol=0.04)
 
 
 def test_writes_one_series_without_a_series_column(
@@ -429,8 +685,8 @@ def test_writes_panels_to_standard_output_with_a_panel_column(
         'figrecover: panel a: y-axis "I" with ticks at 0, 1',
         f'figrecover: panel 2: x-axis "{titles[0]}" with ticks at 0, 10',
         f"figrecover: panel 2: y-axis{y_title} with ticks at 0, 1",
-        "figrecover: panel a: colours: -c 040404",
-        "figrecover: panel 2: colours: -c 040404",
+        "figrecover: panel a: colours: -c 000000",
+        "figrecover: panel 2: colours: -c 000000",
     ]
     data = read_panel_csv(captured.out, header)
     assert list(data) == ["a", "2"]
@@ -730,10 +986,203 @@ def test_traces_series_of_markers_in_pdf_files_by_colour(
         np.testing.assert_allclose(y, curve(x), atol=1e-5)
 
 
+def test_tells_curves_of_pdf_files_apart_by_style(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main([STYLES_PDF, "-n", "3"]) == 0
+
+    captured = capsys.readouterr()
+    options = "-c 000000:dotted -c 000000:dashed -c 000000:solid"  # longest first
+    assert captured.err.endswith(f"figrecover: colours: {options}\n")
+    data = read_csv(captured.out, header="series,x,y")
+    for series, curve in enumerate([wave, growth, decay], start=1):
+        x, y = data[data[:, 0] == series, 1:].T
+        np.testing.assert_allclose(y, curve(x), atol=1e-5)
+
+
+def test_picks_curves_of_pdf_files_by_style(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main([STYLES_PDF, "-c", "000000:Solid", "-c", "#000000"]) == 0
+
+    data = read_csv(capsys.readouterr().out, header="series,x,y")
+    x, y = data[data[:, 0] == 1, 1:].T
+    np.testing.assert_allclose(y, decay(x), atol=1e-5)
+    # Without a style, every curve of the colour, as one.
+    x, y = data[data[:, 0] == 2, 1:].T
+    near = [np.isclose(y, curve(x), atol=1e-5) for curve in (decay, growth, wave)]
+    assert np.all(np.any(near, axis=0))
+    assert np.all(np.any(near, axis=1))
+
+
+def test_writes_the_options_that_pick_each_series() -> None:
+    def series(colour: tuple[int, int, int], style: str) -> Series:
+        return Series(colour, style, 1, np.zeros((1, 2)))  # type: ignore[arg-type]
+
+    every = [
+        series((0, 0, 0), "solid"),
+        series((255, 0, 0), "solid"),
+        series((0, 0, 0), "dashed"),
+        series((0, 0, 0), "solid"),
+    ]
+
+    assert _options(every, every) == [
+        "000000:solid",
+        "ff0000",
+        "000000:dashed",
+        "000000:solid2",
+    ]
+
+
+def test_reads_error_bars_with_their_markers(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    preview = tmp_path / "preview.png"
+
+    arguments = [*ERRORS, *POINTS, *ERROR_LOCATIONS, "--preview", str(preview)]
+    assert main(arguments) == 0
+
+    data = read_bounds(capsys.readouterr().out)
+    # A unit of x is 49.6 pixels, and of y 77, so 2 pixels are 0.04 and 0.026.
+    for series in range(1, 5):
+        rows = data[data[:, 0] == series, 1:]
+        marked = rows[~np.isnan(rows[:, 2])]
+        assert len(marked) == 10  # a row for each marker, with its bounds
+        assert len(np.unique(rows[:, 0])) == len(rows)  # and no other there
+        x, *bounds = error_bounds(series)
+        np.testing.assert_allclose(marked[:, 0], x, atol=0.04)
+        # The triangles' middles lie up to 2.4 pixels below their points.
+        steps = [0.033, 0.026, 0.026, 0.04, 0.04]
+        for column, (truth, step) in enumerate(zip(bounds, steps, strict=True)):
+            np.testing.assert_allclose(marked[:, column + 1], truth, atol=step)
+        assert np.isnan(rows[np.isnan(rows[:, 2]), 2:]).all()  # the line's own
+    image = cv2.imread(str(preview))
+    assert image is not None
+    # The cap of the first blue marker's bar, 330.5 pixels up, 104.8 across.
+    assert np.any(np.all(image[68:72, 101:109] == (180, 119, 31), axis=-1))
+
+
+def test_reads_error_bars_in_pdf_files_exactly(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    preview = tmp_path / "preview.png"
+
+    assert main([*ERRORS_PDF, "--preview", str(preview)]) == 0
+
+    captured = capsys.readouterr()
+    header = "series,Time (s),Voltage (mV),y_low,y_high,x_low,x_high"
+    data = read_bounds(captured.out, header)
+    for series in range(1, 5):
+        rows = data[data[:, 0] == series, 1:]
+        np.testing.assert_allclose(
+            rows, np.column_stack(error_bounds(series)), atol=1e-5
+        )
+    image = cv2.imread(str(preview))
+    assert image is not None
+    assert np.any(np.all(image == (40, 39, 214), axis=-1))  # the red bars
+
+
+def test_reads_error_bars_in_order_on_reversed_axes(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Both axes reversed: x from 10 to 0, and y from 4 down to 3 a unit up.
+    points = ["-p", "10,4", "-p", "0,4", "-p", "10,3"]
+    image = str(EXAMPLES / "errorbars.png")
+    assert main([image, "-c", "2ca02c", *points, *ERROR_LOCATIONS, "--error-bars"]) == 0
+
+    # The green markers, with bars across and up and down, from the right.
+    data = read_bounds(capsys.readouterr().out, "x,y,y_low,y_high,x_low,x_high")
+    marked = data[~np.isnan(data[:, 2])][::-1]
+    x, _, below, above, left, right = error_bounds(3)
+    np.testing.assert_allclose(marked[:, 0], 10 - x, atol=0.04)
+    for column, truth in enumerate([4 - above, 4 - below, 10 - right, 10 - left]):
+        np.testing.assert_allclose(marked[:, column + 2], truth, atol=0.04)
+
+
+def test_reads_no_error_bars_where_there_are_none(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main([*MARKERS, *MARKER_KEYS, "--error-bars"]) == 0
+
+    # The lines through the markers are not bars, and none run across.
+    data = read_bounds(capsys.readouterr().out, header="series,x,y,y_low,y_high")
+    assert len(data) >= 4 * 18
+    assert np.isnan(data[:, 3:]).all()
+
+
 @pytest.mark.usefixtures("without_pdf")
 def test_reports_a_missing_pdf_extra(capsys: pytest.CaptureFixture[str]) -> None:
     assert main([LABELLED_PDF]) == 1
     assert "needs the pdf extra" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("name", ["labelled.svg", "labelled-text.svg"])
+def test_reads_svg_files_exactly(
+    name: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    preview = tmp_path / "preview.png"
+
+    assert main([str(EXAMPLES / name), "--preview", str(preview)]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.err == (
+        'figrecover: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10\n'
+        'figrecover: y-axis "Voltage (mV)" with ticks at '
+        "-0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1\n"
+    )
+    data = read_csv(captured.out, header="Time (s),Voltage (mV)")
+    # As exact as the 6 significant figures of the CSV file.
+    np.testing.assert_allclose(data[:, 1], ringing(data[:, 0]), atol=1e-5)
+    image = cv2.imread(str(preview))
+    assert image is not None
+    assert image.shape[0] == 2 * 288  # the drawing, 2 pixels to the point
+    assert np.any(np.all(image == (255, 0, 0), axis=-1))  # the ticks, in blue
+
+
+def test_reads_svg_files_by_their_start_and_in_a_box(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    figure = tmp_path / "figure"
+    figure.write_bytes((EXAMPLES / "series-text.svg").read_bytes())
+    compressed = tmp_path / "figure.svg.gz"
+    compressed.write_bytes(gzip.compress(figure.read_bytes()))
+    box = ["--box", "0,0,460.8,288"]
+
+    assert main([str(figure), *POINTS, *PDF_LOCATIONS, *box, "-c", "1f77b4"]) == 0
+    data = read_csv(capsys.readouterr().out)
+    np.testing.assert_allclose(data[:, 1], decay(data[:, 0]), atol=1e-5)
+    assert main([str(compressed), "-n", "4"]) == 0
+    assert capsys.readouterr().err.endswith(
+        "figrecover: colours: -c 2ca02c -c 1f77b4 -c ff7f0e -c 000000\n"
+    )
+
+
+@pytest.mark.usefixtures("without_pdf")
+def test_reads_svg_files_without_the_pdf_extra(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main([LABELLED_SVG, "--preview", str(tmp_path / "preview.png")]) == 0
+
+    data = read_csv(capsys.readouterr().out, header="Time (s),Voltage (mV)")
+    np.testing.assert_allclose(data[:, 1], ringing(data[:, 0]), atol=1e-5)
+
+
+def test_asks_for_missing_locations_in_svg_files_and_prints_them(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    shown: list[Image] = []
+
+    def pick_points(image: Image, _labels: Sequence[str]) -> list[Point]:
+        shown.append(image)
+        # The drawing is shown 2 pixels to the point.
+        return [(115.2, 63.36), (829.44, 63.36), (115.2, 211.2)]
+
+    monkeypatch.setattr(interactive, "pick_points", pick_points)
+
+    assert main([str(EXAMPLES / "series.svg"), *POINTS, "-c", "1f77b4"]) == 0
+    assert shown[0].shape == (576, 922, 3)
+    captured = capsys.readouterr()
+    assert captured.err == f"figrecover: locations: {' '.join(PDF_LOCATIONS)}\n"
+    data = read_csv(captured.out)
+    np.testing.assert_allclose(data[:, 1], decay(data[:, 0]), atol=1e-5)
 
 
 def test_can_be_cancelled(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -754,6 +1203,28 @@ def test_can_be_cancelled(monkeypatch: pytest.MonkeyPatch) -> None:
         ([*SERIES, "-n", "5"], "found only 4 of 5 curves"),
         ([*SERIES, "-c", "00ffff"], "no curve of colour #00ffff found"),
         (
+            [*STYLES_AT_POINTS, "-c", "000000", "-c", "0" * 6],
+            "-c 000000 is given twice",
+        ),
+        ([*SERIES, "-c", "000000:dashed"], "no dashed series of colour #000000"),
+        (
+            [*STYLES_AT_POINTS, "-c", "000000:solid2", "-c", "000000:solid2"],
+            "-c 000000:solid2 is given twice",
+        ),
+        ([*STYLES_AT_POINTS, "-n", "4"], "found only 3 of 4 curves"),
+        (
+            [*STYLES_AT_POINTS, "-c", "000000:dashed2"],
+            "found only 1 dashed series of colour #000000",
+        ),
+        (
+            [*STYLES_AT_POINTS, "-c", "000000:markers"],
+            "no markers series of colour #000000 found",
+        ),
+        (
+            [*STYLES_AT_POINTS, "-c", "ff0000:solid"],
+            "no curve of colour #ff0000 found",
+        ),
+        (
             [*SPECTRUM, "-l", "80,44", "-l", "5760,44", "-l", "80,147"],
             "the -l location 5760,44 lies outside the 640x400 image",
         ),
@@ -763,6 +1234,7 @@ def test_can_be_cancelled(monkeypatch: pytest.MonkeyPatch) -> None:
         ),
         ([*MARKERS, "-m", "148,18", "-m", "600,18"], "found no marker near 600,18"),
         ([LABELLED_PDF, "--page", "2"], "'" + LABELLED_PDF + "' has no page 2"),
+        (["missing.svg"], "cannot read SVG 'missing.svg'"),
         (
             [str(EXAMPLES / "series.pdf"), *POINTS, "-l", "0,0", "-l", "999,0"],
             "the -l location 999,0 lies outside the page read, 0,0,460.8,288",
@@ -816,6 +1288,11 @@ def test_accepts_points_with_spaces_and_exponents(
         ([*SERIES, "-n", "two"], "expected a positive whole number"),
         ([*SERIES, "-c", "red"], "expected a colour written as RRGGBB, got 'red'"),
         ([*SERIES, "-c", "#12345"], "expected a colour written as RRGGBB"),
+        ([*SERIES, "-c", "000000:solid0"], "expected a colour written as RRGGBB"),
+        (
+            [*SERIES, "-c", "000000:wavy"],
+            "expected a style of solid, dashed, dotted, dashdot, markers, got",
+        ),
         ([*SERIES, "-n", "2", "-c", "000000"], "not allowed with argument"),
         ([*SERIES, "-c", "000000", "-m", "1,1"], "not allowed with argument"),
         (["plot.png", "-l", "80,44"], "give the reference points of the -l"),
@@ -824,6 +1301,7 @@ def test_accepts_points_with_spaces_and_exponents(
         (["plot.png", "--page", "2"], "--page and --box choose what to read in a PDF"),
         (["plot.png", "--box", "0,0,1,1"], "--page and --box choose what to read"),
         ([LABELLED_PDF, "--page", "0"], "expected a positive whole number, got '0'"),
+        ([LABELLED_SVG, "--page", "1"], "--page chooses a page of a PDF file; an SVG"),
         ([LABELLED_PDF, "--box", "0,0,1"], "expected a box written as x0,y0,x1,y1"),
         ([LABELLED_PDF, "--box", "0,0,inf,1"], "expected finite numbers in the box"),
         ([LABELLED_PDF, "--box", "1,0,0,1"], "whose x1 and y1 exceed its x0 and y0"),

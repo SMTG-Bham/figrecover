@@ -1,17 +1,19 @@
 # /// script
 # requires-python = ">=3.14"
-# dependencies = ["matplotlib>=3.10.7", "numpy>=2.3.3"]
+# dependencies = ["matplotlib>=3.10.7", "numpy>=2.3.3", "opencv-python>=4.10.0.84"]
 # ///
 """Draw the example plots, whose curves the tests know exactly.
 
 Run from the repository root with ``uv run examples/make_examples.py``. It
 prints the pixel position of each reference point, for figrecover's -l option,
-or in a PDF its position in points.
+or in a PDF its position in points, which is its position in the SVG files too.
 """
 
+import io
 from collections.abc import Callable
 from pathlib import Path
 
+import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 import numpy.typing as npt
@@ -22,7 +24,12 @@ from matplotlib.legend import Legend
 type Curve = Callable[[npt.NDArray[np.float64]], npt.NDArray[np.float64]]
 
 HERE = Path(__file__).parent
-ALSO_PDF = {"labelled", "logarithmic", "markers", "series"}  # also saved as PDFs
+# Also saved as PDF files.
+ALSO_PDF = {"errorbars", "labelled", "logarithmic", "markers", "series", "styles"}
+# Also saved as SVG files: name.svg with text drawn as glyph outlines, as
+# matplotlib draws it by default, and name-text.svg with text as text.
+ALSO_SVG = {"labelled", "logarithmic", "markers", "series", "rasterised"}
+plt.rcParams["svg.hashsalt"] = "figrecover"  # the same ids in SVG files each time
 
 
 def spectrum(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
@@ -68,6 +75,67 @@ def lowpass(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
 def quadratic(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
     """Return a quarter of the square, rising fourfold each time x doubles."""
     return x**2 / 4
+
+
+def ripple(level: int) -> Curve:
+    """Return a gentle wave at one of four levels, clear of those of the others."""
+    return lambda x: 0.3 + 0.66 * level + 0.1 * np.sin(x + level)
+
+
+def rising(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return a straight line rising through 1.5 at x = 5."""
+    return 1.5 + 0.15 * (x - 5)
+
+
+def falling(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return a straight line falling through 1.5 at x = 5."""
+    return 1.5 - 0.15 * (x - 5)
+
+
+def shallow(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return a straight line rising gently through 1.5 at x = 5."""
+    return 1.5 + 0.05 * (x - 5)
+
+
+def above(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return ``rising`` 0.05 higher, so its markers cover half of that one's."""
+    return rising(x) + 0.05
+
+
+def swell(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return a slow sine wave about 3.4, the highest series with error bars."""
+    return 3.4 + np.sin(x) / 4
+
+
+def ebb(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return a slow cosine wave about 2.4, below ``swell``."""
+    return 2.4 + np.cos(x) / 4
+
+
+def drift(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return a slower sine wave about 1.5, below ``ebb``."""
+    return 1.5 + np.sin(x / 2) / 5
+
+
+def lull(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return a slower cosine wave about 0.6, the lowest series with error bars."""
+    return 0.6 + 0.15 * np.cos(x / 2)
+
+
+# The colour, format and curve of each series with error bars, and its errors:
+# symmetric, longer above than below, across and up and down, and without caps.
+ERROR_SERIES: list[tuple[str, str, Curve]] = [
+    ("tab:blue", "o-", swell),
+    ("tab:orange", "s-", ebb),
+    ("tab:green", "D", drift),
+    ("tab:red", "^-", lull),
+]
+ERRORS: list[dict[str, float | list[list[float]]]] = [
+    {"yerr": 0.2},
+    {"yerr": [[0.1], [0.3]]},
+    {"xerr": 0.3, "yerr": 0.15},
+    {"yerr": 0.2},
+]
 
 
 def draw(
@@ -160,6 +228,32 @@ def draw_scatter(name: str, errors: Curve, scattered: Curve) -> None:
     plt.close(figure)
 
 
+def draw_errorbars(name: str) -> None:
+    """Draw four series with error bars, and print the points.
+
+    The markers lie every unit of x from 0.5 to 9.5: blue circles on a line,
+    with symmetric bars; orange squares on a line, with bars longer above
+    than below; green diamonds alone, with bars across and up and down; and
+    red triangles on a line, with bars without caps. Each series keeps to a
+    band of y of its own, so none hides another's bars. Saved as a PDF too.
+    """
+    figure, axes = plt.subplots(figsize=(6.4, 4), dpi=100)
+    x = np.arange(0.5, 10, 1.0)
+    for (colour, fmt, curve), errors in zip(ERROR_SERIES, ERRORS, strict=True):
+        axes.errorbar(
+            x,
+            curve(x),
+            fmt=fmt,
+            color=colour,
+            linewidth=1,
+            capsize=0 if colour == "tab:red" else 3,
+            **errors,
+        )
+    axes.set(xlabel="Time (s)", ylabel="Voltage (mV)", xlim=(0, 10), ylim=(0, 4))
+    axes.spines[["top", "right"]].set_visible(False)
+    save(name, figure, axes, [(0, 0), (10, 0), (0, 1)])
+
+
 def draw_titled(name: str, curve: Curve, titles: tuple[str, str]) -> None:
     """Draw a curve over x from 0 to 10 with titles of two lines, and print the points.
 
@@ -187,6 +281,30 @@ def draw_slanted(name: str, curve: Curve, titles: tuple[str, str]) -> None:
     save(name, figure, axes, [(0, 0), (10, 0), (0, 1)])
 
 
+def draw_rotated(
+    name: str, curve: Curve, rotations: tuple[float, float], *, downwards: bool = False
+) -> None:
+    """Draw a curve over x from 0 to 10 with rotated tick labels, and print the points.
+
+    The x-axis and y-axis tick labels are rotated by the rotations, in
+    degrees anticlockwise. The y-axis title is written upwards, or downwards,
+    with its top away from the axis, as titles of right-hand axes are. The
+    layout makes room for them.
+    """
+    figure, axes = plt.subplots(figsize=(6.4, 4), dpi=100, layout="constrained")
+    x = np.linspace(0, 10, 2000)
+    axes.plot(x, curve(x), color="black", linewidth=1.5)
+    axes.set(xlabel="Time (s)", xlim=(0, 10), ylim=(0, 2.5))
+    if downwards:
+        axes.set_ylabel("Voltage (mV)", rotation=270, va="top")
+    else:
+        axes.set_ylabel("Voltage (mV)")
+    axes.tick_params(axis="x", labelrotation=rotations[0])
+    axes.tick_params(axis="y", labelrotation=rotations[1])
+    axes.spines[["top", "right"]].set_visible(False)
+    save(name, figure, axes, [(0, 0), (10, 0), (0, 1)])
+
+
 def draw_markers(name: str, curves: dict[str, Curve]) -> None:
     """Draw black lines through markers, keyed by marker, and print the points.
 
@@ -207,6 +325,47 @@ def draw_markers(name: str, curves: dict[str, Curve]) -> None:
         loc="upper center", bbox_to_anchor=(0.5, -0.15), ncols=len(curves)
     )
     save(name, figure, axes, [(0, 0), (10, 0), (0, 1)], legend)
+
+
+def draw_keyed(name: str, series: list[tuple[str, str, Curve]]) -> None:
+    """Draw lines through markers, keyed in a legend, and print the points.
+
+    Each series has a marker, a colour and a curve, and is drawn in turn, so
+    later markers cover earlier ones where they overlap. The markers are 6
+    points across and lie every half unit of x from 0.5 to 9.5, and the
+    legend lies in the top-left corner of the axes, in 7 point type. The
+    pixel positions of the legend's markers are printed too, for
+    figrecover's -m option.
+    """
+    figure, axes = plt.subplots(figsize=(6.4, 4), dpi=100)
+    x = np.arange(0.5, 10, 0.5)
+    for number, (marker, colour, curve) in enumerate(series, start=1):
+        axes.plot(
+            x,
+            curve(x),
+            color=colour,
+            linewidth=1,
+            marker=marker,
+            markersize=6,
+            label=f"Series {number}",
+        )
+    axes.set(xlabel="x", ylabel="y", xlim=(0, 10), ylim=(0, 3))
+    legend = axes.legend(loc="upper left", ncols=len(series), fontsize=7)
+    save(name, figure, axes, [(0, 0), (10, 0), (0, 1)], legend)
+
+
+def draw_styles(name: str, curves: dict[str, Curve]) -> None:
+    """Draw black curves, keyed by line style, from x of 0 to 10, and print the points.
+
+    They cross one another, and are told apart only by their dashes.
+    """
+    figure, axes = plt.subplots(figsize=(6.4, 4), dpi=100)
+    x = np.linspace(0, 10, 2000)
+    for style, curve in curves.items():
+        axes.plot(x, curve(x), color="black", linewidth=1.5, linestyle=style)
+    axes.set(xlabel="x", ylabel="y", xlim=(0, 10), ylim=(0, 3))
+    axes.spines[["top", "right"]].set_visible(False)
+    save(name, figure, axes, [(0, 0), (10, 0), (0, 1)])
 
 
 def draw_panels(name: str) -> None:
@@ -297,6 +456,37 @@ def draw_inset(name: str) -> None:
     plt.close(figure)
 
 
+def draw_skewed(name: str, curve: Curve, angle: float) -> None:
+    """Draw a framed plot turned by an angle, as a scan can be, and print its points.
+
+    The plot is drawn over x from 0 to 10 and y from 0 to 3, framed as
+    matplotlib draws axes by default, then turned anticlockwise about the
+    middle of the image, with cubic interpolation, its corners filled in
+    white. The positions printed are those of the points, turned with it.
+    """
+    figure, axes = plt.subplots(figsize=(6.4, 4), dpi=100)
+    x = np.linspace(0, 10, 2000)
+    axes.plot(x, curve(x), color="black", linewidth=1.5)
+    axes.set(xlabel="Time (s)", ylabel="Voltage (mV)", xlim=(0, 10), ylim=(0, 3))
+    drawn = io.BytesIO()
+    figure.savefig(drawn, format="png", facecolor="white")
+    image = cv2.imdecode(np.frombuffer(drawn.getvalue(), np.uint8), cv2.IMREAD_COLOR)
+    height, width = image.shape[:2]
+    turn = cv2.getRotationMatrix2D((width / 2, height / 2), angle, 1)
+    turned = cv2.warpAffine(
+        image, turn, (width, height), flags=cv2.INTER_CUBIC, borderValue=(255,) * 3
+    )
+    cv2.imwrite(str(HERE / f"{name}.png"), turned)
+
+    # OpenCV counts columns and rows from the middle of the top-left pixel.
+    pixels = axes.transData.transform([(0, 0), (10, 0), (0, 1)])
+    columns, rows = pixels[:, 0] - 0.5, height - pixels[:, 1] - 0.5
+    moved = np.column_stack((columns, rows, np.ones(len(pixels)))) @ turn.T
+    points = np.column_stack((moved[:, 0] + 0.5, height - moved[:, 1] - 0.5))
+    print(name, " ".join(f"-l {x:.1f},{y:.1f}" for x, y in points))
+    plt.close(figure)
+
+
 def save(
     name: str,
     figure: Figure,
@@ -331,11 +521,18 @@ def save_pdf(
     """Save a plot as a PDF, and print the positions of reference points in points.
 
     With a legend, also print the positions of its markers. The PDF's date is
-    left out, so that it is drawn the same each time.
+    left out, so that it is drawn the same each time. Plots named in
+    ``ALSO_SVG`` are saved as SVG files too, in points, as the PDF is.
     """
     figure.savefig(
         HERE / f"{name}.pdf", facecolor="white", metadata={"CreationDate": None}
     )
+    if name in ALSO_SVG:
+        for stem, fonttype in [(name, "path"), (f"{name}-text", "none")]:
+            with plt.rc_context({"svg.fonttype": fonttype}):
+                figure.savefig(
+                    HERE / f"{stem}.svg", facecolor="white", metadata={"Date": None}
+                )
     # Display coordinates are pixels, of which there are dpi to 72 points,
     # but the legend keeps those of the PDF's drawing, at 72 to the inch.
     positions = axes.transData.transform(points) * 72 / figure.dpi
@@ -366,9 +563,20 @@ titles = ("Size (KiB)", "Time (ms)")
 draw_log("binary", quadratic, titles, [(1, 0.25), (16, 0.25), (1, 64)], base=2)
 draw_titled("titled", spectrum, ("Photon energy\n(eV)", "Absorbance\n(arb. units)"))
 draw_markers("markers", {"D": decay, "s": growth, "o": wave, "x": trend})
+draw_keyed("similar", [(marker, "black", ripple(i)) for i, marker in enumerate("oph8")])
+crossing = [("o", rising), ("s", falling), ("^", shallow), ("D", above)]
+draw_keyed("overlapping", [(marker, "black", curve) for marker, curve in crossing])
+hues = ["tab:blue", "tab:orange", "tab:green", "tab:red"]
+draw_keyed("coloured", [("o", hue, ripple(i)) for i, hue in enumerate(hues)])
+draw_styles("styles", {"-": decay, "--": growth, ":": wave})
 draw_slanted("slanted", damped, ("Time (s)", "Voltage (mV)"))
+draw_rotated("tilted", damped, (30, 45))
+draw_rotated("steep", damped, (60, 90))
+draw_rotated("downwards", damped, (-90, -90), downwards=True)
 draw_panels("panels")
 draw_shared("shared")
 draw_inset("inset")
+draw_skewed("skewed", damped, 1)
 draw_rasterised("rasterised", {"tab:blue": decay, "tab:orange": growth})
 draw_scatter("scatter", decay, growth)
+draw_errorbars("errorbars")
