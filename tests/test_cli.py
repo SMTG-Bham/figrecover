@@ -149,6 +149,17 @@ def test_writes_csv_to_standard_output(capsys: pytest.CaptureFixture[str]) -> No
     assert_recovers(capsys.readouterr().out, spectrum)
 
 
+def test_reads_reference_points_taken_a_little_below_the_axis(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # 5 pixels below the x-axis line, where tracing once crashed (#32).
+    assert main([*SPECTRUM, "-l", "80,39", "-l", "576,39", "-l", "80,147"]) == 0
+    data = read_csv(capsys.readouterr().out)
+    # The points are those traced from the axis line, though the reference
+    # points calibrate them as given, 5 pixels low.
+    np.testing.assert_allclose(data[:, 1], spectrum(data[:, 0]), atol=0.1)
+
+
 def test_writes_csv_and_preview_files(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

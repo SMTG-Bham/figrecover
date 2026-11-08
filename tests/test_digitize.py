@@ -1,5 +1,7 @@
 """Tests for reading images and tracing curves."""
 
+import contextlib
+import itertools
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
@@ -22,6 +24,8 @@ from figrecover import (
 )
 
 type Function = Callable[[npt.NDArray[np.float64]], npt.NDArray[np.float64]]
+
+EXAMPLES = Path(__file__).parents[1] / "examples"
 
 HEIGHT, WIDTH = 200, 400
 ORIGIN = (40, 30)  # pixel position of the axes, from the bottom-left corner
@@ -486,6 +490,65 @@ def test_trace_curve_needs_a_plot_area() -> None:
     image, _ = synthetic_plot()
     with pytest.raises(ValueError, match="no plot area"):
         trace_curve(image, (WIDTH, 0))
+
+
+def test_trace_curve_needs_a_plot_area_inside_a_frame() -> None:
+    # The axes leave a few rows of ink, taken for a frame's top, with nothing
+    # below it.
+    image = np.full((20, 30, 3), 255, dtype=np.uint8)
+    image[:4, 15:] = 0
+    with pytest.raises(ValueError, match="no plot area"):
+        trace_curve(image, (12, 13))
+
+
+# The middle of the pixel where the axis lines of each example cross, as a
+# click on it gives, and the positions of the legend keys of markers.png.
+CORNERS = {"spectrum": (80.5, 43.5), "grid": (80.5, 43.5), "markers": (55.5, 82.5)}
+MARKER_KEYS = [(148, 18), (260, 18), (377, 18), (483, 18)]
+
+
+def traced(name: str, origin: Point) -> list[npt.NDArray[np.float64]]:
+    """Trace an example's curve, or find its markers, from an origin."""
+    image = load_image(EXAMPLES / f"{name}.png")
+    if name == "markers":
+        return find_markers(image, MARKER_KEYS, origin)
+    return [trace_curve(image, origin)]
+
+
+@pytest.mark.parametrize("name", CORNERS)
+@pytest.mark.parametrize("offset", [(-10, 0), (0, -10), (-5, -5), (-4, -6), (-1, -10)])
+def test_axes_given_below_or_left_of_their_lines_are_snapped_to_them(
+    name: str, offset: tuple[int, int]
+) -> None:
+    corner = CORNERS[name]
+    origin = (corner[0] + offset[0], corner[1] + offset[1])
+
+    for found, expected in zip(traced(name, origin), traced(name, corner), strict=True):
+        np.testing.assert_array_equal(found, expected)
+
+
+@pytest.mark.parametrize("name", CORNERS)
+def test_axes_given_anywhere_near_their_lines_give_a_trace_or_an_error(
+    name: str,
+) -> None:
+    corner = CORNERS[name]
+    for dx, dy in itertools.product(range(-15, 16, 5), repeat=2):
+        with contextlib.suppress(ValueError):  # but no other error
+            traced(name, (corner[0] + dx, corner[1] + dy))
+
+
+def test_an_open_plots_x_axis_line_is_not_a_frame() -> None:
+    # The axes are given too far below the x-axis line to be snapped to it,
+    # and the line, across the plot from the y-axis, with tick marks below
+    # it, is not taken for the top of a frame.
+    image, calibration = synthetic_plot()
+    for column in range(ORIGIN[0], WIDTH, 35):
+        cv2.line(image, (column, to_row(ORIGIN[1])), (column, to_row(5)), BLACK, 2)
+    x, y = calibration.origin
+
+    pixels = trace_curve(image, (x, y - 20))
+
+    assert_follows(pixels[pixels[:, 1] > ORIGIN[1] + 2], calibration, curve)
 
 
 MARKER_XS = np.arange(0.5, 10, 0.5)  # where the synthetic markers lie

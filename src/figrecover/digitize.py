@@ -42,6 +42,7 @@ _MIN_COVERAGE = 0.5  # less covered pixels belong to the background
 _MIN_PIXELS = 4  # smaller specks are noise, such as where two other curves cross
 _RUN_GAP = 6  # a curve's pixels in a column this far apart or less are one run
 _MIN_BRANCH = 0.05  # branches across less of the plot's width than this are minor
+_SNAP_REACH = 12  # an axis line this many pixels inside the axes given is theirs
 _FRAME_SIDE = 0.05  # frame lines span this fraction of the plot's shorter side
 _FRAME_CONTRAST = 32  # its lines differ from the background by this much or more
 _FRAME_LINED = 0.75  # its sides run along this fraction of its height or more
@@ -385,21 +386,55 @@ def _framed_area(image: Image, origin: Point) -> tuple[_Box, list[_Box]]:
     inside it, such as those of insets and legends, are those that
     ``_frames`` finds, measured in it.
 
+    An axis line that lies a few pixels inside the axes given, as one does
+    when a reference point is taken a little below or left of it, is left
+    out too, as ``_axis_line`` finds it, so the part is the same as if the
+    point had been taken on the line.
+
     Raises:
         ValueError: If the axes leave no plot area.
     """
+    msg = "the axes leave no plot area to trace"
     height = image.shape[0]
     left = max(0, int(origin[0]) + AXIS_MARGIN)
     bottom = max(0, height - int(origin[1]) - AXIS_MARGIN)
     if image[:bottom, left:].size == 0:
-        msg = "the axes leave no plot area to trace"
         raise ValueError(msg)
-    ink = ink_mask(image)[:bottom, left:] > 0
+    ink = ink_mask(image) > 0
+    bottom = _axis_line(ink[:, left:], bottom)
+    # Turned so that the y-axis line runs along the bottom, from the x-axis.
+    width = ink.shape[1]
+    left = width - _axis_line(ink[:bottom].T[::-1, ::-1], width - left)
+    ink = ink[:bottom, left:]
     top, right = _inside_frame(ink)
+    if top >= bottom or right == 0:
+        raise ValueError(msg)
     plot = image[top:bottom, left : left + right]
     background = np.median(plot.reshape(-1, 3), axis=0)
     frames = _frames(plot, ink[top:, :right], background)
     return _Box(top, bottom, left, left + right), frames
+
+
+def _axis_line(ink: npt.NDArray[np.bool_], bottom: int) -> int:
+    """Return the row below a plot area, past any axis line along its bottom.
+
+    The plot area ends at row ``bottom`` of the ink, ``AXIS_MARGIN`` above
+    the axis given. An axis line is a row of ink within ``_SNAP_REACH`` rows
+    above that, or the margin below it, that runs unbroken from within
+    ``_SNAP_REACH`` columns of the left edge, where the other axis lies,
+    across at least ``_LINE_SPAN`` of the width. If there is one, the area
+    ends as it does when the axis given lies at the middle of the line's top
+    row, as a click on it gives.
+    """
+    height, width = ink.shape
+    for row in range(max(bottom - _SNAP_REACH, 0), min(bottom + AXIS_MARGIN, height)):
+        starts = np.flatnonzero(ink[row, :_SNAP_REACH])
+        if len(starts):
+            along = ink[row, starts[0] :]
+            run = len(along) if along.all() else int(np.argmin(along))
+            if run >= width * _LINE_SPAN:
+                return max(row + 1 - AXIS_MARGIN, 0)
+    return bottom
 
 
 def _inside_frame(ink: npt.NDArray[np.bool_]) -> tuple[int, int]:
@@ -407,9 +442,10 @@ def _inside_frame(ink: npt.NDArray[np.bool_]) -> tuple[int, int]:
 
     The frame's top is the topmost line that runs right from the left edge,
     next to the y-axis, across at least ``FRAME_REACH`` of the width, and is
-    at most ``FRAME_WIDTH`` pixels thick. Its right side runs down from the
-    end of the top, as far again of the rest of the height. Both are dropped
-    with ``AXIS_MARGIN`` beyond them.
+    at most ``FRAME_WIDTH`` pixels thick. It lies in the upper half, so an
+    open plot's x-axis line, below its middle, is not taken for one. Its
+    right side runs down from the end of the top, along ``FRAME_REACH`` of
+    the height. Both are dropped with ``AXIS_MARGIN`` beyond them.
 
     Returns:
         The first row below the frame and the number of columns left of it,
@@ -419,7 +455,7 @@ def _inside_frame(ink: npt.NDArray[np.bool_]) -> tuple[int, int]:
     rows = ink.all(axis=1)
     runs = np.where(rows, width, np.argmin(ink, axis=1))  # ink from the left edge
     long = np.flatnonzero(runs >= width * FRAME_REACH)
-    if not len(long):
+    if not len(long) or long[0] >= height / 2:
         return 0, width
     first = last = long[0]
     while last + 1 < height and runs[last + 1] >= width * FRAME_REACH:
@@ -430,7 +466,7 @@ def _inside_frame(ink: npt.NDArray[np.bool_]) -> tuple[int, int]:
     for column in range(max(end - AXIS_MARGIN, 0), end):
         below = ink[first:, column]
         run = len(below) if below.all() else int(np.argmin(below))
-        if run >= (height - first) * FRAME_REACH:
+        if run >= height * FRAME_REACH:
             return int(last) + 1 + AXIS_MARGIN, max(column - AXIS_MARGIN, 0)
     return 0, width
 
