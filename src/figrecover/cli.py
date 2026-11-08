@@ -1,6 +1,7 @@
 """Command-line interface."""
 
 import argparse
+import contextlib
 import csv
 import io
 import math
@@ -8,7 +9,7 @@ import os
 import re
 import sys
 import warnings
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TextIO
@@ -338,8 +339,24 @@ def _trace(
             arguments.series,
             _prefix(plot.name),
         )
-        curves = trace_curves(traced, colours, origin)
+        with _warnings_printed(_prefix(plot.name)):
+            curves = trace_curves(traced, colours, origin)
     return curves, colours, rings
+
+
+@contextlib.contextmanager
+def _warnings_printed(prefix: str) -> Iterator[None]:
+    """Print the warnings given in the block, as figrecover's messages.
+
+    ``prefix`` starts each message, naming the panel.
+    """
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        try:
+            yield
+        finally:
+            for warning in caught:
+                print(f"figrecover: {prefix}{warning.message}", file=sys.stderr)
 
 
 def _digitize_pdf(arguments: argparse.Namespace) -> None:
@@ -379,7 +396,8 @@ def _digitize_pdf(arguments: argparse.Namespace) -> None:
             arguments.series,
             "",
         )
-        curves = trace_pdf_curves(drawing, colours, calibration.origin)
+        with _warnings_printed(""):
+            curves = trace_pdf_curves(drawing, colours, calibration.origin)
 
     if arguments.preview:
         corner = np.array(drawing.box[:2])
@@ -487,13 +505,8 @@ def _read_panels(image: Image, *, insets: bool) -> list[_Plot]:
     positions to ring in the preview are those of its ticks, on their axis
     lines, and its columns are named after its axis titles.
     """
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        try:
-            panels = read_panels(image)
-        finally:
-            for warning in caught:
-                print(f"figrecover: {warning.message}", file=sys.stderr)
+    with _warnings_printed(""):
+        panels = read_panels(image)
     if not insets:
         panels = [panel for panel in panels if panel.inset_of is None]
     plots = []

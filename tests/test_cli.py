@@ -2,6 +2,7 @@
 
 import dataclasses
 import gzip
+import re
 import runpy
 import sys
 import warnings
@@ -208,6 +209,11 @@ def test_says_when_the_image_is_greyscale(
     assert errors[0] == (
         "figrecover: the image is greyscale, so curves are told apart by grey "
         "level only"
+    )
+    assert re.fullmatch(
+        "figrecover: the curve of colour #[0-9a-f]{6} crosses most columns 2 "
+        "times: it may be 2 curves of that colour, or loop",
+        errors[2],
     )
 
 

@@ -2,6 +2,8 @@
 
 import contextlib
 import itertools
+import re
+import warnings
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
@@ -494,6 +496,24 @@ def test_find_colours_finds_a_curve_inside_its_own_band() -> None:
     assert find_colours(image, 1, calibration.origin) == [BLUE]
 
 
+def test_find_colours_says_what_it_found_and_what_it_left_out() -> None:
+    image, calibration = synthetic_plot(
+        grid=100, curves=[(PALE_BLUE, curve), (BLACK, rising)]
+    )
+
+    with pytest.raises(ValueError, match="found only") as raised:
+        find_colours(image, 3, calibration.origin)
+
+    found, _, left_out = str(raised.value).partition("; left out ")
+    assert re.fullmatch(r"found only 1 of 3 curves, #000000 \(\d+ pixels\)", found)
+    assert re.fullmatch(
+        r"#646464 \(\d+ pixels\), as it is drawn in lines across the plot, as grid "
+        r"lines are; #c8dcf0 \(\d+ pixels\), as it is too pale, 54 levels from the "
+        r"background",
+        left_out,
+    )
+
+
 def test_trace_curves_leaves_a_darker_curves_edges_out_of_a_lighter_one() -> None:
     # The edges of the black line, a third covered, show the light grey of
     # the other curve.
@@ -558,7 +578,8 @@ def test_trace_curve_follows_both_sides_of_a_loop() -> None:
     axes = (3 * PIXELS_PER_UNIT[0], 1 * PIXELS_PER_UNIT[1])
     cv2.ellipse(image, centre, axes, 0, 0, 360, BLACK, 2, cv2.LINE_AA)
 
-    data = calibration.to_data(trace_curve(image, calibration.origin))
+    with pytest.warns(UserWarning, match="crosses most columns 2 times: it may be 2"):
+        data = calibration.to_data(trace_curve(image, calibration.origin))
 
     middle = data[np.abs(data[:, 0] - 5) < 2]
     np.testing.assert_allclose(
@@ -654,7 +675,10 @@ def test_axes_given_anywhere_near_their_lines_give_a_trace_or_an_error(
 ) -> None:
     corner = CORNERS[name]
     for dx, dy in itertools.product(range(-15, 16, 5), repeat=2):
-        with contextlib.suppress(ValueError):  # but no other error
+        with contextlib.suppress(ValueError), warnings.catch_warnings():
+            # Any warning or ValueError, such as for an axis line traced
+            # with a curve, but no other error.
+            warnings.simplefilter("ignore")
             traced(name, (corner[0] + dx, corner[1] + dy))
 
 
@@ -667,7 +691,9 @@ def test_an_open_plots_x_axis_line_is_not_a_frame() -> None:
         cv2.line(image, (column, to_row(ORIGIN[1])), (column, to_row(5)), BLACK, 2)
     x, y = calibration.origin
 
-    pixels = trace_curve(image, (x, y - 20))
+    # The x-axis line is traced as a second curve of the same colour.
+    with pytest.warns(UserWarning, match="it may be 2 curves of that colour"):
+        pixels = trace_curve(image, (x, y - 20))
 
     assert_follows(pixels[pixels[:, 1] > ORIGIN[1] + 2], calibration, curve)
 

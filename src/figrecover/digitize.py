@@ -3,6 +3,7 @@
 import itertools
 import math
 import os
+import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -223,12 +224,26 @@ def find_colours(image: Image, count: int = 1, origin: Point = (0, 0)) -> list[C
         first.
 
     Raises:
-        ValueError: If there are fewer than ``count`` curves.
+        ValueError: If there are fewer than ``count`` curves. The message
+            names the curves found, and the colours left out and why, with
+            how many pixels show each.
     """
-    curves = _curve_colours(image, origin)
+    candidates = _candidates(image, origin)
+    curves = [colour for colour, _, reason in candidates if reason is None]
     if len(curves) < count:
-        msg = f"found only {len(curves)} of {count} curves"
-        raise ValueError(msg if curves else "no curve found")
+        found = ", ".join(
+            f"#{bytes(colour).hex()} ({pixels} pixels)"
+            for colour, pixels, reason in candidates
+            if reason is None
+        )
+        msg = f"found only {len(curves)} of {count} curves, {found}"
+        left_out = "; ".join(
+            f"#{bytes(colour).hex()} ({pixels} pixels), as it {reason}"
+            for colour, pixels, reason in candidates
+            if reason is not None
+        )
+        msg = msg if curves else "no curve found"
+        raise ValueError(f"{msg}; left out {left_out}" if left_out else msg)
     return curves[:count]
 
 
@@ -237,17 +252,35 @@ def _curve_colours(image: Image, origin: Point) -> list[Colour]:
 
     See ``find_colours`` for which colours are curves.
     """
+    candidates = _candidates(image, origin)
+    return [colour for colour, _, reason in candidates if reason is None]
+
+
+def _candidates(image: Image, origin: Point) -> list[tuple[Colour, int, str | None]]:
+    """Return the colours in a plot that could be curves', most pixels first.
+
+    Each comes with how many pixels show it, and why it is not a curve's,
+    or None if it is. See ``find_colours`` for which colours are curves.
+    """
     plot = _plot_area(image, origin)[0]
     palette = _palette(plot)
     labels = _labelled(plot, palette)
-    return [
-        _to_colour(colour)
-        for index, colour in enumerate(palette[1:], start=1)
-        if np.abs(colour - palette[0]).max() >= _CONTRAST
-        and not _fills_areas(labels == index)
-        and not _draws_grid(labels == index)
-        and not _composite(palette, labels, index)
-    ]
+    counts = np.bincount(labels.ravel(), minlength=len(palette))
+    candidates = []
+    for index, colour in enumerate(palette[1:], start=1):
+        own = labels == index
+        contrast = int(np.abs(colour - palette[0]).max())
+        reason = None
+        if contrast < _CONTRAST:
+            reason = f"is too pale, {contrast} levels from the background"
+        elif _fills_areas(own):
+            reason = "fills areas"
+        elif _draws_grid(own):
+            reason = "is drawn in lines across the plot, as grid lines are"
+        elif _composite(palette, labels, index):
+            reason = "is where two translucent colours overlap"
+        candidates.append((_to_colour(colour), int(counts[index]), reason))
+    return candidates
 
 
 def trace_curves(
@@ -279,6 +312,10 @@ def trace_curves(
         pixel centres, measured from the bottom-left corner and sorted by x,
         then y.
 
+    Warns:
+        UserWarning: If a curve crosses most columns more than once, as
+            several curves of one colour do, or a loop.
+
     Raises:
         ValueError: If no curve has one of the colours, two of them match the
             same curve, or one fills areas.
@@ -301,7 +338,17 @@ def trace_curves(
             msg = f"colour #{bytes(colour).hex()} fills areas rather than a curve"
             raise ValueError(msg)
     height = image.shape[0]
-    return [_follow(labels == index, left, top, height) for index in indices]
+    curves = [_follow(labels == index, left, top, height) for index in indices]
+    for colour, points in zip(colours, curves, strict=True):
+        _, crossings = np.unique(points[:, 0], return_counts=True)
+        times = int(np.median(crossings))
+        if times > 1:
+            message = (
+                f"the curve of colour #{bytes(colour).hex()} crosses most columns "
+                f"{times} times: it may be {times} curves of that colour, or loop"
+            )
+            warnings.warn(message, stacklevel=2)
+    return curves
 
 
 def trace_curve(image: Image, origin: Point = (0, 0)) -> npt.NDArray[np.float64]:
