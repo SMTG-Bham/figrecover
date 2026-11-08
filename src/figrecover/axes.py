@@ -48,6 +48,7 @@ _NUMBER = re.compile(  # 1, -2.5, 1,000, 2.5e-3 or 10%
 _SWAP = str.maketrans(",.", ".,")  # decimal commas to points, and back
 _TRAILING_DASH = re.compile(r"(.*\d%?)-+")  # a tick mark after a y-axis label
 _RUN = re.compile(r"(?<=\d)(?=[+-])")  # between numbers run together
+_PIECES = {"%": 3, "^": 0}  # pieces of ink drawn for characters not drawn in one
 _POWER = re.compile(  # 10^2, 10^{2}, 10-2, 2x10^2 or 2^5: a power, as OCR reads it
     r"(?:(\d+(?:\.\d*)?|\.\d+)[x\u00d7])?"
     r"(?:(\d+(?:\.\d*)?|\.\d+)\^\{?|10(?=[+-]))([+-]?\d+)\}?"
@@ -204,7 +205,10 @@ def read_axes(image: Image) -> Axes:
     misreads some, so if most are tall, or their characters run up or down
     and OCR did not read them well, they are read again turned a quarter
     turn, the way that OCR reads them more surely, as by
-    ``_with_vertical_labels``.
+    ``_with_vertical_labels``. OCR can also lose characters of a label, such
+    as its decimal point, reading 0.5 and 1.0 as 5 and 10, so labels read as
+    fewer characters than are drawn in their boxes are dropped, and an axis
+    left with too few is refused, as by ``_whole``.
 
     The axes cross where the axis lines run beside the tick labels. Without
     an axis line, its place is taken to be just beyond the tick labels and
@@ -241,9 +245,9 @@ def read_axes(image: Image) -> Axes:
 
     Raises:
         ModuleNotFoundError: If the ``ocr`` extra is not installed.
-        ValueError: If an axis has too few tick labels in line, an offset to
-            add to its tick values, or the plot has a second y-axis, on the
-            right, with other values.
+        ValueError: If an axis has too few tick labels in line, or read
+            whole, an offset to add to its tick values, or the plot has a
+            second y-axis, on the right, with other values.
     """
     return _read_axes(image, _read_text(image))
 
@@ -259,8 +263,8 @@ def _read_axes(image: Image, texts: list[_Text]) -> Axes:
     if _decimal_comma(texts):
         texts = [_with_decimal_points(text) for text in texts]
     numbers = [text for text in texts if _number(_reading(text))]
-    x_row = _lowest_row(numbers)
-    y_column = _leftmost_column(_above(numbers, x_row))
+    x_row = _whole(_lowest_row(numbers), ink, "x")
+    y_column = _whole(_leftmost_column(_above(numbers, x_row)), ink, "y")
     # Tick marks run beside the y-axis labels, so they keep the usual height.
     height = float(np.median([text.top - text.bottom for text in y_column]))
     x_labels, x_values, x_log = _in_line(x_row, lambda t: t.x, "x", ink, height)
@@ -553,14 +557,77 @@ def _well_read(
     """Return whether OCR read an axis's tick labels well.
 
     That is, whether each is a number in line with the others, as
-    ``_in_line_along`` finds them, and none is missing between them, as one
-    is where two lie ``_GAP`` times their shortest spacing apart or more.
+    ``_in_line_along`` finds them, none is missing between them, as one is
+    where two lie ``_GAP`` times their shortest spacing apart or more, and
+    OCR lost no characters of any, as ``_lost_characters`` finds.
     """
     in_line = _in_line_along(labels, position, ink, height)
-    if len(in_line) < len(labels):
+    if len(in_line) < len(labels) or any(
+        _lost_characters(label, ink) for label in labels
+    ):
         return False
     spacings = np.diff([position(label) for label in in_line])
     return bool(spacings.max() < _GAP * spacings.min())
+
+
+def _lost_characters(label: _Text, ink: npt.NDArray[np.uint8]) -> bool:
+    """Return whether OCR lost characters of a label, such as its decimal point.
+
+    The characters drawn are the pieces of ink wholly inside the label's box,
+    as ink that runs out of it, such as a tick mark joining an axis line, or
+    a curve, is none; but ``_PIECES`` counts some characters as drawn in
+    several pieces, or none. OCR lost some if more are drawn than it read,
+    as when it reads 0.5 as 5 or 05. It may read fewer drawn, as at low
+    resolution a point can touch the digit beside it. OCR may also miss the
+    raised minus sign of an exponent, but a label of digits whose last is
+    raised, as ``_exponent`` finds, is a power, whose signs are read from
+    the ink, so it lost none. Nor did a label slanted ``_TILT`` degrees or
+    more, read turned level, as its box, upright, can hold ink of others.
+    """
+    if abs(label.slant) >= _TILT or (
+        _DIGITS.fullmatch(_reading(label)) and _exponent(ink, label)
+    ):
+        return False
+    height = ink.shape[0]
+    box = ink[
+        max(height - math.ceil(label.top), 0) : height - math.floor(label.bottom),
+        max(math.floor(label.left), 0) : math.ceil(label.right),
+    ]
+    stats = cv2.connectedComponentsWithStats(box)[2][1:]  # the first is background
+    left, top, width, tall = stats[:, :4].T
+    inside = (
+        (left > 0)
+        & (top > 0)
+        & (left + width < box.shape[1])
+        & (top + tall < box.shape[0])
+    )
+    read = sum(_PIECES.get(character, 1) for character in label.plain)
+    return int(np.count_nonzero(inside)) > read
+
+
+def _whole(
+    labels: Sequence[_Text], ink: npt.NDArray[np.uint8], name: str
+) -> list[_Text]:
+    """Return tick labels without those that OCR lost characters of.
+
+    ``_lost_characters`` finds them. Such a label is misread, so it is left
+    out, as one out of line is.
+
+    Raises:
+        ValueError: If fewer than ``MIN_TICKS`` labels are left, as when OCR
+            lost the decimal point of every label, reading 0.5, 1.0 and 1.5
+            as 5, 10 and 15, whose values would be ten times too large.
+    """
+    whole = [label for label in labels if not _lost_characters(label, ink)]
+    if len(whole) < MIN_TICKS:
+        lost = len(labels) - len(whole)
+        msg = (
+            f"OCR lost characters, such as decimal points, of {lost} of the "
+            f"{len(labels)} {name}-axis tick labels, so their values cannot be "
+            "trusted"
+        )
+        raise ValueError(msg)
+    return whole
 
 
 def _merged(labels: Sequence[_Text], turned: Sequence[_Text]) -> list[_Text]:

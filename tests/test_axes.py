@@ -507,6 +507,74 @@ def test_drops_tick_values_off_the_even_steps(
     assert [value for _, value in found.x_ticks] == [0, 250, 500, 1000]
 
 
+def write_across(image: Image, x: float, y: float, content: str) -> _Text:
+    """Write text across, centred on a pixel position, in a box 3 pixels around it.
+
+    Returns:
+        The text as OCR reads it, and its box.
+    """
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    (width, height), _ = cv2.getTextSize(content, font, 0.5, 1)
+    left, baseline = round(x - width / 2), HEIGHT - round(y - height / 2)
+    cv2.putText(image, content, (left, baseline), font, 0.5, (0, 0, 0), 1)
+    return _Text(
+        content, left - 3, y - height / 2 - 4, left + width + 3, y + height / 2 + 4
+    )
+
+
+@pytest.mark.parametrize(
+    ("read_as", "values"),
+    [
+        (["0.5", "10", "1.5", "2.0"], [0.5, 1.5, 2.0]),  # 1.0 lost its point
+        (["5", "1.0", "1.5", "2.0"], [1.0, 1.5, 2.0]),  # 0.5 lost two characters
+    ],
+)
+def test_drops_tick_labels_that_lost_characters(
+    monkeypatch: pytest.MonkeyPatch, read_as: list[str], values: list[float]
+) -> None:
+    # OCR read a label as fewer characters than are drawn in its box.
+    image = plot()
+    drawn = [
+        write_across(image, 30, 80 + 40 * i, value)
+        for i, value in enumerate(["0.5", "1.0", "1.5", "2.0"])
+    ]
+    read_labels = [
+        dataclasses.replace(label, text=text)
+        for label, text in zip(drawn, read_as, strict=True)
+    ]
+    monkeypatch.setattr(
+        axes, "_read_text", lambda _image: [*x_labels(["0", "1", "2"]), *read_labels]
+    )
+
+    found = read_axes(image)
+
+    assert [value for _, value in found.y_ticks] == values
+
+
+def test_refuses_tick_labels_that_all_lost_their_decimal_points(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Read as 5, 10 and 15, the labels are in line, at even steps, but each
+    # value is ten times too large.
+    image = plot()
+    drawn = [
+        write_across(image, 30, 80 + 60 * i, v)
+        for i, v in enumerate(["0.5", "1.0", "1.5"])
+    ]
+    read_as = [
+        dataclasses.replace(label, text=label.text.replace(".", "").lstrip("0"))
+        for label in drawn
+    ]
+    monkeypatch.setattr(
+        axes, "_read_text", lambda _image: [*x_labels(["0", "1", "2"]), *read_as]
+    )
+
+    with pytest.raises(
+        ValueError, match="OCR lost characters, such as decimal points, of 3 of the 3 y"
+    ):
+        read_axes(image)
+
+
 def test_needs_tick_values_at_even_steps(monkeypatch: pytest.MonkeyPatch) -> None:
     # 250 and 750 misread as 258 and 758: no three labels take even steps.
     labels = [*x_labels(["0", "258", "500", "758"]), *y_labels(["0", "1", "2"])]
