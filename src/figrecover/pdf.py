@@ -538,8 +538,11 @@ def find_pdf_series(drawing: Drawing, origin: Point = (0, 0)) -> list[Series]:
     there; other paths, such as two solid black lines drawn apart, are
     curves of their own. Markers are told apart by their colours and shape,
     as ``find_pdf_markers`` tells them apart, and curves drawn in images by
-    colour. See ``trace_pdf_curves`` for which paths, markers and images
-    make the curves and series of markers.
+    colour. A line in a colour drawn with markers, which ``trace_pdf_curves``
+    leaves out, is a curve of its own, as a fit to the markers is, unless it
+    passes through their centres alone, as a line through markers does, by
+    ``_through``. See ``trace_pdf_curves`` for which paths, markers and
+    images make the curves and series of markers.
 
     Args:
         drawing: What is drawn on the page, as ``load_pdf`` returns it.
@@ -548,8 +551,9 @@ def find_pdf_series(drawing: Drawing, origin: Point = (0, 0)) -> list[Series]:
     Returns:
         Every curve and series of markers, longest first, by the length of
         the lines through their points, as ``trace_pdf_curves`` gives their
-        points. The width of a curve is that of its outline, and of a series
-        of markers the size of the largest, both in points.
+        points, but a line in a colour drawn with markers after them. The
+        width of a curve is that of its outline, and of a series of markers
+        the size of the largest, both in points.
     """
     return [curve.public() for curve in _series(drawing, origin)]
 
@@ -1075,7 +1079,9 @@ def _series(drawing: Drawing, origin: Point) -> list[_Series]:
         else:
             styles.append([marker])
     series = [_dots(markers[0].colour, markers, origin) for markers in styles]
-    marked = {markers[0].colour for markers in styles}
+    marked: dict[Colour, list[_Marker]] = {}
+    for markers in styles:
+        marked.setdefault(markers[0].colour, []).extend(markers)
     series += [
         _Series(
             chain.colour,
@@ -1083,10 +1089,38 @@ def _series(drawing: Drawing, origin: Point) -> list[_Series]:
             _dash_style(chain.pattern, chain.width),
             chain.width,
         )
-        for chain in _chains(drawing, marked)
+        for chain in _chains(drawing, ())
+        if not _through(drawing, chain, marked.get(chain.colour, []))
     ]
     series += _traced(drawing, origin)
-    return _longest(series)
+    # A line in a colour drawn with markers comes after them.
+    marking: dict[Colour, float] = {}
+    for curve in series[: len(styles)]:
+        marking[curve.colour] = max(marking.get(curve.colour, 0), curve.length)
+
+    def rank(curve: _Series) -> tuple[float, bool]:
+        if curve.style == "markers" or curve.colour not in marking:
+            return -curve.length, False
+        return -min(curve.length, marking[curve.colour]), True
+
+    return sorted((curve for curve in series if len(curve.points)), key=rank)
+
+
+def _through(drawing: Drawing, chain: _Chain, markers: Sequence[_Marker]) -> bool:
+    """Return whether a line passes through the centres of markers alone.
+
+    It does if each point its paths' pieces of a curve pass through lies
+    within ``_SAME_SHAPE`` of a marker's centre, across and along, as a line
+    through markers does.
+    """
+    if not markers:
+        return False
+    centres = np.array([marker.centre for marker in markers], dtype=np.float64)
+    points = np.vstack(
+        [piece for index in chain.paths for piece in _pieces(drawing.paths[index])]
+    )
+    apart = np.abs(points[:, np.newaxis] - centres).max(axis=2).min(axis=1)
+    return bool(np.all(apart <= _SAME_SHAPE))
 
 
 def _longest(series: Sequence[_Series]) -> list[_Series]:

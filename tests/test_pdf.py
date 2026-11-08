@@ -545,6 +545,26 @@ def test_joins_paths_that_carry_on_one_line(tmp_path: Path) -> None:
         trace_pdf_series(found, [(0, 0, 0), (16, 16, 16)], (60, 60))
 
 
+def test_tells_a_fit_apart_from_the_markers_of_its_colour(tmp_path: Path) -> None:
+    marked = [(100, 100), (200, 150), (300, 200)]
+    content = plot(
+        "0 0 1 rg",
+        *(f"{x - 2} {y - 2} 4 4 re f" for x, y in marked),
+        "0 0 1 RG 100 100 m 200 150 l 300 200 l S",  # through the markers
+        "0 0 1 RG 60 90 m 360 230 l S",  # a fit, longer than the markers' line
+    )
+    found = drawing(tmp_path, content)
+
+    markers, fit = find_pdf_series(found, (60, 60))
+
+    # The markers come first, and the line through them is left out.
+    assert (markers.name, fit.name) == ("0000ff-markers", "0000ff-solid")
+    np.testing.assert_allclose(markers.points, marked)
+    np.testing.assert_allclose(fit.points, [(60, 90), (360, 230)])
+    # By colour, the markers alone.
+    np.testing.assert_allclose(trace_pdf_curves(found, [BLUE], (60, 60))[0], marked)
+
+
 def test_reads_a_figure_in_a_box_on_a_page(tmp_path: Path) -> None:
     # A page of a paper holds its figures as forms, scaled to fit.
     paper = pypdfium2.PdfDocument.new()
