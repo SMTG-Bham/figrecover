@@ -120,6 +120,7 @@ in blue, so you can check the result at a glance:
 | `-o`, `--output FILE` | CSV file to write. Default: standard output. |
 | `--preview IMAGE` | Also save a faded copy of the image with the recovered curves drawn on it. |
 | `--remove-grid` | Paint over grid lines before tracing. |
+| `--error-bars` | Also read the error bars of each marker, and add their bounds to the CSV. See [Error bars](#error-bars). |
 | `--page N` | The page of a PDF file to read, from 1. Default: 1. |
 | `--box X0,Y0,X1,Y1` | The part of a PDF file's page to read, such as one figure, as its left, bottom, right and top edges in points. Default: the whole page. |
 
@@ -200,6 +201,63 @@ The preview rings each marker, and each key, in a colour for its series:
   not taken for markers. Nor are markers in an inset with a frame.
 - In a PDF file, markers are read exactly, from what the PDF draws; see
   [PDF files](#pdf-files).
+
+### Error bars
+
+With `--error-bars`, figrecover also reads the error bars drawn through
+each marker, and writes their ends in the plot's units:
+
+```bash
+figrecover examples/errorbars.png -n 4 --error-bars \
+    -o errorbars.csv --preview errorbars.preview.png
+```
+
+The CSV gains `y_low` and `y_high` columns, the lower and upper ends of
+each marker's vertical bar, and, if any marker has a horizontal bar,
+`x_low` and `x_high` columns, its left and right ends. Each marker has a
+row at its middle; the rows of the line traced between the markers leave
+the bounds empty, as does a marker for a bar it does not have, or whose
+end cannot be seen:
+
+```text
+series,Time (s),Voltage (mV),y_low,y_high,x_low,x_high
+1,0.440487,2.62121,,,,
+...
+1,0.521097,2.62121,2.51731,2.91991,,
+...
+2,0.521097,1.54329,1.40044,1.69914,0.218809,0.823385
+...
+```
+
+The preview draws each bar, with a short line across each end, in its
+series' colour:
+
+![Four series of markers with error bars, each bar recovered in its series' colour](examples/errorbars.preview.png)
+
+- A marker is a filled shape of its series' colour, a pixel or more
+  thicker each side than the series' lines, and its point is the middle of
+  its box. Its bars run up, down and across from its edges, in its colour,
+  to their ends, or to the middles of their caps. Open markers, and lines
+  drawn without markers, give no bounds; give `-m` for open markers.
+- Bars are left out of the curves traced, with or without `--error-bars`,
+  so bars longer on one side, or across, no longer pull a curve away from
+  its points. On `examples/errorbars.png`, the orange line, whose bars run
+  further above than below, strays up to 0.007 of the y range from the
+  line through its points, where it strayed 0.025 with them, and the green
+  markers, with bars across, give points only within their markers.
+- A bar may cross a line of another colour, but an end hidden by another
+  colour, by its marker or beyond the axes is left empty. A bar without a
+  cap must run 5 pixels beyond its marker, and be straight, so that a line
+  through a marker is not taken for one. A horizontal bar along a line of
+  its colour that runs level through its markers cannot be told from it,
+  and is left empty, as is a bar in another colour than its marker.
+- With `-m`, the bars of each series' markers are followed in ink of any
+  colour, as such series often share one.
+- Bounds are the ends of the bars as drawn, not distances from the point.
+  On `examples/errorbars.png` every end lies within 2 pixels of the truth,
+  and the markers' points within a pixel, but the triangles' points within
+  2.5, as their boxes' middles lie lower than their points.
+- In a PDF file, error bars are read exactly; see [PDF files](#pdf-files).
 
 ### Grids
 
@@ -617,9 +675,18 @@ its ends.
   markers. Series that share a colour, as in `examples/markers.pdf`, are told
   apart by their markers' shapes with `-m`, given the position in points of
   each series' marker in the legend, or of any of its markers. The markers
-  in a legend, with their labels beside them, and the caps of error bars are
-  left out. On `examples/markers.pdf` and `examples/scatter.pdf`, every
-  marker is found, even where series cross, within 3×10⁻⁶ of its point.
+  in a legend, with their labels beside them, the caps of error bars and
+  the arrowheads of one-sided ones are left out. On `examples/markers.pdf`
+  and `examples/scatter.pdf`, every marker is found, even where series
+  cross, within 3×10⁻⁶ of its point.
+- With `--error-bars`, error bars are read exactly, from the straight
+  vertical and horizontal lines that pass through each point, as
+  matplotlib draws them. They are matched to the points by where they lie,
+  so bars in another colour than their markers are read too, and so are
+  the bars of lines drawn without markers. Their ends are the bounds, even
+  beyond the limits of the axes; a one-sided bar, as matplotlib draws with
+  `lolims` or `uplims`, ends at its point. On `examples/errorbars.pdf`,
+  every end lies within 1.3×10⁻⁶ of the truth.
 
 ```bash
 figrecover examples/markers.pdf \
@@ -724,6 +791,26 @@ markers = find_markers(image, keys, calibration.origin)
 data = [calibration.to_data(series) for series in markers]
 ```
 
+`find_error_bars` finds the filled markers of each colour and their error
+bars, as `--error-bars` does, and returns an `ErrorBars` for each colour:
+its `points`, the middles of the markers, and the `low` and `high` ends of
+their bars, as rows of x and y like the points': the x of the left end of
+each marker's horizontal bar and the y of the lower end of its vertical
+one, then the right and upper ends, NaN where a marker has no such bar, or
+its end cannot be seen. On a reversed axis, the lower end is the larger
+value:
+
+```python
+from figrecover import find_error_bars
+
+for bars in find_error_bars(image, colours, calibration.origin):
+    points = calibration.to_data(bars.points)
+    low, high = calibration.to_data(bars.low), calibration.to_data(bars.high)
+```
+
+`find_marker_error_bars(image, keys, origin)` does the same for the
+markers that `find_markers` finds.
+
 `load_image` returns an RGB array, and `remove_grid(image)` paints over grid
 lines first, if needed.
 
@@ -746,6 +833,9 @@ as an image, at 2 pixels to the point, and `remove_pdf_grid(drawing)` paints
 over grid lines in the images that it draws. `find_pdf_markers(drawing, keys,
 origin)` finds series by the shapes of their markers, as `find_markers` does
 in an image, from the position of a marker of each series in points.
+`find_pdf_error_bars(drawing, points)` finds the error bars through the
+points of each series, such as `trace_pdf_curves` or `find_pdf_markers`
+returns, exactly, as an `ErrorBars` for each.
 
 ## How it works
 
@@ -798,7 +888,22 @@ in an image, from the position of a marker of each series in points.
    ink of other colours, such as the black text and arrows of annotations
    among coloured curves, is not taken for the nearest curve. Specks of fewer
    than four pixels, such as where two other curves cross, are ignored.
-7. In each image column, a curve's pixels form runs, split by gaps of more
+7. A colour's filled markers are its shapes whose middles lie a pixel or
+   more deeper inside it than the middles of its lines, and are wider and
+   taller there than a line, as where lines cross they are not; a marker's
+   box is that of its middle, widened by how deep that lies. Its error bars
+   run from the edges of its box along its middle column and row, while
+   the colour lies within a line's width of them, across ink of other
+   colours up to 6 pixels wide, and most of their rows are no wider than a
+   line. A bar ends where the colour does, or at the middle of its cap: its
+   last rows, no more of them than the bar is wide, wider than the bar and
+   centred on it within a pixel. Without a cap, a bar must run 5 pixels,
+   with the middles of its rows within a pixel of one another, and must
+   not end where a line of the colour leaves its path, within 2 pixels of
+   it. The bars and caps are left out of the colour before its curve is
+   traced, and with `--error-bars` their ends are the bounds; an end
+   hidden by another colour or the edge of the plot is not known.
+8. In each image column, a curve's pixels form runs, split by gaps of more
    than 6 pixels, and runs that overlap one to one in neighbouring columns
    form branches. Each run of a branch across at least 5% of the plot gives a
    point at its median height, so both sides of a loop are traced, and shorter
@@ -806,7 +911,7 @@ in an image, from the position of a marker of each series in points.
    A column without such a run gives one point at the median height of all
    its pixels.
 
-With `-m`, steps 4 to 7 give way to these:
+With `-m`, steps 4 to 8 give way to these:
 
 1. Each key's marker is the piece of ink, 64 levels or more from the
    background, nearest the key's position. A key at least twice as wide as
@@ -817,12 +922,15 @@ With `-m`, steps 4 to 7 give way to these:
    more, and the plot has at least 60% of the key's ink. Where the markers of
    several keys match less than three quarters of a marker's width apart, the
    best match wins. Each marker's middle is placed to a fraction of a pixel.
+3. With `--error-bars`, each marker's box is the size of its key's marker,
+   and its bars are followed as in step 7, in ink of any colour, 64 levels
+   or more from the background.
 
 On the examples, the recovered values are within 0.03 of the true curves, about
 three pixels at the steepest point, and the markers within 0.02 of the points
 they mark, about two pixels.
 
-With a PDF file, steps 1 to 7 give way to these:
+With a PDF file, steps 1 to 8 give way to these:
 
 1. [PDFium](https://pdfium.googlesource.com/pdfium/), through pypdfium2, reads
    the characters, paths and images that the page draws, each with the matrix
@@ -860,6 +968,15 @@ With a PDF file, steps 1 to 7 give way to these:
 6. Each image drawn on the page, with any transparency on white, is traced as
    an image of a plot from where the axes cross in it, or from its edges if
    they cross outside it, and its curves are ranked with those drawn as paths.
+7. With `--error-bars`, a point's error bars are the straight vertical and
+   horizontal lines, stroked and not filled, that pass through it to within
+   0.01 points, other than those that run from one edge of their clip to
+   the other, as grid lines do. A bar through several points belongs to
+   those with a marker drawn in its colour, if any, and a point with
+   several bars one way takes the one through it alone, or else the one in
+   its marker's colour, or none. A shape lying wholly beyond one end of
+   such a line, whose other end lies at a marker, is the arrowhead of a
+   one-sided bar, not a marker.
 
 ## Limitations
 
@@ -913,6 +1030,15 @@ With a PDF file, steps 1 to 7 give way to these:
 - A plot drawn turned on its page, as on a landscape page that the PDF shows
   turned with its `/Rotate` setting, is read as drawn, and its axes cannot be
   read.
+- In an image, error bars are read only through filled markers, or with
+  `-m`, so the bars of open markers, without `-m`, and of lines drawn
+  without markers are not read, and are traced as part of their curves.
+  Nor are bars in another colour than their markers, or horizontal bars
+  along a line that runs level through its markers. A bar that runs beside
+  a steep line of its colour can run on along the line, and end in the
+  wrong place; check the preview. The arrowheads of one-sided bars, as
+  matplotlib draws with `lolims` or `uplims`, are taken for markers of
+  their own.
 
 ## Development
 
@@ -976,6 +1102,7 @@ protection.
 │   ├── panels.py            # finding the panels of a figure and their insets, and reading each
 │   ├── calibration.py       # pixel-to-data mapping
 │   ├── digitize.py          # image loading, grid removal, curve colours and tracing
+│   ├── errorbars.py         # following error bars from markers in images
 │   ├── interactive.py       # window for clicking on reference points
 │   ├── pdf.py               # reading plots from PDF files, from their drawing
 │   └── cli.py               # the figrecover command
