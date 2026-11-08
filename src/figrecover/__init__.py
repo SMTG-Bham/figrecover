@@ -14,6 +14,7 @@ from .digitize import (
     trace_curve,
     trace_curves,
 )
+from .level import Levelling, find_skew, level_image
 from .panels import Panel, read_panels
 from .pdf import (
     Box,
@@ -37,6 +38,7 @@ __all__ = [
     "Colour",
     "Drawing",
     "Image",
+    "Levelling",
     "Panel",
     "Point",
     "Tick",
@@ -45,6 +47,8 @@ __all__ = [
     "find_markers",
     "find_pdf_colours",
     "find_pdf_markers",
+    "find_skew",
+    "level_image",
     "load_image",
     "load_pdf",
     "load_svg",

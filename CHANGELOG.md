@@ -111,6 +111,15 @@ The first release.
   in its colour, and `--remove-grid` paints over grid lines before tracing.
 - Transparent pixels are treated as white, and plots with a dark background
   work as well as light ones. Pixel positions are those of pixel centres.
+- Images whose axes are turned by up to 10°, as scans often are, are levelled
+  before they are read, and figrecover says so: it finds the angle from their
+  long straight lines, horizontal and vertical, to within 0.01°, and turns
+  the image back. A turn of a quarter of a degree had the axis lines or the
+  frame traced as part of a curve. `-l` and `-m` positions are those in the
+  image as given, and the preview is drawn on it. `--level` sets the angle by
+  hand and `--no-level` reads the image as it is; `level_image`, which
+  returns a `Levelling` to turn positions with, and `find_skew` do the same
+  in Python.
 - Reference points must be finite numbers, and `-l` positions must lie on the
   image. Points taken up to 12 pixels below or left of the axis lines trace
   the same points as those taken on them, rather than crashing or finding

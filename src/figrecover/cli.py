@@ -31,6 +31,7 @@ from .digitize import (
     remove_grid,
     trace_curves,
 )
+from .level import LEVEL_THRESHOLD, Levelling, level_image
 from .panels import Panel, read_panels
 from .pdf import (
     PREVIEW_SCALE,
@@ -115,6 +116,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("--page chooses a page of a PDF file; an SVG file has only one")
     if not _is_drawing(arguments.image) and (arguments.page or arguments.box):
         parser.error("--page and --box choose what to read in a PDF or SVG file")
+    if _is_drawing(arguments.image) and arguments.level is not None:
+        parser.error("--level and --no-level level images, not PDF or SVG files")
     outputs = {"-o": arguments.output, "--preview": arguments.preview}
     for option, path in outputs.items():
         if path is not None and path.resolve() == arguments.image.resolve():
@@ -250,6 +253,24 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--remove-grid", action="store_true", help="paint over grid lines first"
     )
+    levelling = parser.add_mutually_exclusive_group()
+    levelling.add_argument(
+        "--level",
+        type=_angle,
+        metavar="DEGREES",
+        help="the angle by which the image's axes are turned anticlockwise, or "
+        "clockwise if negative, to turn it back by before reading it; -l and -m "
+        "positions are in the image as given (default: find the angle from the "
+        "image's long straight lines, and turn the image back if it is turned "
+        f"{LEVEL_THRESHOLD:g}° or more)",
+    )
+    levelling.add_argument(
+        "--no-level",
+        dest="level",
+        action="store_const",
+        const=0.0,
+        help="read the image as it is, for a plot drawn turned on purpose",
+    )
     return parser
 
 
@@ -258,18 +279,29 @@ def _digitize(arguments: argparse.Namespace) -> None:
 
     A panel whose curves cannot be traced is left out, with a warning. With
     ``-m``, insets are left out, as the markers are those of one plot.
+
+    An image whose axes are turned is levelled before it is read, as
+    ``_level`` levels it, and the -l and -m positions, in the image as
+    given, are turned with it. The preview is drawn on the image as given,
+    with the curves and rings turned back onto it.
     """
     if _is_drawing(arguments.image):
         _digitize_pdf(arguments)
         return
-    image = load_image(arguments.image)
-    _check_locations(arguments.markers, image, "-m position")
-    if max(arguments.series or 1, len(arguments.colours)) > 1 and _greyscale(image):
+    given = load_image(arguments.image)
+    _check_locations(arguments.markers, given, "-m position")
+    _check_locations(arguments.locations, given, "-l location")
+    if max(arguments.series or 1, len(arguments.colours)) > 1 and _greyscale(given):
         message = "the image is greyscale, so curves are told apart by grey level only"
         print(f"figrecover: {message}", file=sys.stderr)
+    locations = arguments.locations
+    if arguments.points and not locations:
+        locations = _click_locations(given, arguments.points)
+    image, levelling = _level(given, arguments.level)
+    # From here on, -m positions are those in the levelled image.
+    arguments.markers = _as_points(levelling.points(arguments.markers))
     if arguments.points:
-        _check_locations(arguments.locations, image, "-l location")
-        pixels = arguments.locations or _click_locations(image, arguments.points)
+        pixels = _as_points(levelling.points(locations))
         calibration = Calibration.from_points(
             arguments.points,
             pixels,
@@ -312,8 +344,36 @@ def _digitize(arguments: argparse.Namespace) -> None:
         raise ValueError(msg)
 
     if arguments.preview:
-        _save_preview(arguments.preview, image, curves, colours, rings)
+        # Drawn on the image as given, so positions are turned back to it.
+        curves = [levelling.back(curve) for curve in curves]
+        centres = _as_points(levelling.back([centre for centre, _, _ in rings]))
+        rings = [
+            (centre, radius, colour)
+            for centre, (_, radius, colour) in zip(centres, rings, strict=True)
+        ]
+        _save_preview(arguments.preview, given, curves, colours, rings)
     _write(arguments.output, tables)
+
+
+def _level(image: Image, angle: float | None) -> tuple[Image, Levelling]:
+    """Level an image whose axes are turned, and say so, as ``level_image`` does.
+
+    ``angle`` is that given with --level, 0 with --no-level, or None to find
+    it.
+    """
+    levelled, levelling = level_image(image, angle)
+    if levelling.angle:
+        turn = "clockwise" if levelling.angle > 0 else "anticlockwise"
+        message = (
+            f"turned the image {abs(levelling.angle):.2f}° {turn} to level its axes"
+        )
+        print(f"figrecover: {message}", file=sys.stderr)
+    return levelled, levelling
+
+
+def _as_points(positions: npt.NDArray[np.float64]) -> list[Point]:
+    """Return an ``(n, 2)`` array of positions as a list of points."""
+    return [(float(x), float(y)) for x, y in positions]
 
 
 def _trace(
@@ -719,6 +779,18 @@ def _box(text: str) -> Box:
         msg = f"expected a box whose x1 and y1 exceed its x0 and y0, got {text!r}"
         raise argparse.ArgumentTypeError(msg)
     return left, bottom, right, top
+
+
+def _angle(text: str) -> float:
+    """Parse an angle in degrees."""
+    try:
+        angle = float(text)
+    except ValueError:
+        angle = math.nan
+    if not math.isfinite(angle):
+        msg = f"expected an angle in degrees, got {text!r}"
+        raise argparse.ArgumentTypeError(msg)
+    return angle
 
 
 def _count(text: str) -> int:
