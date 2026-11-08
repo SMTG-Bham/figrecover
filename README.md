@@ -114,8 +114,8 @@ in blue, so you can check the result at a glance:
 | `-p`, `--point X,Y` | Data coordinates of a reference point. Repeat for at least three. Default: [read the axes](#reading-the-axes). |
 | `-l`, `--location X,Y` | Pixel position of each reference point, in the same order. Default: click on them. |
 | `--log AXES` | The axes of the `-p` reference points that are logarithmic: `x`, `y` or `xy`. Default: neither. |
-| `-n`, `--series N` | Trace the N most common curve colours, or in a PDF file the N longest curves, and print the matching `-c` options. Default: 1. |
-| `-c`, `--colour RRGGBB[:STYLE]` | Hexadecimal colour of a curve to trace, such as `1f77b4`, or in a PDF file with a style too, such as `000000:dashed`. Repeat for several curves. See [Several curves](#several-curves). |
+| `-n`, `--series N` | Trace N curves, those of the most common colours first, or in a PDF file the longest, and print the matching `-c` options. Default: 1. |
+| `-c`, `--colour RRGGBB[:STYLE]` | Hexadecimal colour of a curve to trace, such as `1f77b4`, with a style to pick one of several curves of that colour, such as `000000:dashed`. Repeat for several curves. See [Several curves](#several-curves). |
 | `-m`, `--marker X,Y` | Pixel position of the marker in a series' legend key, or in a PDF file its position in points, to find the series by its markers' shape. Repeat for each series. See [Markers](#markers). |
 | `-o`, `--output FILE` | CSV file to write. Default: standard output. |
 | `--preview IMAGE` | Also save a faded copy of the image with the recovered curves drawn on it. |
@@ -164,12 +164,36 @@ from the background; trace a pale curve with `-c` instead. Curves in
 neighbouring colours of a colour map, such as viridis, are told apart, and two
 `-c` colours that match the same curve are an error.
 
-In a PDF file, curves that share a colour are told apart by how they are
-drawn: by the width of their lines, and by their dashes, whose pattern names
-their style, `solid`, `dashed`, `dotted` or `dashdot`; a dash at most two line
-widths long is a dot. Separate lines of one style are curves of their own.
-`-n` lists each as a curve, longest first, and prints the `-c` option that
-picks it, the colour followed by the style:
+Curves that share a colour are told apart by how they are drawn and where
+they run. figrecover follows each curve of a colour across the image,
+through the places where it crosses or touches another, and across the gaps
+between its dashes, and names its style from its dashes: `solid`, `dashed`,
+`dotted` or `dashdot`. `-n` lists each as a curve of its own, and prints the
+`-c` option that picks it, the colour followed by the style:
+
+```bash
+figrecover examples/styles.png \
+    -p 0,0 -p 10,0 -p 0,1 -l 80,44 -l 576,44 -l 80,147 \
+    -n 3 --preview styles.preview.png
+```
+
+```text
+figrecover: colours: -c 040404:solid -c 040404:dashed -c 040404:dotted
+```
+
+![Three crossing black curves, solid, dashed and dotted, each recovered in a colour of its own](examples/styles.preview.png)
+
+The curves of a colour come in that colour's place, most pixels first, and
+the preview draws curves that share a colour in colours of their own. A
+dashed or dotted curve gives a point in every column, those between its
+dashes on the straight line across the gap. On a plot of black solid,
+dashed and dotted curves at 1.5 points and 100 dots per inch, each curve
+lies within 0.005 of the y-axis range of the true curve in 98% of the
+columns, and two black lines that cross, as an X, keep to their own lines.
+
+In a PDF file, the style is read exactly from the dashes that each line is
+drawn with, a dash at most two line widths long being a dot, and lines of
+other widths, or drawn apart, are curves of their own:
 
 ```bash
 figrecover examples/styles.pdf -n 3
@@ -181,8 +205,7 @@ figrecover: colours: -c 000000:dotted -c 000000:dashed -c 000000:solid
 
 A second curve of the same colour and style is numbered, such as
 `-c 000000:solid2`, and the colour alone, `-c 000000`, still takes every curve
-of that colour, as one. In an image, curves of one colour are traced as one,
-for now; see [Limitations](#limitations).
+of that colour, as one.
 
 ### Markers
 
@@ -730,6 +753,21 @@ curves = trace_curves(image, colours, calibration.origin)
 data = [calibration.to_data(curve) for curve in curves]
 ```
 
+`find_series` returns every curve as a `Series`, telling those that share a
+colour apart by style and where they run, and `trace_series` the curves of
+each of the given colours. A `Series` has its `colour`; its `style`, one of
+`STYLES`: `"solid"`, `"dashed"`, `"dotted"` or `"dashdot"` for a line, or
+`"markers"`; its `width`, that of its line or the size of its markers, in
+pixels, or in a PDF file in points; its `points`; and its `name`, such as
+`040404-dashed`:
+
+```python
+from figrecover import find_series, load_image
+
+for series in find_series(load_image("examples/styles.png"), (80, 44)):
+    print(series.name, len(series.points))  # 040404-solid 493, ...
+```
+
 For series told apart by their markers, `find_markers` takes the pixel
 position of each series' legend key, and returns the middle of each marker of
 that shape:
@@ -772,12 +810,8 @@ in an image, from the position of a marker of each series in points.
 
 `find_pdf_series(drawing, origin)` returns every curve and series of markers
 on the page, longest first, each as a `Series`, told apart by how it is drawn
-as well as by colour. A `Series` has its `colour`; its `style`, one of
-`STYLES`: `"solid"`, `"dashed"`, `"dotted"` or `"dashdot"` for a line, or
-`"markers"`; its `width`, that of its line or the size of its markers, in
-points; its `points`; and its `name`, such as `000000-dashed`.
-`trace_pdf_series(drawing, colours, origin)` returns the series of each
-colour:
+as well as by colour, and `trace_pdf_series(drawing, colours, origin)` the
+series of each colour:
 
 ```python
 from figrecover import find_pdf_series, load_pdf
@@ -838,14 +872,29 @@ for series in find_pdf_series(load_pdf("examples/styles.pdf"), (57.6, 31.68)):
    among coloured curves, is not taken for the nearest curve. Specks of fewer
    than four pixels, such as where two other curves cross, are ignored.
 7. In each image column, a curve's pixels form runs, split by gaps of more
-   than 6 pixels, and runs that overlap one to one in neighbouring columns
-   form branches. Each run of a branch across at least 5% of the plot gives a
-   point at its median height, so both sides of a loop are traced, and shorter
-   pieces beside a longer branch, such as the caps of error bars, are ignored.
-   A column without such a run gives one point at the median height of all
-   its pixels.
+   than 6 pixels, and runs that overlap in neighbouring columns are followed
+   as tracks. Where runs merge or part, as where curves cross, each track
+   carries on the way it was headed, fitted to its last six points where its
+   line was clear of others. Each run of a track across at least 5% of the
+   plot gives a point at its median height, so both sides of a loop are
+   traced, and shorter pieces beside a longer track, such as the caps of
+   error bars, are ignored. A column without such a run gives one point at
+   the median height of all its pixels.
+8. To tell the curves of a colour apart, tracks also carry on across gaps:
+   up to 12 line widths, the median height of the colour's runs, turning by
+   at most 25°, or, from a dot, which heads no way, up to 3 line widths
+   whichever way. A track that shares a run holding one line, headed a line
+   width beyond it, waits for its next dash. Tracks that share a run keep
+   their order while it is more than one and a half lines tall, as where
+   curves touch, each at the edge on its side, and otherwise share its rows
+   by where they are headed. Tracks across 5% of the plot are curves, those
+   that part or meet heading 90° apart or more, as the sides of a loop, are
+   one, and so are those where one starts as another ends. A curve inked
+   along 90% of its length is solid; otherwise it is dotted if three quarters
+   of its dashes are at most two line widths long, less the width, dashed if
+   three quarters are longer, and dashdot if neither.
 
-With `-m`, steps 4 to 7 give way to these:
+With `-m`, steps 4 to 8 give way to these:
 
 1. Each key's marker is the piece of ink, 64 levels or more from the
    background, nearest the key's position. A key at least twice as wide as
@@ -861,7 +910,7 @@ On the examples, the recovered values are within 0.03 of the true curves, about
 three pixels at the steepest point, and the markers within 0.02 of the points
 they mark, about two pixels.
 
-With a PDF file, steps 1 to 7 give way to these:
+With a PDF file, steps 1 to 8 give way to these:
 
 1. [PDFium](https://pdfium.googlesource.com/pdfium/), through pypdfium2, reads
    the characters, paths and images that the page draws, each with the matrix
@@ -910,13 +959,17 @@ With a PDF file, steps 1 to 7 give way to these:
 
 ## Limitations
 
-- In an image, curves are told apart by colour, or by the shapes of their
-  markers, so curves of the same colour without markers are traced as one,
-  and line styles are ignored; in a PDF file, by their widths and dashes
-  too. Series told apart by their markers give only the markers that can be
-  seen, not the lines between them.
-- A curve needs enough pixels to span the plot, so short curves and sparse
-  dotted lines may not be found.
+- In an image, curves of one colour are told apart by their dashes and
+  where they run, not by the widths of their lines. Curves that run together
+  for long stretches, or touch so closely that their lines overlap by more
+  than half, may swap where they meet, as may a solid curve where the dash
+  of another curve of its colour lies along it as they cross, if the lines
+  are thick. Of two curves drawn from one point, the one that parts from the
+  other starts where they part. Series told apart by their markers give
+  only the markers that can be seen, not the lines between them.
+- A curve needs enough pixels to span the plot, so short curves may not be
+  found, and dots of fewer than four pixels are ignored, so sparse dotted
+  lines may not be either.
 - Where curves cross, the one drawn underneath loses a few pixels, and its
   points there can be a pixel or two out.
 - The axes must be horizontal and vertical, with linear or logarithmic scales,

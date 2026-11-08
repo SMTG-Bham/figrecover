@@ -20,13 +20,18 @@ The first release.
   key in a curve's colour is not traced as part of that curve, and an
   inset's markers are not taken for a series' with `-m`; step plots, bars,
   shaded spans, grid lines and boxes drawn around part of a curve are kept.
-- Curves that share a colour are told apart by how they are drawn. In PDF
-  files, lines are told apart by their widths and dashes, named `solid`,
-  `dashed`, `dotted` or `dashdot`, separate lines of one style stay apart, and
-  markers by their shapes and fills. `-n` lists each as a curve and prints
-  options such as `-c 000000:dashed`, while a plain `-c` takes every curve of
-  its colour. `find_pdf_series` and `trace_pdf_series` return them as
-  `Series`, each with its colour, style, width and points.
+- Curves that share a colour are told apart by how they are drawn. In
+  images, each curve of a colour is followed through the places where it
+  crosses or touches another, and across the gaps between its dashes, and
+  named by its dashes `solid`, `dashed`, `dotted` or `dashdot`; a dashed or
+  dotted curve gives a point in every column. In PDF files, lines are told
+  apart by their widths and dashes, separate lines of one style stay apart,
+  and markers by their shapes and fills. `-n` lists each as a curve and
+  prints options such as `-c 000000:dashed`, while a plain `-c` takes every
+  curve of its colour, and the preview draws curves that share a colour in
+  colours of their own. `find_series`, `trace_series`, `find_pdf_series` and
+  `trace_pdf_series` return them as `Series`, each with its colour, style,
+  width and points.
 - `-m` tells series apart by the shapes of their markers, such as squares,
   diamonds, open circles and crosses, cut out of the legend, for plots whose
   series share a colour, as many spreadsheet charts do. It gives a point at
