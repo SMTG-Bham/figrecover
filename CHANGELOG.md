@@ -24,6 +24,16 @@ The first release.
   diamonds, open circles and crosses, cut out of the legend, for plots whose
   series share a colour, as many spreadsheet charts do. It gives a point at
   the middle of each marker, allowing for lines and error bars across them.
+- `-m` tells series apart by the colours of their markers too, so series of
+  one shape in several colours, or that mix shapes and colours, are found
+  apart. Markers that look alike at the image's size, such as circles,
+  hexagons and octagons 8 pixels across, are fitted to a fraction of a pixel
+  and told apart, with a warning of the keys alike; markers partly hidden
+  under others are found by what shows of them; and figrecover prints how
+  many markers of each series are ambiguous or probably hidden, and where,
+  and warns of a series without markers. Legends in small type, whose lines
+  are short, and JPEG images, down to quality 25, work too.
+  `find_marker_series` gives these details.
 - Reference points can be clicked on, after which figrecover prints the
   matching `-l` options to reuse for similar plots.
 - With the `ocr` extra, figrecover reads the axes when `-p` is left out: it
