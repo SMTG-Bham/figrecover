@@ -14,6 +14,7 @@ from figrecover import (
     Image,
     Point,
     find_colours,
+    find_marker_series,
     find_markers,
     load_image,
     remove_grid,
@@ -27,6 +28,7 @@ HEIGHT, WIDTH = 200, 400
 ORIGIN = (40, 30)  # pixel position of the axes, from the bottom-left corner
 PIXELS_PER_UNIT = (35, 40)
 BLACK, BLUE, ORANGE = (0, 0, 0), (31, 119, 180), (255, 127, 14)
+GREEN, LIGHT_BLUE = (44, 160, 44), (143, 187, 217)  # the second half-way to white
 PALE_BLUE = (200, 220, 240)  # 55 levels from white
 PINK, GREY = (218, 139, 195), (234, 234, 242)  # from seaborn's palette and style
 
@@ -497,34 +499,47 @@ def wavy(level: int) -> Function:
     return lambda x: 0.5 + 0.9 * level + 0.2 * np.sin(x)
 
 
-def draw_marker(image: Image, shape: str, column: int, row: int) -> None:
-    """Draw a marker 9 pixels across, centred on a pixel, over what is there."""
+def draw_marker(
+    image: Image, shape: str, column: int, row: int, colour: Colour = BLACK
+) -> None:
+    """Draw a marker 9 pixels across, centred on a pixel, over what is there.
+
+    A disc and an ellipse are filled, and an ellipse is 17 pixels wide.
+    """
     match shape:
         case "square":
             cv2.rectangle(
-                image, (column - 4, row - 4), (column + 4, row + 4), BLACK, -1
+                image, (column - 4, row - 4), (column + 4, row + 4), colour, -1
             )
         case "diamond":
             corners = [(column, row - 5), (column + 5, row), (column, row + 5)]
             corners.append((column - 5, row))
-            cv2.fillPoly(image, [np.array(corners)], BLACK, cv2.LINE_AA)
+            cv2.fillPoly(image, [np.array(corners)], colour, cv2.LINE_AA)
         case "circle":
             cv2.circle(image, (column, row), 4, (255, 255, 255), -1)
-            cv2.circle(image, (column, row), 4, BLACK, 1, cv2.LINE_AA)
+            cv2.circle(image, (column, row), 4, colour, 1, cv2.LINE_AA)
+        case "disc":
+            cv2.circle(image, (column, row), 4, colour, -1, cv2.LINE_AA)
+        case "ellipse":
+            cv2.ellipse(image, (column, row), (8, 3), 0, 0, 360, colour, -1)
         case _:  # a cross
             for end in (-3, 3):
                 start, stop = (column - 3, row - end), (column + 3, row + end)
-                cv2.line(image, start, stop, BLACK, 1, cv2.LINE_AA)
+                cv2.line(image, start, stop, colour, 1, cv2.LINE_AA)
 
 
 def marker_plot(
-    shapes: Sequence[str], legend_row: int = LEGEND_ROW, *, key_lines: bool = True
+    shapes: Sequence[str],
+    legend_row: int = LEGEND_ROW,
+    *,
+    key_lines: bool = True,
+    colours: Sequence[Colour] = (),
 ) -> tuple[Image, Calibration, list[Point], list[npt.NDArray[np.float64]]]:
     """Draw axes and series of markers joined by lines, with a legend.
 
-    Series ``k`` follows ``wavy(k)``, with markers at ``MARKER_XS``. The
-    legend's keys lie in a row, each with a short line through its marker
-    unless ``key_lines`` is false.
+    Series ``k`` follows ``wavy(k)``, with markers at ``MARKER_XS``, in
+    ``colours[k]``, or black. The legend's keys lie in a row, each with a
+    short line through its marker unless ``key_lines`` is false.
 
     Returns:
         The image, its calibration, the position of each key's marker, and
@@ -534,20 +549,21 @@ def marker_plot(
     keys: list[Point] = []
     markers = []
     for level, shape in enumerate(shapes):
+        colour = colours[level] if colours else BLACK
         columns = np.round(ORIGIN[0] + MARKER_XS * PIXELS_PER_UNIT[0]).astype(int)
         heights = ORIGIN[1] + wavy(level)(MARKER_XS) * PIXELS_PER_UNIT[1]
         rows = np.round(HEIGHT - heights).astype(int)
         line = np.column_stack((columns, rows)).astype(np.int32)
-        cv2.polylines(image, [line], isClosed=False, color=BLACK, lineType=cv2.LINE_AA)
+        cv2.polylines(image, [line], isClosed=False, color=colour, lineType=cv2.LINE_AA)
         for column, row in zip(columns, rows, strict=True):
-            draw_marker(image, shape, int(column), int(row))
+            draw_marker(image, shape, int(column), int(row), colour)
         markers.append(np.column_stack((columns + 0.5, HEIGHT - rows - 0.5)))
 
         column = 70 + 80 * level
         if key_lines:
             start, stop = (column - 12, legend_row), (column + 12, legend_row)
-            cv2.line(image, start, stop, BLACK, 1, cv2.LINE_AA)
-        draw_marker(image, shape, column, legend_row)
+            cv2.line(image, start, stop, colour, 1, cv2.LINE_AA)
+        draw_marker(image, shape, column, legend_row, colour)
         keys.append((column + 0.5, HEIGHT - legend_row - 0.5))
     return image, calibration, keys, markers
 
@@ -630,6 +646,76 @@ def test_find_markers_needs_a_marker_at_each_key(key: Point, message: str) -> No
 
     with pytest.raises(ValueError, match=message):
         find_markers(image, [*keys, key], calibration.origin)
+
+
+def test_find_markers_tells_series_of_one_shape_apart_by_colour() -> None:
+    colours = [BLUE, ORANGE, GREEN, BLACK]
+    image, calibration, keys, markers = marker_plot(["disc"] * 4, colours=colours)
+    assert_finds_markers(find_markers(image, keys, calibration.origin), markers)
+
+
+def test_find_markers_tells_series_apart_by_shape_and_colour() -> None:
+    # Two shapes in each of two colours, one drawn lighter in one series.
+    shapes = ["disc", "disc", "square", "square"]
+    colours = [LIGHT_BLUE, ORANGE, ORANGE, BLUE]
+    image, calibration, keys, markers = marker_plot(shapes, colours=colours)
+    assert_finds_markers(find_markers(image, keys, calibration.origin), markers)
+
+
+def test_find_markers_reads_wide_markers_without_lines() -> None:
+    image, calibration, keys, markers = marker_plot(
+        ["ellipse", "square"], key_lines=False
+    )
+    assert_finds_markers(find_markers(image, keys, calibration.origin), markers)
+
+
+def test_find_marker_series_flags_markers_of_keys_alike() -> None:
+    image, calibration, keys, markers = marker_plot(["square", "square"])
+
+    with pytest.warns(UserWarning, match="look alike at this size") as caught:
+        found = find_marker_series(image, keys, calibration.origin)
+
+    assert len(caught) == 1
+    points, true = (
+        np.array(sorted(np.concatenate(each).round(1).tolist()))
+        for each in ([series.points for series in found], markers)
+    )
+    assert_finds_markers([points], [true])
+    assert all(np.all(series.ambiguous) for series in found)
+
+
+def test_find_marker_series_finds_markers_partly_hidden_under_others() -> None:
+    image, calibration = synthetic_plot(curves=[])
+    columns = np.round(ORIGIN[0] + MARKER_XS * PIXELS_PER_UNIT[0]).astype(int)
+    heights = ORIGIN[1] + wavy(1)(MARKER_XS) * PIXELS_PER_UNIT[1]
+    rows = np.round(HEIGHT - heights).astype(int)
+    hidden = 9  # where a diamond hides a square altogether
+    for number, (column, row) in enumerate(zip(columns, rows, strict=True)):
+        if number != hidden:
+            draw_marker(image, "square", int(column), int(row))
+    lifts = np.where(np.arange(len(rows)) == hidden, 0, 5)  # diamonds 5 pixels above
+    for column, row in zip(columns, rows - lifts, strict=True):
+        draw_marker(image, "diamond", int(column), int(row))
+    keys: list[Point] = []
+    for column, shape in [(70, "square"), (150, "diamond")]:
+        cv2.line(image, (column - 12, LEGEND_ROW), (column + 12, LEGEND_ROW), BLACK, 1)
+        draw_marker(image, shape, column, LEGEND_ROW)
+        keys.append((column + 0.5, HEIGHT - LEGEND_ROW - 0.5))
+
+    squares, diamonds = find_marker_series(image, keys, calibration.origin)
+
+    centres = np.column_stack((columns + 0.5, HEIGHT - rows - 0.5))
+    assert_finds_markers(
+        [squares.points, diamonds.points],
+        [
+            np.delete(centres, hidden, axis=0),
+            centres + np.column_stack((0 * lifts, lifts)),
+        ],
+    )
+    np.testing.assert_allclose(squares.hidden, centres[[hidden]], atol=1)
+    assert len(diamonds.hidden) == 0
+    assert not np.any(squares.ambiguous)
+    assert not np.any(diamonds.ambiguous)
 
 
 def test_load_image_reads_colour_stretched_to_the_full_range(tmp_path: Path) -> None:

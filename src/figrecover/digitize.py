@@ -1,9 +1,11 @@
 """Find the curves in an image of a plot."""
 
+import dataclasses
 import itertools
 import math
 import os
-from collections.abc import Sequence
+import warnings
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 import cv2
@@ -46,10 +48,25 @@ _FRAME_SIDE = 0.05  # frame lines span this fraction of the plot's shorter side
 _FRAME_CONTRAST = 32  # its lines differ from the background by this much or more
 _FRAME_LINED = 0.75  # its sides run along this fraction of its height or more
 _KEY_REACH = 20  # a legend key's marker lies within this many pixels of its position
-_KEY_LINE = 2  # a key this many times as wide as tall has a line through its marker
+_KEY_WIDE = 1.5  # a key this many times as wide as tall may have a line through it
+_KEY_LINE = 3  # the line runs on this many pixels or more beyond the key's marker
+_KEY_LINE_LEVEL = 0.25  # its pixels this far from the line's level are the marker's
+_KEY_HUES = 10  # key colours this many degrees apart or less are one colour
+_INK_ANGLE = 20  # ink lies this many degrees or less from its colour
 _MARKER_SCORE = 0.6  # a marker correlates with its key's this well or better
-_MARKER_INK = 0.6  # a marker has at least this fraction of the ink of its key's
+_MARKER_INK = 0.6  # a marker has this fraction of the ink of each half of its key's
 _MARKER_SPACING = 0.75  # markers are this many marker widths apart or more
+_MARKER_MARGIN = 0.05  # keys scoring this much less than the best near it are rivals
+_REACH = 2  # rivals' markers, and fits to a place, lie this many pixels away or less
+_AMBIGUOUS = 0.3  # a fit by less than this fraction better than a rival's is ambiguous
+_ALIKE = 0.05  # keys' markers differing less than this look alike
+_HIDDEN_SHOWN = 0.2  # a partly hidden marker shows this fraction of its ink or more
+_HIDDEN_SCORE = 0.75  # and correlates with its key's marker this well or better
+_HIDDEN_GAIN = 0.6  # and explains the image under it this fraction better
+_MOST_HIDDEN = 2  # a marker hides parts of this many others at most
+_ALIGNED = 2  # markers this many pixels apart or less across share an x position
+_GAP = 1.5  # a series' markers this many times their usual spacing apart leave a gap
+_FLAT = 1e-6  # parts of an image that vary less than this are flat
 
 
 @dataclass(frozen=True, slots=True)
@@ -303,27 +320,85 @@ def trace_curve(image: Image, origin: Point = (0, 0)) -> npt.NDArray[np.float64]
     return trace_curves(image, find_colours(image, 1, origin), origin)[0]
 
 
+@dataclass(frozen=True, slots=True)
+class MarkerSeries:
+    """The markers of one series in a plot, as ``find_marker_series`` finds them.
+
+    Attributes:
+        points: An ``(n, 2)`` array of the pixel ``(x, y)`` coordinates of the
+            centres of the markers found, measured from the bottom-left
+            corner and sorted by x, then y.
+        ambiguous: An ``(n,)`` array saying whether each marker found might as
+            well be another series', whose marker fits it almost as well.
+        hidden: An ``(m, 2)`` array of the pixel coordinates where markers of
+            the series are probably hidden under others', sorted by x.
+    """
+
+    points: npt.NDArray[np.float64]
+    ambiguous: npt.NDArray[np.bool_]
+    hidden: npt.NDArray[np.float64]
+
+
+@dataclass(frozen=True, slots=True)
+class _Key:
+    """A legend key's marker, to look for in a plot area.
+
+    Attributes:
+        shape: The ink levels of the marker, with a pixel's margin, as
+            ``_key_marker`` cuts it out.
+        mask: Where the shape counts: everywhere but on the key's line.
+        colour: The index of the marker's colour in the palette.
+        size: The most pixels the marker spans either way.
+        row: The row of the key's position, measured in the plot area.
+        column: The column of the key's position.
+    """
+
+    shape: npt.NDArray[np.float32]
+    mask: npt.NDArray[np.float32]
+    colour: int
+    size: int
+    row: float
+    column: float
+
+
+@dataclass(frozen=True, slots=True)
+class _Marker:
+    """A marker found in a plot area.
+
+    Attributes:
+        key: The index of its key.
+        row: The row of its centre, to a fraction of a pixel.
+        column: The column of its centre.
+        top: The top row of ``shape`` in the plot area.
+        left: The left column of ``shape``.
+        shape: Its key's marker, shifted by a fraction of a pixel to fit it.
+        mask: Its key's mask.
+        ambiguous: Whether another key's marker fits it almost as well.
+    """
+
+    key: int
+    row: float
+    column: float
+    top: int
+    left: int
+    shape: npt.NDArray[np.float32]
+    mask: npt.NDArray[np.float32]
+    ambiguous: bool = False
+
+
 def find_markers(
     image: Image, keys: Sequence[Point], origin: Point = (0, 0)
 ) -> list[npt.NDArray[np.float64]]:
-    """Find the markers of each series in a plot, by their shapes.
+    """Find the markers of each series in a plot, by their shapes and colours.
 
-    Each key is the position of a series' marker in the legend. Its shape is
-    cut out of the image, leaving out a line through it, as legends of line
-    plots draw, and looked for in the plot area, the part of the image above
-    and right of ``origin``, less the frames inside it, such as those of
-    insets and legends, with all they hold, as ``_frames`` finds them. A
-    marker is where the shape correlates with the image better than
-    ``_MARKER_SCORE``, with at least ``_MARKER_INK`` of the key's ink. Where
-    the shapes of several keys match, closer together than
-    ``_MARKER_SPACING`` of a marker's width, the best match wins. The keys
-    themselves are not markers, if the legend lies in the plot area.
+    See ``find_marker_series``, which also tells which markers might be
+    another series', and where markers are probably hidden.
 
     Args:
         image: Colour image of a plot.
         keys: The pixel position of the marker in each series' legend key,
             measured from the bottom-left corner. Each key's marker must have
-            its own shape.
+            a shape or a colour of its own.
         origin: Pixel position where the axes cross, measured from the
             bottom-left corner.
 
@@ -336,33 +411,112 @@ def find_markers(
     Raises:
         ValueError: If there is no marker at a key, or there is no plot area.
     """
-    levels = _ink_levels(image)
-    shapes = [_key_marker(levels, key) for key in keys]
+    return [series.points for series in find_marker_series(image, keys, origin)]
+
+
+def find_marker_series(
+    image: Image, keys: Sequence[Point], origin: Point = (0, 0)
+) -> list[MarkerSeries]:
+    """Find the markers of each series in a plot, by their shapes and colours.
+
+    Each key is the position of a series' marker in the legend. Its colour is
+    the direction, seen from the background, of the piece of ink nearest it,
+    and keys whose colours lie at most ``_KEY_HUES`` degrees apart share
+    one. Each pixel of the image shows the key colour nearest its own, if at
+    most ``_INK_ANGLE`` degrees away, as ``_ink_levels`` measures it, so
+    series that share a shape and differ in colour are told apart. Each
+    key's marker is cut out of the image in its colour, leaving out a line
+    through it, as legends of line plots draw, and looked for in the plot
+    area, the part of the image above and right of ``origin``, less the
+    frames inside it, such as those of insets and legends, with all they
+    hold, as ``_frames`` finds them. Keys whose markers look alike at this
+    size, as ``_warn_alike`` measures them, give a warning.
+
+    A marker lies where a key's marker correlates with the plot by
+    ``_MARKER_SCORE`` or more, and each half of the key's ink shows, by
+    ``_MARKER_INK`` or more, as ``_scores`` finds it, unless a better match
+    lies closer than ``_MARKER_SPACING`` of a marker's width. Where other
+    keys' markers match almost as well, as ``_assign`` finds them, each is
+    fitted to the plot, with the markers it partly hides or that partly
+    hide it, and the one that explains the plot best wins, as ``_resolve``
+    chooses it; the marker is ambiguous if a rival explains it almost as
+    well. Markers partly hidden under those found, or over them, are then
+    looked for in what those leave uncovered, as ``_uncover`` finds them.
+    Series usually share x positions, so where a series has no marker at
+    one that others share, under another series' marker, its marker is
+    looked for again there, as ``_rethink`` does, and is otherwise probably
+    hidden, as ``_missing`` finds it. The keys themselves are not markers,
+    if the legend lies in the plot area.
+
+    Args:
+        image: Colour image of a plot.
+        keys: The pixel position of the marker in each series' legend key,
+            measured from the bottom-left corner. Each key's marker must have
+            a shape or a colour of its own.
+        origin: Pixel position where the axes cross, measured from the
+            bottom-left corner.
+
+    Returns:
+        The markers of each key's series, with positions measured as for
+        ``find_markers``.
+
+    Raises:
+        ValueError: If there is no marker at a key, or there is no plot area.
+    """
+    offsets = _offsets(image)
+    palette, colours = _key_palette([_key_colour(offsets, key) for key in keys])
+    levels = _ink_levels(offsets, palette)
+    shapes = [
+        _key_marker(levels[colour], key)
+        for key, colour in zip(keys, colours, strict=True)
+    ]
     plot, left, top = _plot_area(image, origin)
-    area = _ink_levels(plot)
-    found = [
-        (score, row, column, series)
-        for series, (shape, mask) in enumerate(shapes)
-        for score, row, column in _matches(area, shape, mask)
-    ]
-    sizes = [max(shape.shape) - 2 for shape, _ in shapes]  # less the margin
-    spacing = _MARKER_SPACING * min(sizes)
     height = image.shape[0]
-    centres: list[list[Point]] = [[] for _ in keys]
-    kept: list[tuple[float, float]] = []
-    for _, row, column, series in sorted(found, reverse=True):
-        # The centre of the pixel in column c and row r is at
-        # (c + 0.5, height - r - 0.5).
-        x, y = column + left + 0.5, height - top - row - 0.5
-        if any(math.dist((row, column), other) < spacing for other in kept) or any(
-            math.dist((x, y), key) < size for key, size in zip(keys, sizes, strict=True)
-        ):
-            continue
-        kept.append((row, column))
-        centres[series].append((x, y))
-    return [
-        np.array(sorted(points), dtype=np.float64).reshape(-1, 2) for points in centres
+    found = [
+        _Key(
+            shape,
+            mask,
+            colour,
+            max(shape.shape) - 2,
+            height - top - y - 0.5,
+            x - left - 0.5,
+        )
+        for (shape, mask), colour, (x, y) in zip(shapes, colours, keys, strict=True)
     ]
+    _warn_alike(keys, found)
+    area = _ink_levels(_offsets(plot), palette)
+    markers = [
+        marker
+        for colour in range(len(palette))
+        for marker in _assign(area[colour], found, colour)
+    ]
+    markers += _uncover(area, found, markers)
+    markers = _rethink(area, found, markers)
+    missing = _missing(found, markers)
+
+    # The centre of the pixel in column c and row r is at
+    # (c + 0.5, height - r - 0.5).
+    def placed(row: float, column: float) -> Point:
+        return column + left + 0.5, height - top - row - 0.5
+
+    series = []
+    for key in range(len(keys)):
+        own = sorted(
+            (*placed(marker.row, marker.column), marker.ambiguous)
+            for marker in markers
+            if marker.key == key
+        )
+        series.append(
+            MarkerSeries(
+                np.array([(x, y) for x, y, _ in own], dtype=np.float64).reshape(-1, 2),
+                np.array([flag for _, _, flag in own], dtype=np.bool_),
+                np.array(
+                    sorted(placed(row, column) for row, column in missing[key]),
+                    dtype=np.float64,
+                ).reshape(-1, 2),
+            )
+        )
+    return series
 
 
 def _plot_area(image: Image, origin: Point) -> tuple[Image, int, int]:
@@ -842,10 +996,127 @@ def _branches(
     return branches
 
 
-def _ink_levels(image: Image) -> npt.NDArray[np.float32]:
-    """Return how far each pixel's grey level is from the median's, from 0 to 1."""
-    grey = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY).astype(np.float32)
-    return (np.abs(grey - np.median(grey)) / 255).astype(np.float32)
+def _offsets(image: Image) -> npt.NDArray[np.float32]:
+    """Return how far each pixel's colour lies from the background, the median."""
+    background = np.median(image.reshape(-1, 3), axis=0)
+    return np.asarray(image - background, dtype=np.float32)
+
+
+def _key_piece(
+    ink: npt.NDArray[np.bool_], key: Point
+) -> tuple[npt.NDArray[np.bool_], int, int]:
+    """Return the piece of ink nearest a key's position, and where it was cut out.
+
+    The piece is cut out of the part of the image at most ``_KEY_REACH``
+    pixels from the key each way, whose top row and left column are returned
+    with it, so the middle of an open marker picks it. Specks of fewer than
+    ``_MIN_PIXELS`` pixels, such as compression leaves, are left out.
+
+    Raises:
+        ValueError: If the key lies outside the image, or there is no ink near
+            it.
+    """
+    height, width = ink.shape
+    row, column = math.floor(height - key[1]), math.floor(key[0])
+    if not (0 <= row < height and 0 <= column < width):
+        msg = f"the marker position {key[0]:g},{key[1]:g} lies outside the image"
+        raise ValueError(msg)
+    top, left = max(row - _KEY_REACH, 0), max(column - _KEY_REACH, 0)
+    window = ink[top : row + _KEY_REACH + 1, left : column + _KEY_REACH + 1]
+    _, pieces, stats, _ = cv2.connectedComponentsWithStats(window.astype(np.uint8))
+    sizable = stats[:, cv2.CC_STAT_AREA] >= _MIN_PIXELS
+    sizable[0] = False  # the background
+    rows, columns = np.nonzero(sizable[pieces])
+    if not len(rows):
+        msg = f"found no marker near {key[0]:g},{key[1]:g}"
+        raise ValueError(msg)
+    nearest = np.argmin((rows + top - row) ** 2 + (columns + left - column) ** 2)
+    return pieces == pieces[rows[nearest], columns[nearest]], top, left
+
+
+def _key_colour(
+    offsets: npt.NDArray[np.float32], key: Point
+) -> npt.NDArray[np.float64]:
+    """Return the colour of a key's marker, less the background's.
+
+    The marker is the piece of ink, differing from the background by at least
+    ``_CONTRAST`` in some channel, nearest the key's position, as
+    ``_key_piece`` finds it. Its colour lies in the direction of its
+    strongest pixels, those at least half as far from the background in some
+    channel as the furthest, and as far as any of its pixels reaches that
+    way.
+    """
+    strength = np.abs(offsets).max(axis=2)
+    piece, top, left = _key_piece(strength >= _CONTRAST, key)
+    rows, columns = np.nonzero(piece)
+    colours = offsets[rows + top, columns + left].astype(np.float64)
+    strengths = strength[rows + top, columns + left]
+    direction = colours[strengths >= strengths.max() / 2].sum(axis=0)
+    direction /= np.linalg.norm(direction)
+    return np.asarray(direction * float((colours @ direction).max()))
+
+
+def _key_palette(
+    colours: Sequence[npt.NDArray[np.float64]],
+) -> tuple[npt.NDArray[np.float64], list[int]]:
+    """Gather the keys' colours, less the background's, into the markers' colours.
+
+    Colours lying at most ``_KEY_HUES`` degrees apart, seen from the
+    background, are one colour, as far from the background as the furthest
+    of them.
+
+    Returns:
+        The colours, less the background's, and the index of each key's.
+    """
+    palette: list[npt.NDArray[np.float64]] = []
+    indices = []
+    for colour in colours:
+        for index, other in enumerate(palette):
+            if _angle(colour, other) <= _KEY_HUES:
+                if np.linalg.norm(colour) > np.linalg.norm(other):
+                    palette[index] = colour
+                indices.append(index)
+                break
+        else:
+            indices.append(len(palette))
+            palette.append(colour)
+    return np.array(palette), indices
+
+
+def _angle(first: npt.NDArray[np.float64], second: npt.NDArray[np.float64]) -> float:
+    """Return the angle between two colours less the background's, in degrees."""
+    cosine = first @ second / (np.linalg.norm(first) * np.linalg.norm(second))
+    return math.degrees(math.acos(min(float(cosine), 1)))
+
+
+def _ink_levels(
+    offsets: npt.NDArray[np.float32], palette: npt.NDArray[np.float64]
+) -> list[npt.NDArray[np.float32]]:
+    """Return how much of each colour of the palette each pixel shows.
+
+    A pixel shows the colour whose direction from the background lies
+    nearest its own, if at most ``_INK_ANGLE`` degrees away, and none of the
+    others, so ink of other colours is not taken for a marker's. Its level
+    is how far it lies towards the colour, as a fraction of the colour's
+    distance from the background, at most 1, times the most the colour
+    differs from the background in a channel, out of 255: so a level is how
+    much the pixel differs from the background in that channel, from 0 to 1.
+
+    Args:
+        offsets: Each pixel's colour less the background's, as ``_offsets``
+            gives them.
+        palette: The colours, less the background's.
+    """
+    lengths = np.linalg.norm(palette, axis=1)
+    along = offsets @ (palette / lengths[:, np.newaxis]).T.astype(np.float32)
+    cosines = along / np.maximum(np.linalg.norm(offsets, axis=2), 1)[..., np.newaxis]
+    nearest = np.argmax(cosines, axis=2)
+    shown = np.max(cosines, axis=2) >= math.cos(math.radians(_INK_ANGLE))
+    levels = np.clip(along / lengths, 0, 1) * (np.abs(palette).max(axis=1) / 255)
+    return [
+        np.where(shown & (nearest == index), levels[..., index], 0).astype(np.float32)
+        for index in range(len(palette))
+    ]
 
 
 def _key_marker(
@@ -853,13 +1124,18 @@ def _key_marker(
 ) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]:
     """Cut a legend key's marker out of an image, and mask out the key's line.
 
-    The key is the piece of ink, differing from the background by at least
-    ``_CONTRAST``, nearest its position, at most ``_KEY_REACH`` pixels away
-    each way, so the middle of an open marker picks it. If the piece is
-    ``_KEY_LINE`` times as wide as it is tall, or more, a line runs through the
-    marker. The line's rows are those with ink across half the key or more,
-    and the marker is the rest of the key, with the line's rows masked out,
-    as lines cross the markers in the plot at other angles.
+    The key is the piece of ink, at least ``_CONTRAST`` levels from the
+    background, nearest its position, as ``_key_piece`` finds it. A key at
+    least ``_KEY_WIDE`` times as wide as tall may have a line through its
+    marker: the rows with ink within ``_KEY_LINE`` pixels of either end. It
+    does if they are fewer than the rows of the marker, the other rows'
+    ink, leaving out faint ink, less than half as strong as the strongest,
+    such as compression leaves beside the line. The line is masked out of
+    the marker, as lines cross the markers in the plot at other angles,
+    except where the marker hides it: where the pixels of its rows, across
+    the marker, differ from the line's level beside it by more than
+    ``_KEY_LINE_LEVEL``, as an open marker's face does. Under the mask, the
+    marker is bridged by what lies above and below.
 
     Returns:
         The ink levels of the marker, with a pixel's margin, and the mask.
@@ -867,71 +1143,108 @@ def _key_marker(
     Raises:
         ValueError: If there is no marker at the key's position.
     """
-    height, width = levels.shape
-    row, column = math.floor(height - key[1]), math.floor(key[0])
-    if not (0 <= row < height and 0 <= column < width):
-        msg = f"the marker position {key[0]:g},{key[1]:g} lies outside the image"
-        raise ValueError(msg)
-    top, left = max(row - _KEY_REACH, 0), max(column - _KEY_REACH, 0)
-    window = levels[top : row + _KEY_REACH + 1, left : column + _KEY_REACH + 1]
-    ink = window >= _CONTRAST / 255
-    rows, columns = np.nonzero(ink)
-    if not len(rows):
-        msg = f"found no marker near {key[0]:g},{key[1]:g}"
-        raise ValueError(msg)
-    nearest = np.argmin((rows + top - row) ** 2 + (columns + left - column) ** 2)
-    _, pieces = cv2.connectedComponents(ink.astype(np.uint8))
-    piece = pieces == pieces[rows[nearest], columns[nearest]]
+    piece, top, left = _key_piece(levels >= _CONTRAST / 255, key)
+    window = levels[top : top + piece.shape[0], left : left + piece.shape[1]]
     rows, columns = np.nonzero(piece)
-
-    line = np.zeros(len(window), dtype=np.bool_)  # the rows of the key's line
-    if np.ptp(columns) + 1 >= _KEY_LINE * (np.ptp(rows) + 1):
-        line = 2 * np.count_nonzero(piece, axis=1) >= np.ptp(columns) + 1
-        marker = ~line[rows]
+    hidden = np.zeros(window.shape, dtype=np.bool_)  # the key's line
+    if np.ptp(columns) + 1 >= _KEY_WIDE * (np.ptp(rows) + 1):
+        line = np.zeros(len(window), dtype=np.bool_)  # its rows
+        line[
+            rows[
+                (columns < columns.min() + _KEY_LINE)
+                | (columns > columns.max() - _KEY_LINE)
+            ]
+        ] = True
+        marker = ~line[rows] & (window[rows, columns] >= window[piece].max() / 2)
         if not np.any(marker):
             msg = f"found only a line, and no marker, at {key[0]:g},{key[1]:g}"
             raise ValueError(msg)
-        rows = np.arange(rows[marker].min(), rows[marker].max() + 1)
-        columns = columns[marker]
+        if np.count_nonzero(line) < len(np.unique(rows[marker])):
+            first, last = columns[marker].min(), columns[marker].max()
+            beside = np.ones(window.shape[1], dtype=np.bool_)
+            beside[first : last + 1] = False
+            for row in np.flatnonzero(line):
+                hidden[row] = beside
+                level = np.median(window[row, beside & piece[row]])
+                hidden[row, first : last + 1] = (
+                    np.abs(window[row, first : last + 1] - level) <= _KEY_LINE_LEVEL
+                )
+            rows = np.arange(rows[marker].min(), rows[marker].max() + 1)
+            columns = columns[marker]
 
     box = (
         slice(max(rows.min() - 1, 0), rows.max() + 2),
         slice(max(columns.min() - 1, 0), columns.max() + 2),
     )
     fringe = cv2.dilate(piece.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
-    shape = np.where(fringe, window, 0)[box]
-    mask = np.broadcast_to(~line[box[0], np.newaxis], shape.shape)
-    return shape.astype(np.float32), mask.astype(np.float32)
+    shape = np.where(fringe, window, 0).astype(np.float32)
+    for column in np.flatnonzero(hidden.any(axis=0)):
+        under = hidden[:, column]
+        shape[under, column] = np.interp(
+            np.flatnonzero(under), np.flatnonzero(~under), shape[~under, column]
+        )
+    return shape[box], (~hidden[box]).astype(np.float32)
 
 
-def _matches(
+def _scores(
     area: npt.NDArray[np.float32],
     shape: npt.NDArray[np.float32],
     mask: npt.NDArray[np.float32],
+) -> npt.NDArray[np.float32]:
+    """Return how well a key's marker correlates with the image at each place.
+
+    A place is where the marker's top-left corner lies. The correlation is
+    left out of the mask, and is -1 where the image is flat, or has less
+    than ``_MARKER_INK`` of the ink of the top, bottom, left or right half of
+    the marker, so a marker with thin strokes, such as a cross, is not found
+    along a line.
+    """
+    if area.shape[0] < shape.shape[0] or area.shape[1] < shape.shape[1]:
+        return np.empty((0, 0), dtype=np.float32)
+    scores = np.nan_to_num(  # -1 at flat patches
+        cv2.matchTemplate(area, shape, cv2.TM_CCOEFF_NORMED, mask=mask),
+        nan=-1,
+        posinf=-1,
+        neginf=-1,
+    ).astype(np.float32)
+    ink = ((shape >= _CONTRAST / 255) & (mask > 0)).astype(np.float32)
+    rows, columns = shape.shape
+    for half in (
+        np.s_[: (rows + 1) // 2],
+        np.s_[rows // 2 :],
+        np.s_[:, : (columns + 1) // 2],
+        np.s_[:, columns // 2 :],
+    ):
+        part = np.zeros_like(ink)
+        part[half] = ink[half]
+        shown = cv2.matchTemplate(area, part, cv2.TM_CCORR)
+        scores[shown < _MARKER_INK * float(np.sum(shape * part))] = -1
+    return scores
+
+
+def _peaks(
+    scores: npt.NDArray[np.float32], size: tuple[int, int]
 ) -> list[tuple[float, float, float]]:
     """Return where a key's marker matches the image, and how well.
 
-    A match is a local maximum of the correlation of the marker with the
-    image, outside the mask, of at least ``_MARKER_SCORE``, where the image
-    has at least ``_MARKER_INK`` of the marker's ink. Its centre is placed to
-    a fraction of a pixel, at the top of a parabola through the correlation
-    each way.
+    A match is a local maximum of the scores, as ``_scores`` gives them, of at
+    least ``_MARKER_SCORE``. Its centre is placed to a fraction of a pixel,
+    at the top of a parabola through the scores each way.
+
+    Args:
+        scores: The scores of the marker.
+        size: The rows and columns of the marker.
 
     Returns:
-        The correlation, row and column of the centre of each match.
+        The score, row and column of the centre of each match.
     """
-    if area.shape[0] < shape.shape[0] or area.shape[1] < shape.shape[1]:
+    if not scores.size:  # the marker is bigger than the plot area
         return []
-    scores = cv2.matchTemplate(area, shape, cv2.TM_CCOEFF_NORMED, mask=mask)
-    scores = np.nan_to_num(scores, nan=-1, posinf=-1, neginf=-1)  # flat patches
-    ink = ((shape >= _CONTRAST / 255) & (mask > 0)).astype(np.float32)
-    shown = cv2.matchTemplate(area, ink, cv2.TM_CCORR) / float(np.sum(shape * ink))
-    scores[shown < _MARKER_INK] = -1
     peaks = (scores >= _MARKER_SCORE) & (
         scores == cv2.dilate(scores, np.ones((3, 3), np.uint8))
     )
     padded = np.pad(scores, 1, constant_values=-1)
-    middle_row, middle_column = (shape.shape[0] - 1) / 2, (shape.shape[1] - 1) / 2
+    middle_row, middle_column = (size[0] - 1) / 2, (size[1] - 1) / 2
     return [
         (
             float(scores[row, column]),
@@ -951,6 +1264,629 @@ def _vertex(values: npt.ArrayLike) -> float:
     before, peak, after = np.asarray(values, dtype=np.float64)
     curvature = min(before - 2 * peak + after, -1e-9)  # flat at worst
     return float(np.clip((before - after) / (2 * curvature), -0.5, 0.5))
+
+
+def _near(
+    scores: npt.NDArray[np.float32], size: tuple[int, int], row: float, column: float
+) -> float:
+    """Return a key's best score with its marker's centre near a place.
+
+    Its centre lies within ``_REACH`` pixels of the place each way.
+    """
+    top = round(row - (size[0] - 1) / 2)
+    left = round(column - (size[1] - 1) / 2)
+    window = scores[
+        max(top - _REACH, 0) : top + _REACH + 1,
+        max(left - _REACH, 0) : left + _REACH + 1,
+    ]
+    return float(window.max()) if window.size else -1.0
+
+
+def _at_key(found: Sequence[_Key], row: float, column: float) -> bool:
+    """Return whether a place lies on a key, closer than its marker's size."""
+    return any(
+        math.dist((row, column), (key.row, key.column)) < key.size for key in found
+    )
+
+
+def _assign(
+    area: npt.NDArray[np.float32], found: Sequence[_Key], colour: int
+) -> list[_Marker]:
+    """Find the markers of the keys of one colour in its ink levels.
+
+    Matches, as ``_peaks`` finds them, are taken best first, leaving out those
+    on keys and those closer than ``_MARKER_SPACING`` of the smallest
+    marker's size to a marker already found. A match's rivals are the other
+    keys whose markers score within ``_MARKER_MARGIN`` of it near it, as
+    ``_near`` finds them; without rivals, its key's marker is fitted to the
+    image there, as ``_fit`` fits it, and with them, ``_resolve`` chooses.
+    """
+    members = [index for index, key in enumerate(found) if key.colour == colour]
+    scores = {
+        index: _scores(area, found[index].shape, found[index].mask) for index in members
+    }
+    candidates = sorted(
+        (
+            (score, row, column, index)
+            for index in members
+            for score, row, column in _peaks(scores[index], found[index].shape.shape)
+        ),
+        reverse=True,
+    )
+    spacing = _MARKER_SPACING * min(found[index].size for index in members)
+    placed: list[_Marker] = []
+    for score, row, column, index in candidates:
+        if _at_key(found, row, column) or any(
+            math.dist((row, column), (marker.row, marker.column)) < spacing
+            for marker in placed
+        ):
+            continue
+        rivals = [
+            other
+            for other in members
+            if other != index
+            and _near(scores[other], found[other].shape.shape, row, column)
+            >= score - _MARKER_MARGIN
+        ]
+        if rivals:
+            placed.append(
+                _resolve(area, found, [index, *rivals], (row, column), placed)
+            )
+        else:
+            placed.append(_fit(area, found[index], index, row, column)[1])
+    return placed
+
+
+def _resolve(
+    area: npt.NDArray[np.float32],
+    found: Sequence[_Key],
+    rivals: Sequence[int],
+    place: tuple[float, float],
+    known: Sequence[_Marker],
+) -> _Marker:
+    """Choose which of rival keys' markers best explains the image near a place.
+
+    Each rival's marker is fitted to the image there, as ``_fit`` fits it,
+    and with it the markers it partly hides, or that partly hide it, as
+    ``_story`` finds them, given the markers already known. The marker whose
+    story differs least from the image, as ``_misfits`` measures it, wins.
+    It is ambiguous if the story of a rival whose key is not in the
+    winner's differs from the image by less than ``_AMBIGUOUS`` more, as a
+    fraction of the winner's difference.
+    """
+    stories = [
+        _story(area, found, _fit(area, found[index], index, *place)[1], known)
+        for index in rivals
+    ]
+    misfits = _misfits(area, stories)
+    best = int(np.argmin(misfits))
+    told = {marker.key for marker in stories[best]}
+    others = [
+        misfit
+        for misfit, story in zip(misfits, stories, strict=True)
+        if story[0].key not in told
+    ]
+    return dataclasses.replace(
+        stories[best][0],
+        ambiguous=bool(others)
+        and min(others) - misfits[best] < _AMBIGUOUS * misfits[best],
+    )
+
+
+def _fit(
+    area: npt.NDArray[np.float32], key: _Key, index: int, row: float, column: float
+) -> tuple[float, _Marker]:
+    """Fit a key's marker to the image near a place, to a fraction of a pixel.
+
+    The marker is shifted by the fraction of a pixel that its centre lies
+    from the place, and placed up to ``_REACH`` pixels from there each way,
+    where it differs least from the image, as ``TM_SQDIFF_NORMED`` measures
+    it: the sum of the squared differences, outside the mask, over the
+    square root of the product of the sums of the squares. Unlike a
+    correlation, this tells markers of much the same shape and different
+    sizes apart, such as circles and octagons.
+
+    Returns:
+        The difference, and the marker.
+    """
+    rows, columns = key.shape.shape
+    top = round(row - (rows - 1) / 2)
+    left = round(column - (columns - 1) / 2)
+    down, across = row - (rows - 1) / 2 - top, column - (columns - 1) / 2 - left
+    moved = np.asarray(
+        cv2.warpAffine(
+            key.shape,
+            np.array([[1, 0, across], [0, 1, down]], dtype=np.float32),
+            (columns, rows),
+            flags=cv2.INTER_CUBIC,
+        ),
+        dtype=np.float32,
+    )
+    patch = _window(
+        area, top - _REACH, left - _REACH, rows + 2 * _REACH, columns + 2 * _REACH
+    )
+    misfits = cv2.matchTemplate(patch, moved, cv2.TM_SQDIFF_NORMED, mask=key.mask)
+    misfits = np.nan_to_num(misfits, nan=math.inf)
+    at_row, at_column = np.unravel_index(np.argmin(misfits), misfits.shape)
+    return float(misfits[at_row, at_column]), _Marker(
+        index,
+        row + int(at_row) - _REACH,
+        column + int(at_column) - _REACH,
+        top + int(at_row) - _REACH,
+        left + int(at_column) - _REACH,
+        moved,
+        key.mask,
+    )
+
+
+def _warn_alike(keys: Sequence[Point], found: Sequence[_Key]) -> None:
+    """Warn of keys of one colour whose markers look alike at this size.
+
+    They do if each, fitted to the other as ``_fit`` fits it to a plot,
+    differs from it by less than ``_ALIKE``.
+    """
+    for (first, one), (second, other) in itertools.combinations(
+        zip(keys, found, strict=True), 2
+    ):
+        if (
+            one.colour == other.colour
+            and max(_difference(one, other), _difference(other, one)) < _ALIKE
+        ):
+            (x, y), (u, v) = first, second
+            warnings.warn(
+                f"the markers of the keys at {x:g},{y:g} and {u:g},{v:g} look alike "
+                "at this size, so some may be taken for each other",
+                stacklevel=3,
+            )
+
+
+def _difference(one: _Key, other: _Key) -> float:
+    """Return how much a key's marker differs from another's, fitted to it."""
+    rows, columns = other.shape.shape
+    return _fit(
+        np.pad(other.shape, _REACH),
+        one,
+        0,
+        (rows - 1) / 2 + _REACH,
+        (columns - 1) / 2 + _REACH,
+    )[0]
+
+
+def _story(
+    area: npt.NDArray[np.float32],
+    found: Sequence[_Key],
+    fit: _Marker,
+    known: Sequence[_Marker],
+) -> list[_Marker]:
+    """Tell the best story of the image around a marker fitted to it.
+
+    The marker may be alone, or drawn over or under others of its colour,
+    partly hidden. Then up to ``_MOST_HIDDEN`` others are found, one by one,
+    around those found, in what they and the markers already known leave
+    uncovered, as ``_hidden`` finds them, if they explain the image, as
+    ``_explains`` judges; and each time, the marker is moved to fit what the
+    others leave uncovered. The story is whichever of the marker alone and
+    the marker with the others differs less from the image, as ``_misfits``
+    measures them.
+
+    Returns:
+        The story's markers, the fitted one first.
+    """
+    story = [fit]
+    while len(story) <= _MOST_HIDDEN and (hidden := _hiding(area, found, story, known)):
+        story.append(max(hidden, key=lambda pair: pair[0])[1])
+        covered = _footprints(area.shape, [*story[1:], *known])
+        moved = [
+            pair
+            for around in story[1:]
+            if (pair := _hidden(area, covered, found, fit.key, around)) is not None
+        ]
+        story[0] = max(moved, key=lambda pair: pair[0], default=(0, story[0]))[1]
+    if len(story) == 1:
+        return story
+    alone, together = _misfits(area, [[fit], story])
+    return story if together < alone else [fit]
+
+
+def _hiding(
+    area: npt.NDArray[np.float32],
+    found: Sequence[_Key],
+    story: Sequence[_Marker],
+    known: Sequence[_Marker],
+) -> list[tuple[float, _Marker]]:
+    """Return markers partly hidden under or over a story's, that explain the image.
+
+    Each key's marker of the story's colour is looked for around each of the
+    story's markers, in what they and the markers already known leave
+    uncovered, as ``_hidden`` finds it, and kept if it explains the image,
+    as ``_explains`` judges, with its correlation.
+    """
+    covered = _footprints(area.shape, [*story, *known])
+    return [
+        pair
+        for around in story
+        for index, key in enumerate(found)
+        if key.colour == found[around.key].colour
+        and (pair := _hidden(area, covered, found, index, around)) is not None
+        and _explains(area, *pair, [*story, *known])
+    ]
+
+
+def _hidden(
+    area: npt.NDArray[np.float32],
+    covered: npt.NDArray[np.bool_],
+    found: Sequence[_Key],
+    index: int,
+    around: _Marker,
+) -> tuple[float, _Marker] | None:
+    """Find a key's marker, partly hidden, around another, by what shows of it.
+
+    Its centre lies closer to the other's than half the sum of their sizes,
+    and what shows of it is the part of its shape, outside its mask, that
+    the ``covered`` pixels leave uncovered. That part must hold at least
+    ``_HIDDEN_SHOWN`` of its ink, and the image at least ``_MARKER_INK`` of
+    the ink of that part. It is where that part correlates best with the
+    image, its centre placed to a fraction of a pixel, at the top of a
+    parabola through the correlations each way.
+
+    Returns:
+        The correlation and the marker, or None if no place shows enough of
+        it.
+    """
+    key = found[index]
+    rows, columns = key.shape.shape
+    reach = (key.size + found[around.key].size) / 2
+    span = 2 * math.ceil(reach) + 1
+    top = round(around.row - (rows - 1) / 2) - math.ceil(reach)
+    left = round(around.column - (columns - 1) / 2) - math.ceil(reach)
+    image = _window(area, top, left, rows + span - 1, columns + span - 1)
+    hidden = _window(
+        covered.astype(np.float32), top, left, rows + span - 1, columns + span - 1
+    )
+    ones = np.ones_like(image)
+    mask = key.mask
+    ink = key.shape * (key.shape >= _CONTRAST / 255) * mask
+    showing = _sums(ones, hidden, ink)
+    present = _sums(image, hidden, (ink > 0) * mask) / np.maximum(showing, 1e-9)
+    count = np.maximum(_sums(ones, hidden, mask), 1)
+    shape_sum = _sums(ones, hidden, key.shape * mask)
+    image_sum = _sums(image, hidden, mask)
+    covariance = _sums(image, hidden, key.shape * mask) - shape_sum * image_sum / count
+    spread = np.sqrt(
+        np.maximum(_sums(ones, hidden, key.shape**2 * mask) - shape_sum**2 / count, 0)
+        * np.maximum(_sums(image**2, hidden, mask) - image_sum**2 / count, 0)
+    )
+    scores = covariance / np.maximum(spread, 1e-9)
+    offsets = np.arange(span) - math.ceil(reach)
+    shows = (
+        (showing >= _HIDDEN_SHOWN * float(np.sum(ink)))
+        & (present >= _MARKER_INK)
+        & (spread > _FLAT)
+        & (np.hypot(*np.meshgrid(offsets, offsets, indexing="ij")) <= reach)
+    )
+    if not np.any(shows):
+        return None
+    scores = np.where(shows, scores, -1)
+    at_row, at_column = np.unravel_index(
+        np.argmax(np.where(shows, scores, -np.inf)), scores.shape
+    )
+    padded = np.pad(scores, 1, constant_values=-1)
+    return float(scores[at_row, at_column]), _Marker(
+        index,
+        top
+        + at_row
+        + (rows - 1) / 2
+        + _vertex(padded[at_row : at_row + 3, at_column + 1]),
+        left
+        + at_column
+        + (columns - 1) / 2
+        + _vertex(padded[at_row + 1, at_column : at_column + 3]),
+        top + int(at_row),
+        left + int(at_column),
+        key.shape,
+        key.mask,
+    )
+
+
+def _sums(
+    levels: npt.NDArray[np.float32],
+    covered: npt.NDArray[np.float32],
+    kernel: npt.NDArray[np.float32],
+) -> npt.NDArray[np.float32]:
+    """Return the sums of levels times a kernel's, at each place, where uncovered.
+
+    A place is where the kernel's top-left corner lies, and ``covered`` is 1
+    on covered pixels and 0 elsewhere. The sums are those of correlations
+    with all the levels, less those with the covered ones.
+    """
+    kernel = kernel.astype(np.float32)
+    return np.asarray(
+        cv2.matchTemplate(levels, kernel, cv2.TM_CCORR)
+        - cv2.matchTemplate(levels * covered, kernel, cv2.TM_CCORR),
+        dtype=np.float32,
+    )
+
+
+def _explains(
+    area: npt.NDArray[np.float32],
+    score: float,
+    marker: _Marker,
+    known: Sequence[_Marker],
+) -> bool:
+    """Return whether a partly hidden marker explains the image.
+
+    It does if what shows of it correlates with the image by
+    ``_HIDDEN_SCORE`` or more, as ``_hidden`` finds it, and drawn with the
+    known markers it differs from the image, under it, at least
+    ``_HIDDEN_GAIN`` less than they do alone, as ``_misfit`` measures it.
+    """
+    if score < _HIDDEN_SCORE:
+        return False
+    rows, columns = marker.shape.shape
+    window = _window(area, marker.top, marker.left, rows, columns)
+    where = _counted([*known, marker], marker.top, marker.left, (rows, columns))
+    without, joined = (
+        _misfit(
+            _render(markers, marker.top, marker.left, (rows, columns)), window, where
+        )
+        for markers in (known, [*known, marker])
+    )
+    return joined <= (1 - _HIDDEN_GAIN) * without
+
+
+def _uncover(
+    area: Sequence[npt.NDArray[np.float32]],
+    found: Sequence[_Key],
+    placed: Sequence[_Marker],
+) -> list[_Marker]:
+    """Find markers partly hidden under those already found, or over them.
+
+    Round by round, each key's marker is looked for around each marker
+    found in the round before, in what all the markers found leave
+    uncovered, as ``_hidden`` finds it; ink of the other colours of the
+    palette covers it too. It is a marker if it explains the image, as
+    ``_explains`` judges, and lies on no key. Of those closer than
+    ``_MARKER_SPACING`` of a marker's size, of one colour, the best
+    correlated wins.
+
+    Returns:
+        The markers found.
+    """
+    added: list[_Marker] = []
+    around = list(placed)
+    inked = [levels >= _CONTRAST / 255 for levels in area]
+    while around:
+        known = [*placed, *added]
+        covered = _footprints(area[0].shape, known)
+        candidates = []
+        for marker, (index, key) in itertools.product(around, enumerate(found)):
+            hidden = covered.copy()
+            for colour, ink in enumerate(inked):
+                if colour != key.colour:
+                    hidden |= ink
+            pair = _hidden(area[key.colour], hidden, found, index, marker)
+            if (
+                pair is not None
+                and not _at_key(found, pair[1].row, pair[1].column)
+                and _explains(
+                    area[key.colour],
+                    *pair,
+                    [other for other in known if found[other.key].colour == key.colour],
+                )
+            ):
+                candidates.append(pair)
+        around = []
+        for _, candidate in sorted(candidates, key=lambda pair: -pair[0]):
+            colour = found[candidate.key].colour
+            if not any(
+                found[other.key].colour == colour
+                and math.dist(
+                    (candidate.row, candidate.column), (other.row, other.column)
+                )
+                < _MARKER_SPACING * found[candidate.key].size
+                for other in around
+            ):
+                around.append(candidate)
+        added += around
+    return added
+
+
+def _rethink(
+    area: Sequence[npt.NDArray[np.float32]],
+    found: Sequence[_Key],
+    markers: Sequence[_Marker],
+) -> list[_Marker]:
+    """Look again for markers probably hidden altogether, where series share x.
+
+    Where ``_missing`` finds a series' marker probably hidden, under a marker
+    of another key of its colour, its key's marker is fitted there, as
+    ``_fit`` fits it, and the story around it told, as ``_story`` tells it,
+    given the other markers. If the story holds a marker of the other's key
+    too, and differs less from the image than the other alone, as
+    ``_misfits`` measures them, the story replaces the other, as when the
+    other was taken to lie where the hidden marker does.
+
+    Returns:
+        The markers, with those replaced.
+    """
+    markers = list(markers)
+    for index, places in enumerate(_missing(found, markers)):
+        colour = found[index].colour
+        for row, column in places:
+            nearest = sorted(
+                (
+                    marker
+                    for marker in markers
+                    if found[marker.key].colour == colour
+                    and math.dist((row, column), (marker.row, marker.column))
+                    < (found[index].size + found[marker.key].size) / 2
+                ),
+                key=lambda marker: math.dist(
+                    (row, column), (marker.row, marker.column)
+                ),
+            )
+            for other in nearest[:1]:  # the marker it lies under
+                known = [
+                    marker
+                    for marker in markers
+                    if marker is not other and found[marker.key].colour == colour
+                ]
+                fit = _fit(area[colour], found[index], index, row, column)[1]
+                story = _story(area[colour], found, fit, known)
+                before, after = _misfits(area[colour], [[other], story])
+                if after < before and any(
+                    marker.key == other.key for marker in story[1:]
+                ):
+                    markers = [
+                        *known,
+                        *story,
+                        *(
+                            marker
+                            for marker in markers
+                            if found[marker.key].colour != colour
+                        ),
+                    ]
+    return markers
+
+
+def _missing(
+    found: Sequence[_Key], markers: Sequence[_Marker]
+) -> list[list[tuple[float, float]]]:
+    """Return where each key's markers are probably hidden altogether.
+
+    Series usually share x positions. Where other series have markers in a
+    gap between a series' markers, further apart than ``_GAP`` times its
+    markers' usual spacing, more than ``_ALIGNED`` pixels from them, its
+    marker would lie on the straight line between them. It is probably
+    hidden there if another series' marker lies closer than half the sum of
+    their sizes.
+
+    Returns:
+        For each key, the rows and columns of the places.
+    """
+    columns = np.sort([marker.column for marker in markers])
+    groups = np.split(columns, np.flatnonzero(np.diff(columns) > _ALIGNED) + 1)
+    shared = [float(group.mean()) for group in groups if len(group)]
+    places: list[list[tuple[float, float]]] = []
+    for index, key in enumerate(found):
+        own = sorted(
+            (marker.column, marker.row) for marker in markers if marker.key == index
+        )
+        lost = []
+        if len(own) > 1:
+            xs, ys = np.array(own).T
+            gaps = np.diff(xs)
+            for column in shared:
+                after = int(np.searchsorted(xs, column))
+                row = float(np.interp(column, xs, ys))
+                if (
+                    0 < after < len(xs)
+                    and gaps[after - 1] > _GAP * np.median(gaps)
+                    and min(column - xs[after - 1], xs[after] - column) > _ALIGNED
+                    and any(
+                        marker.key != index
+                        and math.dist((row, column), (marker.row, marker.column))
+                        < (key.size + found[marker.key].size) / 2
+                        for marker in markers
+                    )
+                ):
+                    lost.append((row, column))
+        places.append(lost)
+    return places
+
+
+def _window(
+    area: npt.NDArray[np.float32], top: int, left: int, rows: int, columns: int
+) -> npt.NDArray[np.float32]:
+    """Return part of an image, from its top-left corner, with zeros beyond it."""
+    window = np.zeros((rows, columns), dtype=np.float32)
+    _place(window, area, -top, -left)
+    return window
+
+
+def _place(
+    canvas: npt.NDArray[np.float32], piece: npt.NDArray[np.float32], top: int, left: int
+) -> None:
+    """Draw a piece on a canvas from its top-left corner, keeping the higher level."""
+    first, last = max(top, 0), min(top + piece.shape[0], canvas.shape[0])
+    start, stop = max(left, 0), min(left + piece.shape[1], canvas.shape[1])
+    if first < last and start < stop:
+        canvas[first:last, start:stop] = np.maximum(
+            canvas[first:last, start:stop],
+            piece[first - top : last - top, start - left : stop - left],
+        )
+
+
+def _render(
+    markers: Iterable[_Marker], top: int, left: int, size: tuple[int, int]
+) -> npt.NDArray[np.float32]:
+    """Draw markers' shapes in part of a plot area, from its top-left corner."""
+    canvas = np.zeros(size, dtype=np.float32)
+    for marker in markers:
+        _place(canvas, marker.shape, marker.top - top, marker.left - left)
+    return canvas
+
+
+def _counted(
+    markers: Iterable[_Marker], top: int, left: int, size: tuple[int, int]
+) -> npt.NDArray[np.bool_]:
+    """Return where markers' shapes count in part of a plot area, outside masks."""
+    canvas = np.zeros(size, dtype=np.float32)
+    for marker in markers:
+        _place(canvas, marker.mask, marker.top - top, marker.left - left)
+    return canvas > 0
+
+
+def _footprints(
+    size: tuple[int, ...], markers: Iterable[_Marker]
+) -> npt.NDArray[np.bool_]:
+    """Return the pixels that markers' ink covers in a plot area, and a pixel around."""
+    canvas = np.zeros(size[:2], dtype=np.float32)
+    for marker in markers:
+        _place(
+            canvas,
+            (marker.shape >= _CONTRAST / 255).astype(np.float32),
+            marker.top,
+            marker.left,
+        )
+    return cv2.dilate(canvas, np.ones((3, 3), np.uint8)) > 0
+
+
+def _misfit(
+    drawn: npt.NDArray[np.float32],
+    image: npt.NDArray[np.float32],
+    where: npt.NDArray[np.bool_],
+) -> float:
+    """Return how much a drawing differs from an image where it counts.
+
+    The difference is measured as ``_fit`` measures it, and is infinite if
+    either is blank there.
+    """
+    drawn, image = drawn[where], image[where]
+    scale = math.sqrt(float(np.sum(drawn**2)) * float(np.sum(image**2)))
+    return float(np.sum((drawn - image) ** 2)) / scale if scale else math.inf
+
+
+def _misfits(
+    area: npt.NDArray[np.float32], stories: Sequence[Sequence[_Marker]]
+) -> list[float]:
+    """Return how much each story's markers, drawn together, differ from the image.
+
+    Each is drawn in the part of the plot area that all the stories' markers
+    span, and differs from it where any of their shapes count, as
+    ``_counted`` finds them, as ``_misfit`` measures it.
+    """
+    every = [marker for story in stories for marker in story]
+    top = min(marker.top for marker in every)
+    left = min(marker.left for marker in every)
+    bottom = max(marker.top + marker.shape.shape[0] for marker in every)
+    right = max(marker.left + marker.shape.shape[1] for marker in every)
+    window = _window(area, top, left, bottom - top, right - left)
+    where = _counted(every, top, left, window.shape)
+    return [
+        _misfit(_render(story, top, left, window.shape), window, where)
+        for story in stories
+    ]
 
 
 def _to_colour(levels: npt.NDArray[np.float64]) -> Colour:

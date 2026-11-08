@@ -16,6 +16,7 @@ from figrecover import (
     Axes,
     Calibration,
     Image,
+    MarkerSeries,
     Panel,
     Point,
     __version__,
@@ -41,6 +42,9 @@ LABELLED = str(EXAMPLES / "labelled.png")
 MARKER_LOCATIONS = ["-l", "55,83", "-l", "627,83", "-l", "55,185"]
 MARKER_KEYS = ["-m", "148,18", "-m", "260,18", "-m", "377,18", "-m", "483,18"]
 MARKERS = [str(EXAMPLES / "markers.png"), *POINTS, *MARKER_LOCATIONS]
+# The positions of the legend's markers in similar.png, overlapping.png and
+# coloured.png, which examples/make_examples.py prints with LOCATIONS.
+KEYED = ["-m", "98,339", "-m", "184,339", "-m", "270,339", "-m", "355,339"]
 LOGARITHMIC = str(EXAMPLES / "logarithmic.png")
 BINARY = str(EXAMPLES / "binary.png")
 PANELS = str(EXAMPLES / "panels.png")
@@ -103,6 +107,31 @@ def quadratic(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
 def trend(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
     """Return the black line that examples/make_examples.py draws in series.png."""
     return 0.4 + 0.2 * x
+
+
+def ripple(level: int) -> Curve:
+    """Return a curve that examples/make_examples.py draws in similar.png."""
+    return lambda x: 0.3 + 0.66 * level + 0.1 * np.sin(x + level)
+
+
+def rising(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return a line that examples/make_examples.py draws in overlapping.png."""
+    return 1.5 + 0.15 * (x - 5)
+
+
+def falling(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return a line that examples/make_examples.py draws in overlapping.png."""
+    return 1.5 - 0.15 * (x - 5)
+
+
+def shallow(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return a line that examples/make_examples.py draws in overlapping.png."""
+    return 1.5 + 0.05 * (x - 5)
+
+
+def above(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return a line that examples/make_examples.py draws in overlapping.png."""
+    return rising(x) + 0.05
 
 
 def read_csv(text: str, header: str = "x,y") -> npt.NDArray[np.float64]:
@@ -209,19 +238,139 @@ def test_finds_series_by_their_markers(
     counts = [np.count_nonzero(data[:, 0] == series) for series in range(1, 5)]
     found = ", ".join(map(str, counts))
     assert captured.err == f"figrecover: markers found in each series: {found}\n"
-    for series, curve in enumerate([decay, growth, wave, trend], start=1):
-        points = data[data[:, 0] == series, 1:]
-        # The markers lie every half unit from 0.5 to 9.5. Some are hidden
-        # where the series cross.
-        assert len(points) >= 18
-        np.testing.assert_allclose(
-            points[:, 0], np.round(2 * points[:, 0]) / 2, atol=0.03
-        )
-        np.testing.assert_allclose(points[:, 1], curve(points[:, 0]), atol=0.03)
+    # The markers lie every half unit from 0.5 to 9.5, even where the series
+    # cross.
+    assert_marks(data, [decay, growth, wave, trend], [19, 19, 19, 19])
     image = cv2.imread(str(preview))
     assert image is not None
     for red, green, blue in cli.SERIES_COLOURS[:4]:  # each series' colour
         assert np.any(np.all(image == (blue, green, red), axis=-1))
+
+
+def assert_marks(
+    data: npt.NDArray[np.float64], curves: Sequence[Curve], counts: Sequence[int]
+) -> None:
+    """Check how many of each series' markers lie on its true curve.
+
+    The markers lie every half unit from 0.5 to 9.5, and each series gives
+    ``counts`` of them, within 0.03 of its curve, and no others.
+    """
+    for series, (curve, count) in enumerate(zip(curves, counts, strict=True), 1):
+        points = data[data[:, 0] == series, 1:]
+        on_curve = (np.abs(points[:, 0] - np.round(2 * points[:, 0]) / 2) < 0.03) & (
+            np.abs(points[:, 1] - curve(points[:, 0])) < 0.03
+        )
+        assert np.count_nonzero(on_curve) == count
+        assert len(points) == count
+
+
+def test_tells_apart_markers_alike_in_shape(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main([str(EXAMPLES / "similar.png"), *POINTS, *LOCATIONS, *KEYED]) == 0
+
+    captured = capsys.readouterr()
+    # Circles look like hexagons and octagons at 6 points, but are told apart.
+    assert captured.err == (
+        "figrecover: the markers of the keys at 98,339 and 270,339 look alike at "
+        "this size, so some may be taken for each other\n"
+        "figrecover: the markers of the keys at 98,339 and 355,339 look alike at "
+        "this size, so some may be taken for each other\n"
+        "figrecover: markers found in each series: 19, 19, 19, 19\n"
+    )
+    data = read_csv(captured.out, header="series,x,y")
+    assert_marks(data, [ripple(level) for level in range(4)], [19] * 4)
+
+
+def test_tells_apart_markers_of_one_shape_by_colour(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main([str(EXAMPLES / "coloured.png"), *POINTS, *LOCATIONS, *KEYED]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.err == "figrecover: markers found in each series: 19, 19, 19, 19\n"
+    data = read_csv(captured.out, header="series,x,y")
+    assert_marks(data, [ripple(level) for level in range(4)], [19] * 4)
+
+
+def test_finds_markers_partly_hidden_and_reports_those_hidden(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    image = str(EXAMPLES / "overlapping.png")
+
+    assert main([image, *POINTS, *LOCATIONS, *KEYED]) == 0
+
+    # Diamonds cover the tops of the circles; the series cross at x = 5, where
+    # a square hides a circle altogether, and two markers hide the circle at
+    # 5.5 and at 4, but for the lower edge.
+    captured = capsys.readouterr()
+    assert captured.err == (
+        "figrecover: markers found in each series: 16, 20, 17, 18\n"
+        "figrecover: series 1: 16 found, 3 probably hidden near x = 4, 5, 5.5\n"
+        "figrecover: series 3: 17 found, 2 probably hidden near x = 4.5, 5.5\n"
+        "figrecover: series 4: 18 found, 1 probably hidden near x = 5\n"
+    )
+    data = read_csv(captured.out, header="series,x,y")
+    on_curves = [16, 19, 16, 17]
+    for series, (curve, count) in enumerate(
+        zip([rising, falling, shallow, above], on_curves, strict=True), start=1
+    ):
+        points = data[data[:, 0] == series, 1:]
+        assert (
+            np.count_nonzero(np.abs(points[:, 1] - curve(points[:, 0])) < 0.03) == count
+        )
+
+
+@pytest.mark.parametrize("quality", [60, 25])
+def test_finds_markers_in_compressed_images(
+    quality: int, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    compressed = tmp_path / "markers.jpg"
+    image = cv2.imread(MARKERS[0])
+    assert image is not None
+    cv2.imwrite(str(compressed), image, [cv2.IMWRITE_JPEG_QUALITY, quality])
+
+    assert main([str(compressed), *MARKERS[1:], *MARKER_KEYS]) == 0
+
+    data = read_csv(capsys.readouterr().out, header="series,x,y")
+    assert_marks(data, [decay, growth, wave, trend], [19, 19, 19, 19])
+
+
+def test_reports_markers_ambiguous_hidden_or_missing(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # On markers.png, x runs from 0 at pixel 55 to 10 at 627.
+    found = [
+        MarkerSeries(
+            np.array([[112.2, 100], [140.8, 100]]),
+            np.array([True, False]),
+            np.empty((0, 2)),
+        ),
+        MarkerSeries(
+            np.array([[112.2, 120], [198, 120]]),
+            np.array([False, True]),
+            np.array([[140.8, 120], [169.6, 120]]),
+        ),
+        MarkerSeries(np.empty((0, 2)), np.empty(0, dtype=np.bool_), np.empty((0, 2))),
+    ]
+
+    def find(
+        _image: Image, _keys: Sequence[Point], _origin: Point
+    ) -> list[MarkerSeries]:
+        warnings.warn("two keys look alike", stacklevel=2)
+        return found
+
+    monkeypatch.setattr(cli, "find_marker_series", find)
+    assert main([*MARKERS, *MARKER_KEYS[:6]]) == 0
+
+    assert capsys.readouterr().err == (
+        "figrecover: two keys look alike\n"
+        "figrecover: markers found in each series: 2, 2, 0\n"
+        "figrecover: series 3: found no markers like the key at 377,18\n"
+        "figrecover: series 1: 2 found, 1 of them ambiguous near x = 1\n"
+        "figrecover: series 2: 2 found, 1 of them ambiguous near x = 2.5, and 2 "
+        "probably hidden near x = 1.5, 2\n"
+    )
 
 
 def test_writes_one_series_without_a_series_column(

@@ -24,7 +24,7 @@ from .digitize import (
     Colour,
     Image,
     find_colours,
-    find_markers,
+    find_marker_series,
     load_image,
     remove_grid,
     trace_curves,
@@ -45,6 +45,9 @@ from .pdf import (
 
 type Ring = tuple[Point, int, Colour]
 """A ring to draw in the preview: its centre, its radius and its colour."""
+
+PLACE_PIXELS = 5
+"""Pixels across which the x positions of markers are rounded, when printed."""
 
 SERIES_COLOURS: list[Colour] = [  # matplotlib's, to draw series of markers in
     (31, 119, 180),
@@ -220,7 +223,7 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="X,Y",
         help="pixel position of the marker in a series' legend key, measured from "
         "the bottom-left corner; repeat for each series, to find the series by "
-        "the shapes of their markers rather than by colour",
+        "the shapes and colours of their markers, rather than as curves of a colour",
     )
     parser.add_argument(
         "-o",
@@ -319,7 +322,7 @@ def _trace(
     origin = plot.calibration.origin
     rings: list[Ring] = [(pixel, 6, (0, 0, 255)) for pixel in plot.pixels]
     if arguments.markers:
-        curves = _counted(find_markers(traced, arguments.markers, origin))
+        curves = _found_markers(traced, arguments.markers, plot.calibration)
         colours = _series_colours(len(curves))
         rings += _marker_rings(arguments.markers, curves, colours)
     else:
@@ -356,7 +359,8 @@ def _digitize_pdf(arguments: argparse.Namespace) -> None:
         calibration, positions, names = _read_axes(read_pdf_axes(drawing), None)
     if arguments.markers:
         curves = _counted(
-            find_pdf_markers(drawing, arguments.markers, calibration.origin)
+            find_pdf_markers(drawing, arguments.markers, calibration.origin),
+            arguments.markers,
         )
         colours = _series_colours(len(curves))
     else:
@@ -524,10 +528,68 @@ def _find_colours(
     return colours
 
 
-def _counted(markers: list[npt.NDArray[np.float64]]) -> list[npt.NDArray[np.float64]]:
-    """Print how many markers were found in each series, and return them."""
+def _found_markers(
+    image: Image, keys: Sequence[Point], calibration: Calibration
+) -> list[npt.NDArray[np.float64]]:
+    """Find the series of markers in a plot, and print what was found.
+
+    Warnings, such as of keys whose markers look alike, are printed, and how
+    many markers each series has, as ``_counted`` prints them; and for each
+    series, how many of its markers are ambiguous and how many are probably
+    hidden, and where, in the plot's x units.
+
+    Returns:
+        The pixel positions of each series' markers.
+    """
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        found = find_marker_series(image, keys, calibration.origin)
+    for warning in caught:
+        print(f"figrecover: {warning.message}", file=sys.stderr)
+    markers = _counted([series.points for series in found], keys)
+    for number, series in enumerate(found, start=1):
+        notes = []
+        if np.any(series.ambiguous):
+            places = _places(calibration, series.points[series.ambiguous])
+            notes.append(
+                f"{np.count_nonzero(series.ambiguous)} of them ambiguous near x = "
+                f"{places}"
+            )
+        if len(series.hidden):
+            places = _places(calibration, series.hidden)
+            notes.append(f"{len(series.hidden)} probably hidden near x = {places}")
+        if notes:
+            message = f"series {number}: {len(series.points)} found, "
+            print(f"figrecover: {message}{', and '.join(notes)}", file=sys.stderr)
+    return markers
+
+
+def _places(calibration: Calibration, pixels: npt.NDArray[np.float64]) -> str:
+    """Return the x data coordinates of pixel positions, written out.
+
+    Each is rounded to the power of ten no larger than ``PLACE_PIXELS``
+    pixels span there, as markers are several pixels across.
+    """
+    data = calibration.to_data(pixels)[:, 0]
+    beside = calibration.to_data(pixels + np.array([PLACE_PIXELS, 0]))[:, 0]
+    digits = -np.floor(np.log10(np.abs(beside - data)))
+    return ", ".join(f"{round(x, int(n)):g}" for x, n in zip(data, digits, strict=True))
+
+
+def _counted(
+    markers: list[npt.NDArray[np.float64]], keys: Sequence[Point]
+) -> list[npt.NDArray[np.float64]]:
+    """Print how many markers were found in each series, and return them.
+
+    A series without markers, whose key is given in ``keys``, gets a warning,
+    as its key or the axes may be wrong.
+    """
     counts = ", ".join(str(len(series)) for series in markers)
     print(f"figrecover: markers found in each series: {counts}", file=sys.stderr)
+    for number, (series, (x, y)) in enumerate(zip(markers, keys, strict=True), 1):
+        if not len(series):
+            message = f"found no markers like the key at {x:g},{y:g}"
+            print(f"figrecover: series {number}: {message}", file=sys.stderr)
     return markers
 
 
