@@ -36,6 +36,7 @@ GRID_LOCATIONS = ["-l", "80,44", "-l", "576,44", "-l", "80,167"]
 SPECTRUM = [str(EXAMPLES / "spectrum.png"), *POINTS]
 GRID = [str(EXAMPLES / "grid.png"), *POINTS]
 SERIES = [str(EXAMPLES / "series.png"), *POINTS, *LOCATIONS]
+STYLES = [str(EXAMPLES / "styles.png"), *POINTS, *LOCATIONS]
 LABELLED = str(EXAMPLES / "labelled.png")
 # The pixel positions of POINTS, and of the legend's markers, that
 # examples/make_examples.py prints.
@@ -226,6 +227,37 @@ def test_finds_series_by_their_markers(
     assert image is not None
     for red, green, blue in cli.SERIES_COLOURS[:4]:  # each series' colour
         assert np.any(np.all(image == (blue, green, red), axis=-1))
+
+
+def test_tells_curves_of_one_colour_apart_by_style(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main([*STYLES, "-n", "3"]) == 0
+
+    captured = capsys.readouterr()
+    options = "-c 040404:solid -c 040404:dashed -c 040404:dotted"  # most pixels first
+    assert captured.err == f"figrecover: colours: {options}\n"
+    assert_recovers_styles(captured.out, [decay, growth, wave])
+
+
+def test_traces_the_given_styles(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main([*STYLES, "-c", "000000:dotted", "-c", "000000:solid"]) == 0
+
+    assert_recovers_styles(capsys.readouterr().out, [wave, decay])
+
+
+def assert_recovers_styles(text: str, curves: Sequence[Curve]) -> None:
+    """Check that each series in CSV output follows its true curve, in order.
+
+    A dashed or dotted curve may start and end a gap in from the axes.
+    """
+    data = read_csv(text, header="series,x,y")
+    assert set(data[:, 0]) == set(range(1, len(curves) + 1))
+    for series, curve in enumerate(curves, start=1):
+        x, y = data[data[:, 0] == series, 1:].T
+        assert x.min() < 0.15
+        assert x.max() > 9.85
+        np.testing.assert_allclose(y, curve(x), atol=0.04)
 
 
 def test_writes_one_series_without_a_series_column(
@@ -807,10 +839,7 @@ def test_can_be_cancelled(monkeypatch: pytest.MonkeyPatch) -> None:
             [*STYLES_AT_POINTS, "-c", "000000", "-c", "0" * 6],
             "-c 000000 is given twice",
         ),
-        (
-            [*SERIES, "-c", "000000:solid"],
-            "curves are told apart by style in PDF files only",
-        ),
+        ([*SERIES, "-c", "000000:dashed"], "no dashed series of colour #000000"),
         (
             [*STYLES_AT_POINTS, "-c", "000000:solid2", "-c", "000000:solid2"],
             "-c 000000:solid2 is given twice",

@@ -13,12 +13,15 @@ from figrecover import (
     Colour,
     Image,
     Point,
+    Series,
     find_colours,
     find_markers,
+    find_series,
     load_image,
     remove_grid,
     trace_curve,
     trace_curves,
+    trace_series,
 )
 
 type Function = Callable[[npt.NDArray[np.float64]], npt.NDArray[np.float64]]
@@ -44,6 +47,11 @@ def rising(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
 def falling(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
     """Return a line that crosses ``curve`` and ``rising``."""
     return 3 - 0.25 * x
+
+
+def high(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return a wave above ``rising`` and ``falling``."""
+    return 3.6 + 0.2 * np.sin(x)
 
 
 def to_row(y_pixel: float) -> int:
@@ -440,6 +448,158 @@ def test_trace_curve_follows_both_sides_of_a_loop() -> None:
         np.abs(middle[:, 1] - 2), np.sqrt(1 - ((middle[:, 0] - 5) / 3) ** 2), atol=0.05
     )
     assert np.count_nonzero(middle[:, 1] > 2) == np.count_nonzero(middle[:, 1] < 2)
+    # Its two sides fold back into each other at its ends, so are one curve.
+    (series,) = find_series(image, calibration.origin)
+    np.testing.assert_array_equal(series.points, trace_curve(image, calibration.origin))
+
+
+def dashed(
+    image: Image, function: Function, pattern: Sequence[float], colour: Colour = BLACK
+) -> None:
+    """Draw a curve in a synthetic plot in dashes, 2 pixels wide.
+
+    The pattern holds the lengths in pixels along the curve of the dashes and
+    gaps, in turn from a dash.
+    """
+    x = np.linspace(0.5, 10, 2000)
+    heights = ORIGIN[1] + function(x) * PIXELS_PER_UNIT[1]
+    points = np.column_stack(
+        (ORIGIN[0] + x * PIXELS_PER_UNIT[0] - 0.5, HEIGHT - heights - 0.5)
+    )
+    along = np.concatenate(
+        [[0], np.cumsum(np.linalg.norm(np.diff(points, axis=0), axis=1))]
+    )
+    drawn = np.searchsorted(np.cumsum(pattern), along % sum(pattern), side="right") % 2
+    for piece in np.split(points, np.flatnonzero(np.diff(drawn)) + 1)[::2]:
+        cv2.polylines(
+            image,
+            [(piece * 16).round().astype(np.int32)],
+            isClosed=False,
+            color=colour,
+            thickness=2,
+            lineType=cv2.LINE_AA,
+            shift=4,
+        )
+
+
+def assert_on(series: Series, calibration: Calibration, function: Function) -> None:
+    """Check that a series lies along a function, with a point in every column.
+
+    At least 98% of its points must lie within 0.05 of the function, about
+    two pixels, as where a dash of another curve lies along it as it crosses,
+    a few may not.
+    """
+    data = calibration.to_data(series.points)
+    assert len(data) == len(np.unique(series.points[:, 0])) > 300
+    assert np.mean(np.abs(data[:, 1] - function(data[:, 0])) <= 0.05) >= 0.98
+
+
+def test_trace_series_tells_curves_of_one_colour_apart_by_style() -> None:
+    image, calibration = synthetic_plot(curves=[(BLACK, rising)])
+    dashed(image, falling, (12, 8))  # crossing the solid line
+    dashed(image, high, (1, 8))  # dots
+
+    (found,) = trace_series(image, [BLACK], calibration.origin)
+
+    # Most pixels first.
+    assert [series.style for series in found] == ["solid", "dashed", "dotted"]
+    for series, function in zip(found, [rising, falling, high], strict=True):
+        assert series.width == pytest.approx(4, abs=1)  # 2 pixels, antialiased
+        assert_on(series, calibration, function)
+    assert [series.name for series in find_series(image, calibration.origin)] == [
+        series.name for series in found
+    ]
+
+
+def test_trace_series_names_dashes_and_dots_dashdot() -> None:
+    image, calibration = synthetic_plot(curves=[])
+    dashed(image, curve, (12, 8, 1, 8))
+
+    ((series,),) = trace_series(image, [BLACK], calibration.origin)
+
+    # A colour of one curve gives the points that trace_curves gives.
+    assert series.style == "dashdot"
+    np.testing.assert_array_equal(series.points, trace_curve(image, calibration.origin))
+
+
+def test_trace_series_keeps_crossing_curves_of_one_colour_apart() -> None:
+    curves = [(BLACK, rising), (BLACK, falling), (BLACK, curve)]
+    image, calibration = synthetic_plot(curves=curves)
+
+    found = find_series(image, calibration.origin)
+
+    assert [series.style for series in found] == ["solid"] * 3
+    starts = [series.points[0, 1] for series in found]
+    for series, function in zip(
+        [found[index] for index in np.argsort(starts)],
+        [rising, curve, falling],
+        strict=True,
+    ):
+        assert_on(series, calibration, function)
+
+
+def test_trace_series_joins_the_pieces_of_a_curve_hidden_in_places() -> None:
+    image, calibration = synthetic_plot(curves=[(BLACK, rising), (BLACK, falling)])
+    image[70:95, 320:370] = 255  # hides the rising line, 50 pixels wide
+
+    found = find_series(image, calibration.origin)
+
+    assert len(found) == 2
+    lower, upper = sorted(found, key=lambda series: series.points[-1, 1])
+    data = calibration.to_data(lower.points)
+    np.testing.assert_allclose(data[:, 1], falling(data[:, 0]), atol=0.05)
+    data = calibration.to_data(upper.points)
+    np.testing.assert_allclose(data[:, 1], rising(data[:, 0]), atol=0.05)
+    assert len(data) > 280
+
+
+def gentle(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return a line rising gently from where ``steep`` starts."""
+    return 1 + 0.1 * (x - 0.5)
+
+
+def steep(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    """Return a line rising steeply from where ``gentle`` starts."""
+    return 1 + 0.3 * (x - 0.5)
+
+
+def mirrored(function: Function) -> Function:
+    """Return a function mirrored left to right, so that what starts ends."""
+    return lambda x: function(10.5 - x)
+
+
+@pytest.mark.parametrize("ending", [False, True])
+def test_trace_series_keeps_curves_from_one_point_apart(*, ending: bool) -> None:
+    functions: list[Function] = [gentle, steep]
+    if ending:  # curves drawn to one point
+        functions = [mirrored(function) for function in functions]
+    image, calibration = synthetic_plot(
+        curves=[(BLACK, function) for function in functions]
+    )
+
+    found = find_series(image, calibration.origin)
+
+    low = min(found, key=lambda series: float(np.max(series.points[:, 1])))
+    lower, upper = (low, *(series for series in found if series is not low))
+    for series, function in zip([lower, upper], functions, strict=True):
+        data = calibration.to_data(series.points)
+        np.testing.assert_allclose(data[:, 1], function(data[:, 0]), atol=0.05)
+
+
+def test_trace_series_gives_markers_alone_as_one_series() -> None:
+    image, calibration = synthetic_plot(curves=[])
+    xs = np.arange(1.0, 10.0)
+    heights = ORIGIN[1] + curve(xs) * PIXELS_PER_UNIT[1]
+    for x, height in zip(xs, heights, strict=True):
+        column = round(ORIGIN[0] + x * PIXELS_PER_UNIT[0])
+        cv2.circle(image, (column, to_row(float(height))), 4, BLUE, -1)
+
+    ((series,),) = trace_series(image, [BLUE], calibration.origin)
+
+    assert series.style == "markers"
+    np.testing.assert_array_equal(
+        series.points, trace_curves(image, [BLUE], calibration.origin)[0]
+    )
 
 
 def test_trace_curve_ignores_short_marks_beside_a_curve() -> None:

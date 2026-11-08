@@ -12,10 +12,12 @@ from .digitize import (
     Style,
     find_colours,
     find_markers,
+    find_series,
     load_image,
     remove_grid,
     trace_curve,
     trace_curves,
+    trace_series,
 )
 from .panels import Panel, read_panels
 from .pdf import (
@@ -53,6 +55,7 @@ __all__ = [
     "find_pdf_colours",
     "find_pdf_markers",
     "find_pdf_series",
+    "find_series",
     "load_image",
     "load_pdf",
     "read_axes",
@@ -65,4 +68,5 @@ __all__ = [
     "trace_curves",
     "trace_pdf_curves",
     "trace_pdf_series",
+    "trace_series",
 ]

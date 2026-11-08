@@ -27,11 +27,12 @@ from .digitize import (
     Image,
     Series,
     Style,
-    find_colours,
     find_markers,
+    find_series,
     load_image,
     remove_grid,
     trace_curves,
+    trace_series,
 )
 from .panels import Panel, read_panels
 from .pdf import (
@@ -218,9 +219,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "--series",
         type=_count,
         metavar="N",
-        help="trace the N most common curve colours, or in a PDF file the N "
-        "longest curves, told apart by colour and style, then reuse the printed "
-        "-c options (default: 1)",
+        help="trace N curves, told apart by colour, then by style: in an image "
+        "the most common colours first, in a PDF file the longest curves first; "
+        "then reuse the printed -c options (default: 1)",
     )
     curves.add_argument(
         "-c",
@@ -231,9 +232,9 @@ def _build_parser() -> argparse.ArgumentParser:
         type=_selector,
         metavar="RRGGBB[:STYLE]",
         help="hexadecimal colour of a curve to trace, such as 1f77b4, taking "
-        "every curve of that colour as one; in a PDF file, follow it with a style, "
-        f"one of {', '.join(STYLES)}, for the longest curve of that colour drawn "
-        "so, such as 000000:dashed, or with a number too for another, such as "
+        "every curve of that colour as one; follow it with a style, one of "
+        f"{', '.join(STYLES)}, for the first curve of that colour drawn so, such "
+        "as 000000:dashed, or with a number too for another, such as "
         "000000:solid2; repeat for several curves",
     )
     curves.add_argument(
@@ -348,21 +349,19 @@ def _trace(
         curves = _counted(find_markers(traced, arguments.markers, origin))
         colours = _series_colours(len(curves))
         rings += _marker_rings(arguments.markers, curves, colours)
-    else:
-        styled = [selector for selector in arguments.colours if selector.style]
-        if styled:
-            msg = (
-                "curves are told apart by style in PDF files only, so give "
-                f"-c {bytes(styled[0].colour).hex()} without a style"
-            )
-            raise ValueError(msg)
-        colours = [selector.colour for selector in arguments.colours]
-        colours = colours or _find_colours(
-            lambda count: find_colours(traced, count, origin),
-            arguments.series,
-            _prefix(plot.name),
+    elif arguments.colours:
+        curves = _chosen(
+            arguments.colours,
+            lambda colours: trace_curves(traced, colours, origin),
+            lambda colours: trace_series(traced, colours, origin),
         )
-        curves = trace_curves(traced, colours, origin)
+        colours = _distinct([selector.colour for selector in arguments.colours])
+    else:
+        found = _found(
+            find_series(traced, origin), arguments.series, _prefix(plot.name)
+        )
+        curves = [series.points for series in found]
+        colours = _distinct([series.colour for series in found])
     return curves, colours, rings
 
 
@@ -400,13 +399,13 @@ def _digitize_pdf(arguments: argparse.Namespace) -> None:
             lambda colours: trace_pdf_curves(drawing, colours, origin),
             lambda colours: trace_pdf_series(drawing, colours, origin),
         )
-        colours = [selector.colour for selector in arguments.colours]
+        colours = _distinct([selector.colour for selector in arguments.colours])
     else:
         found = _found(
             find_pdf_series(drawing, calibration.origin), arguments.series, ""
         )
         curves = [series.points for series in found]
-        colours = [series.colour for series in found]
+        colours = _distinct([series.colour for series in found])
 
     if arguments.preview:
         corner = np.array(drawing.box[:2])
@@ -550,27 +549,11 @@ def _prefix(name: str | None) -> str:
     return f"panel {name}: " if name else ""
 
 
-def _find_colours(
-    find: Callable[[int], list[Colour]], count: int | None, prefix: str
-) -> list[Colour]:
-    """Find the curve colours, and print the -c options to reuse if -n was given.
-
-    ``find`` finds the colours of a given number of curves, and ``prefix``
-    starts the message, naming the panel.
-    """
-    colours = find(count or 1)
-    if count is not None:
-        options = " ".join(f"-c {bytes(colour).hex()}" for colour in colours)
-        print(f"figrecover: {prefix}colours: {options}", file=sys.stderr)
-    return colours
-
-
 def _found(every: Sequence[Series], count: int | None, prefix: str) -> list[Series]:
-    """Return the longest series, and print the -c options to reuse if -n was given.
+    """Return the first series found, and print the -c options to reuse if -n was given.
 
-    ``every`` holds every series found, longest first, ``count`` is the
-    number given with -n, and ``prefix`` starts the message, naming the
-    panel.
+    ``every`` holds every series found, in order, ``count`` is the number
+    given with -n, and ``prefix`` starts the message, naming the panel.
 
     Raises:
         ValueError: If fewer series were found than were asked for.
@@ -671,6 +654,17 @@ def _counted(markers: list[npt.NDArray[np.float64]]) -> list[npt.NDArray[np.floa
     counts = ", ".join(str(len(series)) for series in markers)
     print(f"figrecover: markers found in each series: {counts}", file=sys.stderr)
     return markers
+
+
+def _distinct(colours: list[Colour]) -> list[Colour]:
+    """Return the colours to draw curves in, in the preview: their own, if distinct.
+
+    Curves that share a colour, told apart by style, are each drawn in a
+    colour of its own instead, as series of markers are.
+    """
+    if len(set(colours)) == len(colours):
+        return colours
+    return _series_colours(len(colours))
 
 
 def _series_colours(count: int) -> list[Colour]:
