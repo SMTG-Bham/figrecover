@@ -114,8 +114,8 @@ in blue, so you can check the result at a glance:
 | `-p`, `--point X,Y` | Data coordinates of a reference point. Repeat for at least three. Default: [read the axes](#reading-the-axes). |
 | `-l`, `--location X,Y` | Pixel position of each reference point, in the same order. Default: click on them. |
 | `--log AXES` | The axes of the `-p` reference points that are logarithmic: `x`, `y` or `xy`. Default: neither. |
-| `-n`, `--series N` | Trace the N most common curve colours, and print the matching `-c` options. Default: 1. |
-| `-c`, `--colour RRGGBB` | Hexadecimal colour of a curve to trace, such as `1f77b4`. Repeat for several curves. |
+| `-n`, `--series N` | Trace the N most common curve colours, or in a PDF file the N longest curves, and print the matching `-c` options. Default: 1. |
+| `-c`, `--colour RRGGBB[:STYLE]` | Hexadecimal colour of a curve to trace, such as `1f77b4`, or in a PDF file with a style too, such as `000000:dashed`. Repeat for several curves. See [Several curves](#several-curves). |
 | `-m`, `--marker X,Y` | Pixel position of the marker in a series' legend key, or in a PDF file its position in points, to find the series by its markers' shape. Repeat for each series. See [Markers](#markers). |
 | `-o`, `--output FILE` | CSV file to write. Default: standard output. |
 | `--preview IMAGE` | Also save a faded copy of the image with the recovered curves drawn on it. |
@@ -163,6 +163,26 @@ across the plot, such as grid lines, and very pale ones, less than 64 levels
 from the background; trace a pale curve with `-c` instead. Curves in
 neighbouring colours of a colour map, such as viridis, are told apart, and two
 `-c` colours that match the same curve are an error.
+
+In a PDF file, curves that share a colour are told apart by how they are
+drawn: by the width of their lines, and by their dashes, whose pattern names
+their style, `solid`, `dashed`, `dotted` or `dashdot`; a dash at most two line
+widths long is a dot. Separate lines of one style are curves of their own.
+`-n` lists each as a curve, longest first, and prints the `-c` option that
+picks it, the colour followed by the style:
+
+```bash
+figrecover examples/styles.pdf -n 3
+```
+
+```text
+figrecover: colours: -c 000000:dotted -c 000000:dashed -c 000000:solid
+```
+
+A second curve of the same colour and style is numbered, such as
+`-c 000000:solid2`, and the colour alone, `-c 000000`, still takes every curve
+of that colour, as one. In an image, curves of one colour are traced as one,
+for now; see [Limitations](#limitations).
 
 ### Markers
 
@@ -604,11 +624,14 @@ its ends.
   characters. The axis lines are the straight lines nearest the tick labels,
   and each tick lies exactly at its tick mark, or its grid line: the mark
   nearest the middle of its label, or, for rotated labels, the end.
-- Curves are told apart by the colour they are drawn in, and `-n` and `-c`
-  work as they do for images; `-n` ranks curves by their length. Lines
-  straight along an axis, such as axis lines, tick marks, grid lines and the
-  lines in a legend's keys, are left out, as are closed shapes, such as
-  frames, filled areas, and points hidden beyond the limits of the axes.
+- Curves are told apart by the colour, width and dashes they are drawn with,
+  as [Several curves](#several-curves) shows, and `-n` ranks them by their
+  length. Paths of one style make one curve where each starts at the end of
+  the last, or carries it on a little beyond, as the dashes of a line drawn
+  dash by dash do. Lines straight along an axis, such as axis lines, tick
+  marks, grid lines and the lines in a legend's keys, are left out, as are
+  closed shapes, such as frames, filled areas, and points hidden beyond the
+  limits of the axes.
 - Markers, as in scatter plots and lines with markers, give the points they
   mark, exactly: matplotlib places each marker on the page at its point. A
   colour drawn with markers gives their points, in the order they are drawn,
@@ -747,6 +770,22 @@ over grid lines in the images that it draws. `find_pdf_markers(drawing, keys,
 origin)` finds series by the shapes of their markers, as `find_markers` does
 in an image, from the position of a marker of each series in points.
 
+`find_pdf_series(drawing, origin)` returns every curve and series of markers
+on the page, longest first, each as a `Series`, told apart by how it is drawn
+as well as by colour. A `Series` has its `colour`; its `style`, one of
+`STYLES`: `"solid"`, `"dashed"`, `"dotted"` or `"dashdot"` for a line, or
+`"markers"`; its `width`, that of its line or the size of its markers, in
+points; its `points`; and its `name`, such as `000000-dashed`.
+`trace_pdf_series(drawing, colours, origin)` returns the series of each
+colour:
+
+```python
+from figrecover import find_pdf_series, load_pdf
+
+for series in find_pdf_series(load_pdf("examples/styles.pdf"), (57.6, 31.68)):
+    print(series.name, series.width)  # 000000-dotted 1.5, 000000-dashed 1.5, ...
+```
+
 ## How it works
 
 1. The image is read in colour and stretched to the full 0–255 range.
@@ -841,20 +880,28 @@ With a PDF file, steps 1 to 7 give way to these:
    aligned by the ends nearest the marks, as rotated labels are. Each tick
    lies at the mark nearest its label's middle or end, within a quarter of the
    tick spacing.
-4. The curves are the paths that are stroked but not filled, by colour,
-   without their subpaths that are closed or that lie along a straight
-   horizontal or vertical line. Points left of or below the axes, or outside
-   the path's clip, are left out. Curved pieces give their ends, not their
-   control points. Curves are ranked by the length of the lines through their
-   points.
+4. The curves are the paths that are stroked but not filled, without their
+   subpaths that are closed or that lie along a straight horizontal or
+   vertical line. Points left of or below the axes, or outside the path's
+   clip, are left out. Curved pieces give their ends, not their control
+   points. Curves are told apart by the colour, width and dashes of their
+   paths, scaled to the page, and named by their dashes: solid without gaps,
+   dotted if each dash is at most twice the width long, dashed if none is,
+   and dashdot if some are. A path carries on the curve of its style whose
+   last path it starts at the end of, or at most three times the longer
+   one's length beyond, in a direction turning by at most 30° from both;
+   others are curves of their own. With `-c` and a colour alone, every curve
+   of that colour is one. Curves are ranked by the length of the lines
+   through their points.
 5. Markers are shapes at most 36 points across, other than a straight
    horizontal or vertical line, drawn at least twice. A form that holds one,
    as matplotlib draws them, marks the point where its origin lies; a marker
    drawn as a filled or closed path marks the middle of its box. Markers with
    a text level with them, right of and above the axes, beginning or ending
    within four of its heights, are a legend's keys and left out. A colour
-   drawn with markers gives their points in place of its lines, ranked by the
-   length of the line through them. With `-m`, the marker nearest each
+   drawn with markers gives their points in place of its lines, a series for
+   each shape and fill, ranked by the length of the line through them. With
+   `-m`, the marker nearest each
    position, within 10 points, picks those of the same colours whose outlines
    lie within 0.01 points of its own.
 6. Each image drawn on the page, with any transparency on white, is traced as
@@ -863,10 +910,11 @@ With a PDF file, steps 1 to 7 give way to these:
 
 ## Limitations
 
-- Curves are told apart by colour, or by the shapes of their markers, so
-  curves of the same colour without markers are traced as one, and line
-  styles are ignored. Series told apart by their markers give only the
-  markers that can be seen, not the lines between them.
+- In an image, curves are told apart by colour, or by the shapes of their
+  markers, so curves of the same colour without markers are traced as one,
+  and line styles are ignored; in a PDF file, by their widths and dashes
+  too. Series told apart by their markers give only the markers that can be
+  seen, not the lines between them.
 - A curve needs enough pixels to span the plot, so short curves and sparse
   dotted lines may not be found.
 - Where curves cross, the one drawn underneath loses a few pixels, and its
