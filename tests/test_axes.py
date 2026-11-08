@@ -871,9 +871,9 @@ def write_slanted(
     """
     font = cv2.FONT_HERSHEY_SIMPLEX
     (width, height), _ = cv2.getTextSize(content, font, 0.5, 1)
-    side = width + 8
+    side = (width + 9) // 2 * 2  # even, so the text's middle lies on a pixel's edge
     across = np.full((side, side, 3), 255, dtype=np.uint8)
-    cv2.putText(across, content, (4, (side + height) // 2), font, 0.5, (0, 0, 0), 1)
+    cv2.putText(across, content, (4, (side + height) // 2), font, 0.5, (0, 0, 0), 2)
     turn = cv2.getRotationMatrix2D((side / 2, side / 2), angle, 1)
     slanted = cv2.warpAffine(across, turn, (side, side), borderValue=(255, 255, 255))
     top, left = HEIGHT - round(y + side / 2), round(x - side / 2)
