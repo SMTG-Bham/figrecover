@@ -453,6 +453,47 @@ def test_trace_curves_matches_a_translucent_line_by_its_colour() -> None:
     assert_follows(pixels, calibration, curve)
 
 
+def banded(image: Image, colour: Colour, function: Function, opacity: float) -> Image:
+    """Shade a band 0.75 either side of a function over a plot, translucently."""
+    shaded = image.astype(np.float64)
+    x = np.linspace(0.5, 10, 500)
+    columns = ORIGIN[0] + x * PIXELS_PER_UNIT[0]
+    edges = [
+        HEIGHT - ORIGIN[1] - (function(x) + side) * PIXELS_PER_UNIT[1]
+        for side in (0.75, -0.75)
+    ]
+    outline = np.concatenate(
+        [
+            np.column_stack((columns, edges[0])),
+            np.column_stack((columns, edges[1]))[::-1],
+        ]
+    )
+    band = np.zeros(image.shape[:2], dtype=np.uint8)
+    cv2.fillPoly(band, [outline.round().astype(np.int32)], 1)
+    inside = band > 0
+    shaded[inside] = (1 - opacity) * shaded[inside] + opacity * np.array(colour)
+    return shaded.round().astype(np.uint8)
+
+
+def test_find_colours_skips_where_translucent_bands_overlap() -> None:
+    # Each curve has a band; where the bands overlap, they show a colour of
+    # their own, which is no curve's.
+    image, calibration = synthetic_plot(curves=[(BLUE, curve), (ORANGE, rising)])
+    for colour, function in ((BLUE, curve), (ORANGE, rising)):
+        image = banded(image, colour, function, 0.3)
+
+    found = find_colours(image, 2, calibration.origin)
+
+    assert sorted(found) == sorted([BLUE, ORANGE])
+
+
+def test_find_colours_finds_a_curve_inside_its_own_band() -> None:
+    image, calibration = synthetic_plot(curves=[(BLUE, curve)])
+    image = banded(image, BLUE, curve, 0.2)
+
+    assert find_colours(image, 1, calibration.origin) == [BLUE]
+
+
 def test_find_colours_finds_mid_tones_on_a_grey_background() -> None:
     image, calibration = synthetic_plot(grid=254, curves=[(PINK, curve)])
     image[np.all(image == 255, axis=-1)] = GREY

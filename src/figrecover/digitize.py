@@ -37,6 +37,8 @@ _SAME_INK = 6  # inks whose directions from the background are this many degrees
 _INK_BIN_WIDTH = 8  # directions are grouped in bins this many levels wide, about 4°
 _MIXED = 12  # groups of a colour's pixels this many degrees apart are several inks
 _MIXED_SHARE = 0.25  # such groups each hold this fraction of the colour's pixels
+_PART = 0.1  # an overlap of translucent colours shows this much of each, or more
+_SURROUNDED = 0.5  # and this fraction of the pixels around it show one or the other
 _MIN_CURVE_FRACTION = 0.75  # a curve has at least this many pixels per column
 _MIN_INK_FRACTION = 0.5  # or a thin one this much ink per column, at full strength
 _CONTRAST = 64  # a curve differs from the background by this much in some channel
@@ -232,6 +234,7 @@ def _curve_colours(image: Image, origin: Point) -> list[Colour]:
         if np.abs(colour - palette[0]).max() >= _CONTRAST
         and not _fills_areas(labels == index)
         and not _draws_grid(labels == index)
+        and not _composite(palette, labels, index)
     ]
 
 
@@ -833,6 +836,35 @@ def _fills_areas(in_colour: npt.NDArray[np.bool_]) -> bool:
     """
     depth = cv2.distanceTransform(in_colour.astype(np.uint8), cv2.DIST_L2, 3)
     return bool(np.median(depth[in_colour]) > _AREA_DEPTH)
+
+
+def _composite(
+    colours: npt.NDArray[np.float64], labels: npt.NDArray[np.intp], index: int
+) -> bool:
+    """Return whether a colour is where two others overlap, rather than a curve's.
+
+    Translucent colours drawn over each other, such as two shaded bands,
+    give a colour whose offset from the background, ``colours[0]``, is a
+    blend of theirs: at least ``_PART`` of each, within ``_FINE_SAME_COLOUR``.
+    The overlap lies among them, so ``_SURROUNDED`` of the pixels around its
+    own, within 2 pixels, show one of the two, while those around a curve
+    show mostly the background.
+    """
+    own = labels == index
+    ring = (cv2.dilate(own.astype(np.uint8), np.ones((5, 5))) > 0) & ~own
+    around = np.bincount(labels[ring], minlength=len(colours))
+    offsets = colours - colours[0]
+    others = (other for other in range(1, len(colours)) if other != index)
+    for first, second in itertools.combinations(others, 2):
+        if around[first] + around[second] < _SURROUNDED * np.count_nonzero(ring):
+            continue
+        blend = offsets[[first, second]].T
+        parts = np.linalg.lstsq(blend, offsets[index])[0]
+        if np.all(parts >= _PART) and (
+            np.linalg.norm(blend @ parts - offsets[index]) <= _FINE_SAME_COLOUR
+        ):
+            return True
+    return False
 
 
 def _draws_grid(in_colour: npt.NDArray[np.bool_]) -> bool:
