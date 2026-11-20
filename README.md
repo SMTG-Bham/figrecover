@@ -1528,6 +1528,15 @@ With an SVG file, step 1 gives way to this:
    comment, with its mathtext written plainly, in the box of its outlines or
    characters.
 
+## Accuracy
+
+Across 100 ChartX line charts and 102 PlotQA dot-line charts, figrecover
+scored 0.322 mean numeric F1 with automatic axes and a supplied series
+count. On the PlotQA subset, supplying tick calibration raised the score
+from 0.230 to 0.553. These figures cover the paired public items only.
+The benchmark gives per-chart results, error percentiles, failure counts
+and the comparison with other systems. [Public chart benchmark](benchmarks/README.md).
+
 ## Limitations
 
 Use `--trace-range` to inspect the vertical stroke extent of a raster curve,

@@ -133,6 +133,7 @@ select = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
+"benchmarks/*.py" = ["INP001"]  # standalone benchmark scripts
 "examples/*.py" = ["INP001"]  # standalone scripts, not a package
 "tests/**" = [
   "D1",      # docstrings are welcome in tests but not required
