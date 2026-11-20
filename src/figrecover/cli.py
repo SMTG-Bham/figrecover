@@ -20,7 +20,7 @@ import numpy as np
 import numpy.typing as npt
 
 from . import __version__, interactive, metadata
-from .axes import Axes
+from .axes import SMALL_IMAGE, Axes
 from .calibration import MIN_POINTS, Calibration, Point
 from .digitize import (
     STYLES,
@@ -536,6 +536,8 @@ def _digitize(arguments: argparse.Namespace) -> list[_Table]:
     colours: list[Colour] = []
     rings: list[Ring] = []
     for plot in plots:
+        if max(given.shape[:2]) <= SMALL_IMAGE:
+            _print_resolution(plot)
         try:
             traced, traced_colours, marked, bars, ranges = _trace(plot, arguments)
         except ValueError as error:
@@ -585,6 +587,20 @@ def _digitize(arguments: argparse.Namespace) -> list[_Table]:
         ]
         _save_preview(arguments.preview, given, curves, colours, rings)
     return tables
+
+
+def _print_resolution(plot: _Plot) -> None:
+    """Report data units per pixel, or the factor per pixel for a logarithmic axis."""
+    fit = plot.calibration
+    steps = [
+        f"a factor of {10 ** abs(step):.4g}" if log else f"{abs(step):.4g} data units"
+        for step, log in ((fit.x_scale, fit.x_log), (fit.y_scale, fit.y_log))
+    ]
+    print(
+        f"figrecover: {_prefix(plot.name)}one pixel spans {steps[0]} on x "
+        f"and {steps[1]} on y",
+        file=sys.stderr,
+    )
 
 
 def _level(image: Image, angle: float | None) -> tuple[Image, Levelling]:

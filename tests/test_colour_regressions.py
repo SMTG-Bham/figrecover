@@ -166,3 +166,34 @@ def test_interpolated_points_without_stroke_pixels_have_empty_ranges() -> None:
     (spans,) = _stroke_ranges(image, [ink], [curve], (0, 0))
     assert np.isnan(spans[:2]).all()
     np.testing.assert_array_equal(spans[2], (48, 50))
+
+
+@pytest.mark.parametrize(("dpi", "limit"), [(40, 0.015), (50, 0.01)])
+def test_small_plots_recover_axes_and_curve(
+    dpi: int, limit: float, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    figure = Figure(figsize=(6.4, 4), dpi=dpi)
+    axes = figure.subplots()
+    axes.plot(X, np.exp(-X / 4) * np.cos(2 * X), color="black", linewidth=1.5)
+    axes.set(xlabel="Time (s)", ylabel="Voltage (mV)", xlim=(0, 10), ylim=(-1, 1))
+    axes.spines[["top", "right"]].set_visible(False)
+    path = tmp_path / "small.png"
+    figure.savefig(path, format="png", backend="agg")
+    assert main([str(path)]) == 0
+    captured = capsys.readouterr()
+    assert "one pixel spans " in captured.err
+    x, y = np.loadtxt(io.StringIO(captured.out), delimiter=",", skiprows=1).T
+    assert len(x) >= 0.9 * axes.bbox.width
+    assert np.max(np.abs(y - np.exp(-x / 4) * np.cos(2 * x))) / 2 <= limit
+
+
+def test_close_thin_curves_at_fifty_dpi_keep_their_columns() -> None:
+    figure = Figure(figsize=(6.4, 4), dpi=50)
+    axes = figure.subplots()
+    for colour, offset in (("C0", 0), ("C1", 0.08)):
+        axes.plot(X, 0.6 * np.sin(X) + offset, color=colour, linewidth=1.5)
+    axes.set(xlim=(0, 10), ylim=(-1, 1))
+    first, second = find_series(image_of(figure), (40, 22))
+    for series in (first, second):
+        assert len(np.unique(series.points[:, 0])) >= 0.9 * axes.bbox.width
+    assert first.colour != second.colour
