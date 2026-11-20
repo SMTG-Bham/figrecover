@@ -5,6 +5,7 @@ import functools
 import itertools
 import math
 import os
+import re
 from collections.abc import Callable, Collection, Iterator, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
@@ -12,7 +13,7 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 
-from . import pdf_figures
+from . import legends, pdf_figures
 from .axes import (
     _LINE_COVER,
     _SCALE,
@@ -59,6 +60,7 @@ type Box = pdf_figures.Box
 PREVIEW_SCALE = 2
 """Pixels per point in a page drawn as an image, as for a preview."""
 
+_MIN_SAMPLE, _MAX_SAMPLE = 3, 60  # legend sample length in points
 _FLAT = 1e-3  # a line whose ends are this many points apart across it is straight
 _TURNED = 1  # characters turned this many degrees apart or more are on separate lines
 _GAP = 0.6  # characters this many font sizes apart or more are in separate texts
@@ -619,7 +621,11 @@ def trace_pdf_series(
 
 
 def find_pdf_markers(
-    drawing: Drawing, keys: Sequence[Point], origin: Point = (0, 0)
+    drawing: Drawing,
+    keys: Sequence[Point],
+    origin: Point = (0, 0),
+    *,
+    key_drawing: Drawing | None = None,
 ) -> list[npt.NDArray[np.float64]]:
     """Find the markers of each series in a plot on a page of a PDF, by their shapes.
 
@@ -641,6 +647,8 @@ def find_pdf_markers(
             legend key, in points.
         origin: Position where the axes cross, in points.
 
+        key_drawing: Whole figure when the legend is outside the panel.
+
     Returns:
         One ``(n, 2)`` array per key, of the ``(x, y)`` positions in points
         of the points that the markers mark, in the order they are drawn. A
@@ -651,7 +659,8 @@ def find_pdf_markers(
             markers of the same series.
     """
     markers = _markers(drawing)
-    picked = [_picked(markers, key) for key in keys]
+    key_markers = markers if key_drawing is None else _markers(key_drawing)
+    picked = [_picked(key_markers, key) for key in keys]
     for (first, marker), (second, other) in itertools.combinations(
         zip(keys, picked, strict=True), 2
     ):
@@ -1712,3 +1721,120 @@ def _holds(box: Box, point: Point) -> bool:
 def _written(box: Box | None) -> str:
     """Return a box's edges as they are written for --box."""
     return ",".join(f"{edge:g}" for edge in box or ())
+
+
+def pdf_legend(drawing: Drawing) -> list[legends.Entry]:
+    """Associate vector text with nearby short horizontal strokes and markers."""
+    samples: list[tuple[Box, Colour]] = []
+    for path in drawing.paths:
+        if path.stroke is None or not path.subpaths:
+            continue
+        points = np.vstack(path.subpaths)
+        lo, hi = points.min(axis=0), points.max(axis=0)
+        if _MIN_SAMPLE <= hi[0] - lo[0] <= _MAX_SAMPLE and hi[1] - lo[1] < _FLAT:
+            samples.append(((lo[0], lo[1], hi[0], hi[1]), path.stroke))
+    for marker in _markers(drawing):
+        x, y = marker.centre
+        w, h = np.ptp(marker.outline, axis=0)
+        samples.append(((x - w / 2, y - h / 2, x + w / 2, y + h / 2), marker.colour))
+    entries = []
+    for text in drawing.texts:
+        if not any(c.isalpha() for c in text.text):
+            continue
+        em = text.top - text.bottom
+        candidates = [
+            (box, ink)
+            for box, ink in samples
+            if 0 <= text.left - box[2] <= 2.5 * em
+            and abs(text.y - (box[1] + box[3]) / 2) < 0.55 * em
+        ]
+        if candidates:
+            (left, bottom, right, top), colour = max(
+                candidates, key=lambda pair: pair[0][2]
+            )
+            entries.append(
+                legends.Entry(
+                    text.text,
+                    colour,
+                    ((left + right) / 2, (bottom + top) / 2),
+                    (
+                        left - 1,
+                        min(bottom, text.bottom) - 1,
+                        text.right + 1,
+                        max(top, text.top) + 1,
+                    ),
+                    right - left,
+                    top - bottom,
+                )
+            )
+    return legends.grouped(entries)
+
+
+def legend_panels(drawing: Drawing) -> list[tuple[str, Drawing]]:
+    """Split distinctly clipped panels of a vector figure, retaining their tick text."""
+    ox, oy, right, top = drawing.box
+    clips = sorted(
+        {
+            path.clip
+            for path in drawing.paths
+            if path.stroke is not None
+            and path.clip != drawing.box
+            and path.clip[2] - path.clip[0] > 0.12 * (right - ox)
+            and path.clip[3] - path.clip[1] > 0.12 * (top - oy)
+        },
+        key=lambda box: (-round(box[3]), box[0]),
+    )
+    if len(clips) <= 1 or any(
+        _overlap(a, b) for a, b in itertools.combinations(clips, 2)
+    ):
+        return []
+    panels = []
+    for n, clip in enumerate(clips, 1):
+        left, bottom, end, ceiling = clip
+        # The space following the preceding panel contains this panel's
+        # axis title and tick labels. Its far edge is the next panel's origin.
+        before = [
+            b[2] for b in clips if b[2] <= left and b[1] < ceiling and b[3] > bottom
+        ]
+        after = [
+            b[0] for b in clips if b[0] >= end and b[1] < ceiling and b[3] > bottom
+        ]
+        below = [b[3] for b in clips if b[3] <= bottom and b[0] < end and b[2] > left]
+        above = [b[1] for b in clips if b[1] >= ceiling and b[0] < end and b[2] > left]
+        area = (
+            max(before, default=ox),
+            max(below, default=oy),
+            min(after, default=right),
+            min(above, default=top),
+        )
+        texts = tuple(t for t in drawing.texts if _holds(area, (t.x, t.y)))
+        label = min(
+            (t for t in texts if re.fullmatch(r"\([a-zA-Z]\)", t.text)),
+            key=lambda t: abs(t.x - (left + end) / 2) + abs(t.y - ceiling),
+            default=None,
+        )
+        name = label.text[1] if label else str(n)
+        paths = tuple(
+            p
+            for p in drawing.paths
+            if p.clip == clip
+            or (
+                p.clip == drawing.box
+                and p.subpaths
+                and _holds(
+                    area,
+                    (
+                        float(np.vstack(p.subpaths)[:, 0].mean()),
+                        float(np.vstack(p.subpaths)[:, 1].mean()),
+                    ),
+                )
+            )
+        )
+        pictures = tuple(p for p in drawing.pictures if _overlap(p.box, clip))
+        panels.append(
+            (
+                name,
+                replace(drawing, box=area, texts=texts, paths=paths, pictures=pictures),
+            )
+        )
+    return panels

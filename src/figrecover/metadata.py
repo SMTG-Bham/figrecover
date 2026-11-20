@@ -13,7 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import __version__
+from . import __version__, legends
 from .axes import Axes
 from .calibration import Calibration, Point, Tick
 from .digitize import Image
@@ -49,6 +49,7 @@ class Region:
     label: tuple[int, int, int, int] | None = None
     fill: tuple[int, int, int] | None = None
     annotations: list[tuple[float, float, float, float]] = field(default_factory=list)
+    legend: list[legends.Entry] = field(default_factory=list)
 
     @classmethod
     def from_image(cls, image: Image, part: Image, offset: Point) -> Region:
@@ -194,7 +195,19 @@ def recorded_axes(path: Path, image: Path) -> tuple[Axes, Region]:
         fit = Calibration.from_ticks(
             xs, ys, (float(ox), float(oy)), x_log=x["log"], y_log=y["log"]
         )
-        return Axes(fit, xs, ys, x["title"], y["title"]), Region(**entry["region"])
+        region = Region(**entry["region"])
+        region.legend = [
+            legends.Entry(
+                row["name"],
+                tuple(row["colour"]),
+                tuple(row["key"]),
+                tuple(row["box"]),
+                row["width"],
+                row["height"],
+            )
+            for row in entry["region"].get("legend", [])
+        ]
+        return Axes(fit, xs, ys, x["title"], y["title"]), region
     except (StopIteration, KeyError, TypeError, IndexError, ValueError) as error:
         msg = f"{path} has no valid single-plot calibration for {image}"
         raise ValueError(msg) from error
@@ -207,7 +220,7 @@ def reproduce(
 ) -> str:
     """Build a shell-quoted command using the original positions and selected series."""
     args = ["figrecover", record.path]
-    if record.points and not record.region.annotations:
+    if record.points and not (record.region.annotations or record.region.legend):
         for flag, pairs in (("-p", record.points), ("-l", record.locations)):
             for x, y in pairs:
                 args.extend((flag, f"{float(x)!r},{float(y)!r}"))

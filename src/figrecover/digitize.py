@@ -629,7 +629,12 @@ def find_markers(
 
 
 def find_marker_series(
-    image: Image, keys: Sequence[Point], origin: Point = (0, 0)
+    image: Image,
+    keys: Sequence[Point],
+    origin: Point = (0, 0),
+    *,
+    key_image: Image | None = None,
+    offset: Point = (0, 0),
 ) -> list[MarkerSeries]:
     """Find the markers of each series in a plot, by their shapes and colours.
 
@@ -670,6 +675,9 @@ def find_marker_series(
         origin: Pixel position where the axes cross, measured from the
             bottom-left corner.
 
+        key_image: Whole figure holding the keys when tracing a panel.
+        offset: Bottom-left position of this panel in the whole figure.
+
     Returns:
         The markers of each key's series, with positions measured as for
         ``find_markers``.
@@ -677,7 +685,7 @@ def find_marker_series(
     Raises:
         ValueError: If there is no marker at a key, or there is no plot area.
     """
-    offsets = _offsets(image)
+    offsets = _offsets(image if key_image is None else key_image)
     palette, colours = _key_palette([_key_colour(offsets, key) for key in keys])
     levels = _ink_levels(offsets, palette)
     shapes = [
@@ -692,8 +700,8 @@ def find_marker_series(
             mask,
             colour,
             max(shape.shape) - 2,
-            height - top - y - 0.5,
-            x - left - 0.5,
+            height - top - (y - offset[1]) - 0.5,
+            x - offset[0] - left - 0.5,
         )
         for (shape, mask), colour, (x, y) in zip(shapes, colours, keys, strict=True)
     ]
@@ -878,7 +886,12 @@ def _without_bars(labels: npt.NDArray[np.intp], index: int) -> npt.NDArray[np.bo
 
 
 def find_marker_error_bars(
-    image: Image, keys: Sequence[Point], origin: Point = (0, 0)
+    image: Image,
+    keys: Sequence[Point],
+    origin: Point = (0, 0),
+    *,
+    key_image: Image | None = None,
+    offset: Point = (0, 0),
 ) -> list[ErrorBars]:
     """Find the markers of each series by their shapes, and their error bars.
 
@@ -894,6 +907,9 @@ def find_marker_error_bars(
         origin: Pixel position where the axes cross, measured from the
             bottom-left corner.
 
+        key_image: Whole figure holding the keys when tracing a panel.
+        offset: Bottom-left position of this panel in the whole figure.
+
     Returns:
         The error bars of each key's markers, whose points are those that
         ``find_markers`` returns, with the ends of their bars as
@@ -902,8 +918,13 @@ def find_marker_error_bars(
     Raises:
         ValueError: If there is no marker at a key, or there is no plot area.
     """
-    markers = find_markers(image, keys, origin)
-    levels = _grey_levels(image)
+    markers = [
+        s.points
+        for s in find_marker_series(
+            image, keys, origin, key_image=key_image, offset=offset
+        )
+    ]
+    levels = _grey_levels(image if key_image is None else key_image)
     plot, left, top = _plot_area(image, origin)
     ink = _grey_levels(plot) >= _CONTRAST / 255
     height = image.shape[0]

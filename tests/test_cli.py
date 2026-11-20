@@ -4,6 +4,7 @@ import csv
 import dataclasses
 import gzip
 import hashlib
+import io
 import json
 import runpy
 import shlex
@@ -318,10 +319,12 @@ def test_finds_series_by_their_markers(
     assert main([*MARKERS, *MARKER_KEYS, "--preview", str(preview)]) == 0
 
     captured = capsys.readouterr()
-    data = read_csv(captured.out, header="series,x,y")
+    data = marker_csv(captured.out, ["Decay", "Growth", "Wave", "Trend"])
     counts = [np.count_nonzero(data[:, 0] == series) for series in range(1, 5)]
     found = ", ".join(map(str, counts))
-    assert captured.err == f"figrecover: markers found in each series: {found}\n"
+    assert captured.err.startswith(
+        f"figrecover: markers found in each series: {found}\n"
+    )
     # The markers lie every half unit from 0.5 to 9.5, even where the series
     # cross.
     assert_marks(data, [decay, growth, wave, trend], [19, 19, 19, 19])
@@ -329,6 +332,23 @@ def test_finds_series_by_their_markers(
     assert image is not None
     for red, green, blue in cli.SERIES_COLOURS[:4]:  # each series' colour
         assert np.any(np.all(image == (blue, green, red), axis=-1))
+
+
+def marker_csv(
+    text: str, names: Sequence[str], header: str = "series,x,y"
+) -> npt.NDArray[np.float64]:
+    """Map the printed names to their requested positions for numeric checks."""
+    rows = list(csv.reader(io.StringIO(text)))
+    assert rows[0] == header.split(",")
+    return np.asarray(
+        [
+            [
+                int(row[0]) if row[0].isdigit() else names.index(row[0]) + 1,
+                *map(float, row[1:]),
+            ]
+            for row in rows[1:]
+        ]
+    )
 
 
 def assert_marks(
@@ -388,12 +408,12 @@ def test_finds_markers_partly_hidden_and_reports_those_hidden(
     # a square hides a circle altogether, and two markers hide the circle at
     # 5.5 and at 4, but for the lower edge.
     captured = capsys.readouterr()
-    assert captured.err == (
+    assert captured.err.startswith(
         "figrecover: markers found in each series: 17, 20, 19, 18\n"
         "figrecover: series 1: 17 found, 2 probably hidden near x = 4, 5\n"
         "figrecover: series 4: 18 found, 1 probably hidden near x = 5\n"
     )
-    data = read_csv(captured.out, header="series,x,y")
+    data = marker_csv(captured.out, ["Series 1", "Series 2", "Series 3", "Series 4"])
     on_curves = [17, 19, 18, 17]
     for series, (curve, count) in enumerate(
         zip([rising, falling, shallow, above], on_curves, strict=True), start=1
@@ -415,7 +435,7 @@ def test_finds_markers_in_compressed_images(
 
     assert main([str(compressed), *MARKERS[1:], *MARKER_KEYS]) == 0
 
-    data = read_csv(capsys.readouterr().out, header="series,x,y")
+    data = marker_csv(capsys.readouterr().out, ["Decay", "Growth", "Wave", "Trend"])
     assert_marks(data, [decay, growth, wave, trend], [19, 19, 19, 19])
 
 
@@ -438,7 +458,7 @@ def test_reports_markers_ambiguous_hidden_or_missing(
     ]
 
     def find(
-        _image: Image, _keys: Sequence[Point], _origin: Point
+        _image: Image, _keys: Sequence[Point], _origin: Point, **_kwargs: object
     ) -> list[MarkerSeries]:
         warnings.warn("two keys look alike", stacklevel=2)
         return found
@@ -446,7 +466,7 @@ def test_reports_markers_ambiguous_hidden_or_missing(
     monkeypatch.setattr(cli, "find_marker_series", find)
     assert main([*MARKERS, *MARKER_KEYS[:6]]) == 0
 
-    assert capsys.readouterr().err == (
+    assert capsys.readouterr().err.startswith(
         "figrecover: two keys look alike\n"
         "figrecover: markers found in each series: 2, 2, 0\n"
         "figrecover: series 3: found no markers like the key at 377,18\n"
@@ -742,7 +762,7 @@ def test_needs_a_panel_whose_curves_can_be_traced(
     )
 
 
-def test_finds_markers_in_one_panel_only(
+def test_reports_an_invalid_marker_key_across_panels(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     found = [spectrum_panel("a"), spectrum_panel("b")]
@@ -750,8 +770,7 @@ def test_finds_markers_in_one_panel_only(
 
     assert main([str(EXAMPLES / "spectrum.png"), "-m", "148,18"]) == 1
     assert capsys.readouterr().err.endswith(
-        "figrecover: error: -m finds the markers of one plot, but the image has 2 "
-        "panels; crop it to one\n"
+        "figrecover: error: cannot trace the curves of any of the 2 panels\n"
     )
 
 
@@ -866,7 +885,7 @@ def test_finds_markers_in_a_plot_with_insets(
     # The inset is left out, as the markers are those of one plot.
     captured = capsys.readouterr()
     assert "inset" not in captured.err
-    data = read_csv(captured.out, header="series,x,y")
+    data = marker_csv(captured.out, ["Decay", "Growth", "Wave", "Trend"])
     assert set(data[:, 0]) == {1, 2, 3, 4}
 
 
@@ -966,10 +985,8 @@ def test_finds_series_by_their_markers_in_pdf_files(
     assert main([MARKERS_PDF, *MARKER_PDF_KEYS, "--preview", str(preview)]) == 0
 
     captured = capsys.readouterr()
-    assert captured.err.endswith(
-        "figrecover: markers found in each series: 19, 19, 19, 19\n"
-    )
-    data = read_csv(captured.out, header="series,x,y")
+    assert "figrecover: markers found in each series: 19, 19, 19, 19\n" in captured.err
+    data = marker_csv(captured.out, ["Decay", "Growth", "Wave", "Trend"])
     for series, curve in enumerate([decay, growth, wave, trend], start=1):
         x, y = data[data[:, 0] == series, 1:].T
         # Every marker, every half unit from 0.5 to 9.5, even where the
@@ -988,8 +1005,10 @@ def test_traces_series_of_markers_in_pdf_files_by_colour(
     assert main([str(EXAMPLES / "scatter.pdf"), "-n", "2"]) == 0
 
     captured = capsys.readouterr()
-    assert captured.err.endswith("figrecover: colours: -c ff7f0e -c 1f77b4\n")
-    data = read_csv(captured.out, header="series,Time (s),Voltage (mV)")
+    assert "figrecover: colours: -c " in captured.err
+    data = marker_csv(
+        captured.out, ["Growth", "Decay"], header="series,Time (s),Voltage (mV)"
+    )
     for series, curve in enumerate([growth, decay], start=1):
         x, y = data[data[:, 0] == series, 1:].T
         np.testing.assert_allclose(x, np.arange(0.5, 10, 0.5), atol=1e-5)

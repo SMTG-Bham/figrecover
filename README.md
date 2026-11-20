@@ -214,6 +214,12 @@ locations. Figures with multiple panels or insets record each plot separately.
 
 ### Several curves
 
+When a legend is read, CSV series use its printed names and follow its
+order. Explicit `-c` and `-m` selections keep the supplied order. Each
+unmatched series keeps its number. Legend rows inside the axes are excluded
+from tracing, including unframed samples. With manual calibration and no
+OCR, geometric samples can still be masked and the series keep numbers.
+
 Give the number of curves with `-n`:
 
 ```bash
@@ -353,6 +359,10 @@ colour of markers is a curve of its own unless it passes through the markers
 alone, as a line joining them does.
 
 ### Markers
+
+For a shared marker legend, give each key position in the original figure.
+The same samples are used to find markers in each panel, including when the
+legend sits above the panels or inside only one panel.
 
 When the series are told apart by their markers, as in many spreadsheet
 charts, give the pixel position of the marker in each series' legend key with
@@ -745,6 +755,11 @@ figrecover examples/logarithmic.png \
 ```
 
 ### Several panels
+
+A figure-level legend applies across the panels. A legend inside one panel
+also names matching series in the others. The CLI reports the legend scope,
+names and reusable selectors. In vector PDFs, distinct plot clips and the
+printed legend allow the panels to retain separate calibrations.
 
 A figure of several plots, such as panels labelled (a), (b), (c), is read
 panel by panel when figrecover reads the axes:
