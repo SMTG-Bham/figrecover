@@ -132,7 +132,7 @@ def test_manual_annotation_replay_without_ocr(
     assert main(replay[1:]) == 0
     assert capsys.readouterr().out == original.out
     assert main([str(image), *points]) == 0
-    assert "in the plot area" not in capsys.readouterr().err
+    assert "0 text regions and 1 arrow or bracket object" in capsys.readouterr().err
     assert (
         main([str(image), *points, "--no-annotations", "--metadata", str(sidecar)]) == 0
     )

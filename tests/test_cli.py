@@ -381,8 +381,10 @@ def test_tells_apart_markers_alike_in_shape(
         "figrecover: the markers of the keys at 98,339 and 355,339 look alike at "
         "this size, so some may be taken for each other\n"
         "figrecover: markers found in each series: 19, 19, 19, 19\n"
+        "figrecover: legend (in this plot): Series 1 = -m 99,338.5, "
+        "Series 2 = -m 184.5,339, Series 3 = -m 270.5,338.5, Series 4 = -m 356,338.5\n"
     )
-    data = read_csv(captured.out, header="series,x,y")
+    data = marker_csv(captured.out, [f"Series {i}" for i in range(1, 5)])
     assert_marks(data, [ripple(level) for level in range(4)], [19] * 4)
 
 
@@ -392,8 +394,12 @@ def test_tells_apart_markers_of_one_shape_by_colour(
     assert main([str(EXAMPLES / "coloured.png"), *POINTS, *LOCATIONS, *KEYED]) == 0
 
     captured = capsys.readouterr()
-    assert captured.err == "figrecover: markers found in each series: 19, 19, 19, 19\n"
-    data = read_csv(captured.out, header="series,x,y")
+    assert captured.err == (
+        "figrecover: markers found in each series: 19, 19, 19, 19\n"
+        "figrecover: legend (in this plot): Series 1 = -c 1f77b4, "
+        "Series 2 = -c ff7f0e, Series 3 = -c 2ca02c, Series 4 = -c d62728\n"
+    )
+    data = marker_csv(captured.out, [f"Series {i}" for i in range(1, 5)])
     assert_marks(data, [ripple(level) for level in range(4)], [19] * 4)
 
 
