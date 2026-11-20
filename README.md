@@ -133,6 +133,8 @@ in blue, so you can check the result at a glance:
 | `-m`, `--marker X,Y` | Pixel position of the marker in a series' legend key, or in a PDF file its position in points, to find the series by its markers' shape and colour. Repeat for each series. See [Markers](#markers). |
 | `-o`, `--output FILE` | CSV file to write. Default: standard output. |
 | `--preview PATH` | Save a preview image. For several inputs, give a directory for the previews. |
+| `--metadata FILE` | Save a JSON record of the digitization. |
+| `--axes-from FILE` | Reuse the recorded ticks and axis titles for a matching single plot. |
 | `--remove-grid` | Paint over grid lines before tracing. |
 | `--level DEGREES` | The angle by which the image's axes are turned anticlockwise, or clockwise if negative, to turn it back by. Default: find it; see [Turned images](#turned-images). |
 | `--no-level` | Read the image as it is, without levelling it. |
@@ -160,6 +162,26 @@ Repeated stems receive a number, such as `plot.2.preview.png`. With `-o`
 and named panels, each panel gets a CSV containing its sources. A failed
 input is reported by name. The remaining inputs still run and the command
 returns status 1 if any failed.
+
+### Recording a digitization
+
+```bash
+figrecover examples/labelled.png -o voltage.csv --metadata voltage.json
+```
+
+The JSON records the command arguments, UTC time, software versions and the
+SHA-256 of each input. Each plot records its reference points or ticks, axis
+titles and scales, largest fit residual in pixels (points for vector drawings),
+and the number of CSV rows for each series. Automatically discovered curves
+also record their measured colour, style and stroke width. Marker keys and
+clicked locations use the original input coordinates. Each input retains its
+warnings and any error, including when another input in the batch succeeds.
+
+For a single plot, run the command in its `reproduce` field from the original
+working directory. It writes the CSV to standard output. Keep the JSON with
+the input: `--axes-from` checks the input hash and restores the measured ticks
+and titles without OCR. For hand calibration the command includes the recorded
+locations. Figures with multiple panels or insets record each plot separately.
 
 ### Several curves
 

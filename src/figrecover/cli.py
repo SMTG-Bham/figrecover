@@ -19,7 +19,7 @@ import cv2
 import numpy as np
 import numpy.typing as npt
 
-from . import __version__, interactive
+from . import __version__, interactive, metadata
 from .axes import Axes
 from .calibration import MIN_POINTS, Calibration, Point
 from .digitize import (
@@ -125,6 +125,7 @@ class _Plot:
     calibration: Calibration
     pixels: list[Point]
     columns: tuple[str, str]
+    axes: Axes | None = None
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -148,7 +149,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         The exit status.
     """
     parser = _build_parser()
-    arguments = parser.parse_intermixed_args(argv)
+    raw = list(sys.argv[1:] if argv is None else argv)
+    arguments = parser.parse_intermixed_args(raw)
+    arguments.argv = raw
+    if arguments.axes_from and arguments.points:
+        parser.error("choose --axes-from or -p")
     if arguments.locations and not arguments.points:
         parser.error("give the reference points of the -l locations with -p")
     if 0 < len(arguments.points) < MIN_POINTS:
@@ -160,24 +165,45 @@ def main(argv: Sequence[str] | None = None) -> int:
     sources = arguments.images
     if len(sources) == 1 and (error := _input_error(Path(sources[0]), arguments)):
         parser.error(error)
-    inputs = {Path(source).resolve() for source in sources}
-    outputs = {"-o": arguments.output, "--preview": arguments.preview}
-    for option, path in outputs.items():
-        if path is not None and path.resolve() in inputs:
-            parser.error(f"{option} would overwrite the image")
-    if (
-        None not in outputs.values()
-        and len({p.resolve() for p in outputs.values()}) == 1
-    ):
-        parser.error("-o and --preview name the same file")
-
     try:
-        return _run(arguments, inputs)
+        return _run(arguments, _protected_paths(arguments, parser))
     except (ImportError, OSError, ValueError, cv2.error) as error:
         print(f"figrecover: error: {error}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
         return 130
+
+
+def _protected_paths(
+    arguments: argparse.Namespace, parser: argparse.ArgumentParser
+) -> set[Path]:
+    """Protect the sources and metadata from all generated filenames."""
+    inputs = {Path(source).resolve() for source in arguments.images}
+    outputs = {
+        "-o": arguments.output,
+        "--preview": arguments.preview,
+        "--metadata": arguments.metadata,
+    }
+    if arguments.axes_from:
+        inputs.add(arguments.axes_from.resolve())
+    destinations: dict[Path, str] = {}
+    for option, path in outputs.items():
+        if path is None:
+            continue
+        resolved = path.resolve()
+        if resolved in inputs:
+            what = (
+                "calibration"
+                if arguments.axes_from and resolved == arguments.axes_from.resolve()
+                else "image"
+            )
+            parser.error(f"{option} would overwrite the {what}")
+        if resolved in destinations:
+            parser.error(f"{destinations[resolved]} and {option} name the same file")
+        destinations[resolved] = option
+    if arguments.metadata:
+        inputs.add(arguments.metadata.resolve())
+    return inputs
 
 
 def _input_error(image: Path, arguments: argparse.Namespace) -> str | None:
@@ -194,6 +220,7 @@ def _input_error(image: Path, arguments: argparse.Namespace) -> str | None:
 def _run(options: argparse.Namespace, inputs: set[Path]) -> int:
     """Collect tables from successful inputs, reusing clicks and series choices."""
     batch = len(options.images) > 1
+    records: list[metadata.InputRecord] = []
     if batch and options.preview:
         options.preview.mkdir(parents=True, exist_ok=True)
     previews = {options.preview.resolve()} if options.preview and not batch else set()
@@ -205,30 +232,92 @@ def _run(options: argparse.Namespace, inputs: set[Path]) -> int:
         arguments.image = Path(source)
         arguments.source = source if batch else None
         arguments.selections = selections.copy()
+        arguments.measured = {}
+        arguments.calibration_source = "points" if options.locations else "clicked"
+        arguments.record = (
+            _start_record(arguments, source) if options.metadata else None
+        )
+        if arguments.record:
+            records.append(arguments.record)
         try:
+            if arguments.record:
+                arguments.record.sha256 = metadata.digest(arguments.image)
             if batch:
-                if error := _input_error(arguments.image, arguments):
-                    raise ValueError(error)
-                if options.preview:
-                    arguments.preview = _preview_path(
-                        options.preview, arguments.image, previews
-                    )
-                    if arguments.preview.resolve() in inputs or (
-                        options.output
-                        and arguments.preview.resolve() == options.output.resolve()
-                    ):
-                        msg = f"conflicting preview path: {arguments.preview}"
-                        raise ValueError(msg)
+                _prepare_batch_input(arguments, options, previews, inputs)
             tables.extend(_digitize(arguments))
             selections.update(arguments.selections)
+            if arguments.record:
+                _finish_record(arguments.record, arguments)
         except (ImportError, OSError, ValueError, cv2.error) as error:
-            if not batch:
+            if arguments.record:
+                arguments.record.error = str(error)
+                arguments.record.locations = list(arguments.locations)
+            if not batch and not options.metadata:
                 raise
-            print(f"figrecover: {source}: error: {error}", file=sys.stderr)
+            prefix = f"{source}: " if batch else ""
+            print(f"figrecover: {prefix}error: {error}", file=sys.stderr)
             status = 1
     if tables:
         _write(options.output, tables, inputs | previews)
+    if options.metadata:
+        metadata.save(options.metadata, options.argv, records)
     return status
+
+
+def _prepare_batch_input(
+    arguments: argparse.Namespace,
+    options: argparse.Namespace,
+    previews: set[Path],
+    inputs: set[Path],
+) -> None:
+    """Validate input-specific options and choose a distinct preview destination."""
+    if error := _input_error(arguments.image, arguments):
+        raise ValueError(error)
+    if options.preview:
+        arguments.preview = _preview_path(options.preview, arguments.image, previews)
+        if arguments.preview.resolve() in inputs or (
+            options.output and arguments.preview.resolve() == options.output.resolve()
+        ):
+            msg = f"conflicting preview path: {arguments.preview}"
+            raise ValueError(msg)
+
+
+def _start_record(arguments: argparse.Namespace, source: str) -> metadata.InputRecord:
+    """Retain original image coordinates before levelling or collecting clicks."""
+    kind = (
+        "pdf"
+        if _is_pdf(arguments.image)
+        else "svg"
+        if _is_svg(arguments.image)
+        else "image"
+    )
+    return metadata.InputRecord(
+        source,
+        kind,
+        page=arguments.page,
+        box=arguments.box,
+        points=arguments.points,
+        locations=list(arguments.locations),
+        markers=arguments.markers,
+    )
+
+
+def _finish_record(record: metadata.InputRecord, arguments: argparse.Namespace) -> None:
+    """Keep the options needed to repeat a single plot."""
+    record.locations = list(arguments.locations)
+    if (
+        record.plot_count == 1
+        and len(record.plots) == 1
+        and record.plots[0].panel is None
+    ):
+        extra: list[str] = []
+        if arguments.log:
+            extra.extend(("--log", arguments.log))
+        if arguments.remove_grid:
+            extra.append("--remove-grid")
+        if arguments.error_bars:
+            extra.append("--error-bars")
+        record.reproduce = metadata.reproduce(record, arguments.metadata, extra)
 
 
 def _preview_path(directory: Path, image: Path, used: set[Path]) -> Path:
@@ -387,6 +476,18 @@ def _build_parser() -> argparse.ArgumentParser:
         "the CSV as y_low and y_high columns, and x_low and x_high if any run "
         "across, in the plot's units",
     )
+    parser.add_argument(
+        "--metadata",
+        type=Path,
+        metavar="FILE",
+        help="record input hashes, axes, series and a reproduction command as JSON",
+    )
+    parser.add_argument(
+        "--axes-from",
+        type=Path,
+        metavar="FILE",
+        help="reuse the ticks of a matching single-plot input from a metadata file",
+    )
     return parser
 
 
@@ -423,7 +524,7 @@ def _digitize(arguments: argparse.Namespace) -> list[_Table]:
                 raise
             called = f"panel {plot.name}" if plot.name else "the plot"
             message = f"left out {called}, as its curves cannot be traced"
-            print(f"figrecover: {message}: {error}", file=sys.stderr)
+            _notice(f"{message}: {error}", arguments.record)
             continue
         aligned = bool(arguments.markers)  # error bars through the markers traced
         tables.append(
@@ -434,6 +535,13 @@ def _digitize(arguments: argparse.Namespace) -> list[_Table]:
                 _data(plot.calibration, traced, bars, aligned=aligned),
             )
         )
+        if arguments.record:
+            _record_plot(
+                arguments,
+                tables[-1],
+                (plot.calibration, plot.pixels, plot.axes),
+                plot.offset,
+            )
         x, y = plot.offset
         curves += [curve + np.array([x, y]) for curve in traced]
         colours += traced_colours
@@ -499,15 +607,36 @@ def _plots(arguments: argparse.Namespace) -> tuple[Image, Levelling, list[_Plot]
         message = (
             "the image is greyscale, so curves of different colours may share a grey"
         )
-        print(f"figrecover: {message}", file=sys.stderr)
+        _notice(message, arguments.record)
     locations = arguments.locations
     if arguments.points and not locations:
         locations.extend(_click_locations(given, arguments.points))
     image, levelling = _level(given, arguments.level)
+    if arguments.record:
+        arguments.record.level_degrees = levelling.angle
     # From here on, -m positions are those in the levelled image.
     arguments.markers = _as_points(levelling.points(arguments.markers))
+    if arguments.axes_from:
+        axes, region = metadata.recorded_axes(arguments.axes_from, arguments.image)
+        left, _, _, bottom = region.crop or (0, 0, image.shape[1], image.shape[0])
+        offset = (left, image.shape[0] - bottom)
+        image = region.apply(image)
+        if arguments.record:
+            arguments.record.region = region
+        calibration, pixels, names = _read_axes(axes, None)
+        return (
+            given,
+            levelling,
+            [_Plot(None, image, offset, calibration, pixels, names, axes)],
+        )
     if not arguments.points:
-        return given, levelling, _read_panels(image, insets=not arguments.markers)
+        plots = _read_panels(image, arguments.record, insets=not arguments.markers)
+        if arguments.record and len(plots) == 1:
+            only = plots[0]
+            arguments.record.region = metadata.Region.from_image(
+                image, only.image, only.offset
+            )
+        return given, levelling, plots
     pixels = _as_points(levelling.points(locations))
     calibration = Calibration.from_points(
         arguments.points,
@@ -542,11 +671,13 @@ def _trace(
     styles: list[Style | None] = []  # and its style, if known
     selectors = arguments.colours or arguments.selections.get(plot.name)
     if arguments.markers:
-        curves = _found_markers(traced, arguments.markers, plot.calibration)
+        curves = _found_markers(
+            traced, arguments.markers, plot.calibration, arguments.record
+        )
         colours = _series_colours(len(curves))
         rings += _marker_rings(arguments.markers, curves, colours)
     elif selectors:
-        with _warnings_printed(_prefix(plot.name)):
+        with _warnings_printed(_prefix(plot.name), arguments.record):
             curves = _chosen(
                 selectors,
                 lambda colours: trace_curves(traced, colours, origin),
@@ -594,8 +725,17 @@ def _bars_by_colour(
     return [found.pop(colour) if colour in found else none for colour in colours]
 
 
+def _notice(message: str, record: metadata.InputRecord | None) -> None:
+    """Report a diagnostic and retain it when recording the run."""
+    print(f"figrecover: {message}", file=sys.stderr)
+    if record:
+        record.warnings.append(message)
+
+
 @contextlib.contextmanager
-def _warnings_printed(prefix: str) -> Iterator[None]:
+def _warnings_printed(
+    prefix: str, record: metadata.InputRecord | None
+) -> Iterator[None]:
     """Print the warnings given in the block, as figrecover's messages.
 
     ``prefix`` starts each message, naming the panel.
@@ -606,7 +746,7 @@ def _warnings_printed(prefix: str) -> Iterator[None]:
             yield
         finally:
             for warning in caught:
-                print(f"figrecover: {prefix}{warning.message}", file=sys.stderr)
+                _notice(f"{prefix}{warning.message}", record)
 
 
 def _digitize_pdf(arguments: argparse.Namespace) -> _Table:
@@ -620,6 +760,10 @@ def _digitize_pdf(arguments: argparse.Namespace) -> _Table:
         if _is_svg(arguments.image)
         else load_pdf(arguments.image, arguments.page or 1, arguments.box)
     )
+    if arguments.record:
+        arguments.record.box = drawing.box
+        arguments.record.page = drawing.page if arguments.record.kind == "pdf" else None
+    axes = None
     _check_positions(arguments.markers, drawing.box, "-m position")
     if arguments.remove_grid:
         drawing = remove_pdf_grid(drawing)
@@ -636,12 +780,18 @@ def _digitize_pdf(arguments: argparse.Namespace) -> _Table:
         )
         names = ("x", "y")
     else:
-        calibration, positions, names = _read_axes(read_pdf_axes(drawing), None)
+        axes = (
+            metadata.recorded_axes(arguments.axes_from, arguments.image)[0]
+            if arguments.axes_from
+            else read_pdf_axes(drawing)
+        )
+        calibration, positions, names = _read_axes(axes, None)
     selectors = arguments.colours or arguments.selections.get(None)
     if arguments.markers:
         curves = _counted(
             find_pdf_markers(drawing, arguments.markers, calibration.origin),
             arguments.markers,
+            arguments.record,
         )
         colours = _series_colours(len(curves))
     elif selectors:
@@ -674,7 +824,49 @@ def _digitize_pdf(arguments: argparse.Namespace) -> _Table:
         image = _render(drawing)
         _save_preview(arguments.preview, image, pixels, colours, rings)
     data = _data(calibration, curves, bars, aligned=True)
-    return _Table(arguments.source, None, names, data)
+    table = _Table(arguments.source, None, names, data)
+    if arguments.record:
+        _record_plot(arguments, table, (calibration, positions, axes))
+    return table
+
+
+def _record_plot(
+    arguments: argparse.Namespace,
+    table: _Table,
+    measurements: tuple[Calibration, Sequence[Point], Axes | None],
+    offset: Point = (0, 0),
+) -> None:
+    """Record the measurements and CSV row counts for a successful plot."""
+    calibration, pixels, axes = measurements
+    measured: Sequence[Series]
+    selectors: Sequence[_Selector]
+    measured, selectors = arguments.measured.get(
+        table.panel,
+        ([], arguments.colours or arguments.selections.get(table.panel, [])),
+    )
+    series = []
+    for i, curve in enumerate(table.curves):
+        selected = selectors[i] if selectors else None
+        found = measured[i] if measured else None
+        colour = found.colour if found else selected.colour if selected else None
+        style = found.style if found else selected.style if selected else "markers"
+        series.append(
+            metadata.SeriesRecord(
+                i + 1,
+                bytes(colour).hex() if colour else None,
+                style,
+                found.width if found else None,
+                _written(selected) if selected else None,
+                len(curve),
+            )
+        )
+    source = "ticks" if axes else arguments.calibration_source
+    fit = metadata.calibration_record(
+        calibration, axes, pixels, arguments.points, source
+    )
+    arguments.record.plots.append(
+        metadata.PlotRecord(table.panel, calibration.origin, fit, series, offset)
+    )
 
 
 def _is_pdf(path: Path) -> bool:
@@ -758,7 +950,9 @@ def _click_locations(image: Image, points: Sequence[Point]) -> list[Point]:
     return pixels
 
 
-def _read_panels(image: Image, *, insets: bool) -> list[_Plot]:
+def _read_panels(
+    image: Image, record: metadata.InputRecord | None, *, insets: bool
+) -> list[_Plot]:
     """Read the axes of the image's panels, and print them so they can be checked.
 
     Panels left out, as their axes cannot be read, are reported too. An
@@ -767,15 +961,25 @@ def _read_panels(image: Image, *, insets: bool) -> list[_Plot]:
     positions to ring in the preview are those of its ticks, on their axis
     lines, and its columns are named after its axis titles.
     """
-    with _warnings_printed(""):
+    with _warnings_printed("", record):
         panels = read_panels(image)
+    if record:
+        record.plot_count = len(panels)
     if not insets:
         panels = [panel for panel in panels if panel.inset_of is None]
     plots = []
     for panel, name in zip(panels, _names(panels), strict=True):
         calibration, pixels, columns = _read_axes(panel.axes, name)
         plots.append(
-            _Plot(name, panel.image, panel.offset, calibration, pixels, columns)
+            _Plot(
+                name,
+                panel.image,
+                panel.offset,
+                calibration,
+                pixels,
+                columns,
+                panel.axes,
+            )
         )
     return plots
 
@@ -856,11 +1060,15 @@ def _found(
         )
         raise ValueError(msg + left_out())
     found = list(every[:wanted])
-    if count is not None:
+    if count is not None or arguments.record:
         written = _options(found, every)
-        arguments.selections[panel] = [_selector(option) for option in written]
-        options = " ".join(f"-c {option}" for option in written)
-        print(f"figrecover: {_prefix(panel)}colours: {options}", file=sys.stderr)
+        selectors = [_selector(option) for option in written]
+        if arguments.record:
+            arguments.measured[panel] = found, selectors
+        if count is not None:
+            arguments.selections[panel] = selectors
+            options = " ".join(f"-c {option}" for option in written)
+            print(f"figrecover: {_prefix(panel)}colours: {options}", file=sys.stderr)
     return found
 
 
@@ -945,7 +1153,10 @@ def _written(selector: _Selector) -> str:
 
 
 def _found_markers(
-    image: Image, keys: Sequence[Point], calibration: Calibration
+    image: Image,
+    keys: Sequence[Point],
+    calibration: Calibration,
+    record: metadata.InputRecord | None,
 ) -> list[npt.NDArray[np.float64]]:
     """Find the series of markers in a plot, and print what was found.
 
@@ -961,8 +1172,8 @@ def _found_markers(
         warnings.simplefilter("always")
         found = find_marker_series(image, keys, calibration.origin)
     for warning in caught:
-        print(f"figrecover: {warning.message}", file=sys.stderr)
-    markers = _counted([series.points for series in found], keys)
+        _notice(str(warning.message), record)
+    markers = _counted([series.points for series in found], keys, record)
     for number, series in enumerate(found, start=1):
         notes = []
         if np.any(series.ambiguous):
@@ -976,7 +1187,7 @@ def _found_markers(
             notes.append(f"{len(series.hidden)} probably hidden near x = {places}")
         if notes:
             message = f"series {number}: {len(series.points)} found, "
-            print(f"figrecover: {message}{', and '.join(notes)}", file=sys.stderr)
+            _notice(message + ", and ".join(notes), record)
     return markers
 
 
@@ -993,7 +1204,9 @@ def _places(calibration: Calibration, pixels: npt.NDArray[np.float64]) -> str:
 
 
 def _counted(
-    markers: list[npt.NDArray[np.float64]], keys: Sequence[Point]
+    markers: list[npt.NDArray[np.float64]],
+    keys: Sequence[Point],
+    record: metadata.InputRecord | None,
 ) -> list[npt.NDArray[np.float64]]:
     """Print how many markers were found in each series, and return them.
 
@@ -1005,7 +1218,7 @@ def _counted(
     for number, (series, (x, y)) in enumerate(zip(markers, keys, strict=True), 1):
         if not len(series):
             message = f"found no markers like the key at {x:g},{y:g}"
-            print(f"figrecover: series {number}: {message}", file=sys.stderr)
+            _notice(f"series {number}: {message}", record)
     return markers
 
 
