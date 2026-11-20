@@ -299,7 +299,8 @@ def _read_sharing(
     titles: dict[str, str | None] = {}
     while True:
         try:
-            axes = _read_axes(piece.image, [*piece.texts, *labels])
+            # Shared ticks come from another panel in the original image.
+            axes = _read_axes(piece.image, [*piece.texts, *labels], retry_small=False)
         except _NoTicksError as error:
             index = _sharing(piece, error.axis, pieces, read)
             if index is None or error.axis in titles:
