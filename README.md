@@ -185,13 +185,12 @@ over them, those where two translucent colours overlap, such as two shaded
 bands, and very pale ones, less than 64 levels from the background; trace a
 pale curve with `-c` instead. Curves in neighbouring colours of a colour map,
 such as viridis, are told apart, and two `-c` colours that match the same
-curve are an error. When `-n` finds too few curves, it says which it found
-and which colours it left out, and why, with how many pixels show each:
+curve are an error. When `-n` finds too few curves, it gives the `-c` options
+for those it found and explains which colours it left out. For example,
+asking for three curves in [the grid example](#grids) gives this error.
 
 ```text
-figrecover: error: found only 1 of 3 curves, #000000 (1286 pixels); left out
-#646464 (2041 pixels), as it is drawn in lines across the plot, as grid lines
-are; #c8dcf0 (1732 pixels), as it is too pale, 54 levels from the background
+figrecover: error: found only 1 of 3 curves, -c 000000; left out #404040 (3078 pixels), as it is drawn in lines across the plot, as grid lines are
 ```
 
 In a greyscale image, such as a photocopy, colours that differed may have

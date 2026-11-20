@@ -770,9 +770,9 @@ def _found(
     """
     wanted = count or 1
     if len(every) < wanted:
-        names = ", ".join(f"#{series.name}" for series in every)
+        options = " ".join(f"-c {option}" for option in _options(every, every))
         msg = (
-            f"found only {len(every)} of {wanted} curves, {names}"
+            f"found only {len(every)} of {wanted} curves, {options}"
             if every
             else "no curve found"
         )

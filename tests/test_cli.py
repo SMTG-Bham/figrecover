@@ -1200,7 +1200,10 @@ def test_can_be_cancelled(monkeypatch: pytest.MonkeyPatch) -> None:
         (["missing.png", *POINTS, *LOCATIONS], "cannot read image"),
         ([*SPECTRUM, "-l", "80,44"], "got 3 data points but 1 pixel locations"),
         ([*SPECTRUM, *LOCATIONS, "--preview", "no/such/dir.png"], "cannot write"),
-        ([*SERIES, "-n", "5"], "found only 4 of 5 curves"),
+        (
+            [*SERIES, "-n", "5"],
+            "found only 4 of 5 curves, -c 2ca02c -c 1f77b4 -c ff7f0e -c 000000",
+        ),
         ([*SERIES, "-c", "00ffff"], "no curve of colour #00ffff found"),
         (
             [*STYLES_AT_POINTS, "-c", "000000", "-c", "0" * 6],
@@ -1211,7 +1214,13 @@ def test_can_be_cancelled(monkeypatch: pytest.MonkeyPatch) -> None:
             [*STYLES_AT_POINTS, "-c", "000000:solid2", "-c", "000000:solid2"],
             "-c 000000:solid2 is given twice",
         ),
-        ([*STYLES_AT_POINTS, "-n", "4"], "found only 3 of 4 curves"),
+        (
+            [*STYLES_AT_POINTS, "-n", "4"],
+            (
+                "found only 3 of 4 curves, -c 000000:dotted -c 000000:dashed "
+                "-c 000000:solid"
+            ),
+        ),
         (
             [*STYLES_AT_POINTS, "-c", "000000:dashed2"],
             "found only 1 dashed series of colour #000000",
