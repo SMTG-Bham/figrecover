@@ -187,8 +187,8 @@ that line, and `-c 1f77b4` the translucent one.
 
 `-n` skips colours that fill areas, those drawn mostly as straight lines
 across the plot, such as grid lines, dashed or not and even with curves drawn
-over them, those where two translucent colours overlap, such as two shaded
-bands, and very pale ones, less than 64 levels from the background; trace a
+over them, broad bands around a thinner stroke, overlaps of translucent
+colours, and very pale colours, less than 64 levels from the background; trace a
 pale curve with `-c` instead. Curves in neighbouring colours of a colour map,
 such as viridis, are told apart, and two `-c` colours that match the same
 curve are an error. When `-n` finds too few curves, it gives the `-c` options
@@ -1257,9 +1257,10 @@ returns, exactly, as an `ErrorBars` for each.
    64 levels in some channel, most pixels first, except those whose pixels
    lie mostly more than 4 pixels inside their shapes, which fill areas; those
    drawn mostly as straight lines across 60% of the plot, as grid lines are;
-   and those that blend two other colours, a tenth of each or more, half of
-   whose surrounding pixels show those two, as where translucent bands
-   overlap. `-c` instead picks the colour nearest to each given colour, up to
+   pale strips on the same ink ray at least 2.5 times as deep as a stroke
+   that they border along more than a third of its edge; and overlaps
+   surrounded mostly by two colours and showing 0.1 to 1.25 times each
+   colour’s strength. Depth is measured before removing antialiased edges. `-c` instead picks the colour nearest to each given colour, up to
    96 levels away, or failing that the nearest whose direction lies within
    12 degrees of its own, no further from the background: a thin or
    translucent line of that colour.
@@ -1299,7 +1300,9 @@ returns, exactly, as an `ErrorBars` for each.
 10. To tell the curves of a colour apart, tracks also carry on across gaps:
    up to 12 line widths, the median height of the colour's runs, turning by
    at most 25°, or, from a dot, which heads no way, up to 3 line widths
-   whichever way. A track that shares a run holding one line, headed a line
+   whichever way. Another colour covering most of the gap also lets a
+   track continue through a crossing, and the covered part does not count
+   as a gap when telling solid from dashed lines. A track that shares a run holding one line, headed a line
    width beyond it, waits for its next dash. Tracks that share a run keep
    their order while it is more than one and a half lines tall, as where
    curves touch, each at the edge on its side, and otherwise share its rows

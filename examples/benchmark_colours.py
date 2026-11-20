@@ -3,8 +3,8 @@
 Run from the repository root with ``uv run --with matplotlib
 examples/benchmark_colours.py``, which uses the project's environment and
 adds matplotlib to draw the plots. It draws plots of several series whose
-curves it knows, each a variation on one default plot, finds their colours
-with ``find_colours`` and traces them with ``trace_curves``, as ``-n`` does,
+curves it knows, each a variation on one default plot, traces their series
+with ``find_series``, as ``-n`` does,
 and prints a Markdown table: for each case, the series found out of those
 drawn, how many were matched to the wrong curve, and the errors of the worst
 series, as fractions of the y range, by the median, the 95th percentile and
@@ -21,7 +21,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import numpy.typing as npt
 
-from figrecover import Calibration, Image, find_colours, trace_curves
+from figrecover import Calibration, Image, find_series
 
 mpl.use("Agg")
 
@@ -115,27 +115,23 @@ def draw(case: Case) -> tuple[Image, Calibration, list[Curve]]:
 def score(case: Case) -> str:
     """Return a row of the table for a case."""
     image, calibration, functions = draw(case)
-    origin = calibration.origin
-    try:
-        colours = find_colours(image, case.series, origin)
-    except ValueError as error:
-        found = str(error).split(",")[0]
-        return f"| {case.name} | {found} | | | | |"
-    traced = trace_curves(image, colours, origin)
+    series = find_series(image, calibration.origin)
+    if len(series) < case.series:
+        return f"| {case.name} | {len(series)} of {case.series} | | | | |"
     drawn = [
         np.array(mpl.colors.to_rgb(colour)) * 255 for colour in PALETTES[case.palette]
     ]
     errors, wrong, matched = [], 0, set()
-    for colour, pixels in zip(colours, traced, strict=True):
-        data = calibration.to_data(pixels)
+    for curve in series[: case.series]:
+        data = calibration.to_data(curve.points)
         medians = [np.median(np.abs(data[:, 1] - f(data[:, 0]))) for f in functions]
         best = int(np.argmin(medians))
         matched.add(best)
         nearest = min(
             range(len(functions)),
-            key=lambda k: np.linalg.norm(drawn[k % len(drawn)] - colour),
+            key=lambda k: np.linalg.norm(drawn[k % len(drawn)] - curve.colour),
         )
-        wrong += nearest != best
+        wrong += nearest % len(drawn) != best % len(drawn)
         errors.append(np.abs(data[:, 1] - functions[best](data[:, 0])) / TOP)
     worst = max(errors, key=lambda error: float(np.percentile(error, 95)))
     numbers = (np.median(worst), np.percentile(worst, 95), worst.max())
@@ -159,7 +155,8 @@ def cases() -> Sequence[Case]:
         replace(default, name="greys", palette="greys", crossing=False),
     ]
     varied += [
-        replace(default, name=f"{width} pt", width=width) for width in (0.5, 0.75, 3)
+        replace(default, name=f"{width} pt", width=width)
+        for width in (0.5, 0.75, 2, 2.5, 3)
     ]
     varied += [replace(default, name=f"{dpi} dpi", dpi=dpi) for dpi in (50, 72, 200)]
     varied += [
