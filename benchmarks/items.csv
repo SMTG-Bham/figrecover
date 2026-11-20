@@ -1,0 +1,407 @@
+item,kind,mode,numeric_f1,outcome,scored_y
+line_51,ChartX line_chart,automatic,0.0,non-numeric x labels,0
+line_71,ChartX line_chart,automatic,0.0,non-numeric x labels,0
+line_399,ChartX line_chart,automatic,0.0,non-numeric x labels,0
+line_315,ChartX line_chart,automatic,1.0,complete numeric match,8
+line_372,ChartX line_chart,automatic,0.0,non-numeric x labels,0
+line_190,ChartX line_chart,automatic,1.0,complete numeric match,10
+line_459,ChartX line_chart,automatic,0.0,non-numeric x labels,0
+line_296,ChartX line_chart,automatic,0.0,non-numeric x labels,0
+line_9,ChartX line_chart,automatic,0.8571428571428571,line and markers selected in the same ink,13
+line_478,ChartX line_chart,automatic,0.7142857142857143,line and markers selected in the same ink,8
+line_137,ChartX line_chart,automatic,0.8823529411764706,partial coverage of labelled x positions,12
+line_350,ChartX line_chart,automatic,0.8571428571428571,partial coverage of labelled x positions,7
+line_301,ChartX line_chart,automatic,0.0,non-numeric x labels,0
+line_249,ChartX line_chart,automatic,0.8148148148148148,numeric mismatch at sampled positions,12
+line_413,ChartX line_chart,automatic,0.9032258064516129,numeric mismatch at sampled positions,15
+line_450,ChartX line_chart,automatic,1.0,complete numeric match,15
+line_239,ChartX line_chart,automatic,0.0,non-numeric x labels,0
+line_494,ChartX line_chart,automatic,0.0,non-numeric x labels,0
+line_90,ChartX line_chart,automatic,0.0,non-numeric x labels,0
+line_401,ChartX line_chart,automatic,0.0,non-numeric x labels,0
+line_53,ChartX line_chart,automatic,0.7741935483870968,partial coverage of labelled x positions,14
+line_272,ChartX line_chart,automatic,0.0,non-numeric x labels,0
+line_144,ChartX line_chart,automatic,0.9655172413793104,numeric mismatch at sampled positions,10
+line_361,ChartX line_chart,automatic,0.0,non-numeric x labels,0
+line_313,ChartX line_chart,automatic,1.0,complete numeric match,16
+line_295,ChartX line_chart,automatic,0.0,non-numeric x labels,0
+line_110,ChartX line_chart,automatic,0.7,partial coverage of labelled x positions,8
+line_335,ChartX line_chart,automatic,0.0,non-numeric x labels,0
+line_238,ChartX line_chart,automatic,1.0,complete numeric match,15
+line_449,ChartX line_chart,automatic,0.8888888888888888,partial coverage of labelled x positions,12
+line_76,ChartX line_chart,automatic,0.0,non-numeric x labels,0
+line_438,ChartX line_chart,automatic,0.0,axis reading or calibration,0
+line_213,ChartX line_chart,automatic,0.9090909090909091,numeric mismatch at sampled positions,8
+line_232,ChartX line_chart,automatic,0.6976744186046512,line and markers selected in the same ink,13
+line_66,ChartX line_chart,automatic,0.0,non-numeric x labels,0
+line_7,ChartX line_chart,automatic,0.0,non-numeric x labels,0
+line_452,ChartX line_chart,automatic,0.9714285714285714,partial coverage of labelled x positions,11
+line_300,ChartX line_chart,automatic,0.8571428571428571,numeric mismatch at sampled positions,8
+line_306,ChartX line_chart,automatic,0.0,non-numeric x labels,0
+line_17,ChartX line_chart,automatic,0.9285714285714286,numeric mismatch at sampled positions,12
+line_16,ChartX line_chart,automatic,0.7777777777777778,line and markers selected in the same ink,12
+line_220,ChartX line_chart,automatic,0.0,non-numeric x labels,0
+line_481,ChartX line_chart,automatic,0.0,axis reading or calibration,0
+line_408,ChartX line_chart,automatic,0.0,non-numeric x labels,0
+line_212,ChartX line_chart,automatic,0.0,non-numeric x labels,0
+line_467,ChartX line_chart,automatic,1.0,complete numeric match,12
+line_217,ChartX line_chart,automatic,0.0,non-numeric x labels,0
+line_101,ChartX line_chart,automatic,1.0,complete numeric match,14
+line_159,ChartX line_chart,automatic,0.6428571428571429,line and markers selected in the same ink,16
+line_199,ChartX line_chart,automatic,0.0,axis reading or calibration,0
+line_num_99,ChartX line_chart_num,automatic,0.9411764705882353,numeric mismatch at sampled positions,12
+line_num_307,ChartX line_chart_num,automatic,0.0,non-numeric x labels,0
+line_num_144,ChartX line_chart_num,automatic,0.0,non-numeric x labels,0
+line_num_291,ChartX line_chart_num,automatic,0.0,axis reading or calibration,0
+line_num_152,ChartX line_chart_num,automatic,0.7142857142857143,line and markers selected in the same ink,12
+line_num_39,ChartX line_chart_num,automatic,0.9545454545454546,numeric mismatch at sampled positions,16
+line_num_175,ChartX line_chart_num,automatic,0.6428571428571429,numeric mismatch at sampled positions,10
+line_num_468,ChartX line_chart_num,automatic,0.9743589743589743,numeric mismatch at sampled positions,14
+line_num_173,ChartX line_chart_num,automatic,0.0,non-numeric x labels,0
+line_num_280,ChartX line_chart_num,automatic,0.4,partial coverage of labelled x positions,9
+line_num_224,ChartX line_chart_num,automatic,0.8,numeric mismatch at sampled positions,15
+line_num_387,ChartX line_chart_num,automatic,0.8947368421052632,numeric mismatch at sampled positions,15
+line_num_108,ChartX line_chart_num,automatic,0.0,non-numeric x labels,0
+line_num_451,ChartX line_chart_num,automatic,0.5,partial coverage of labelled x positions,12
+line_num_496,ChartX line_chart_num,automatic,0.42857142857142855,partial coverage of labelled x positions,7
+line_num_478,ChartX line_chart_num,automatic,0.0,non-numeric x labels,0
+line_num_379,ChartX line_chart_num,automatic,0.5714285714285714,partial coverage of labelled x positions,9
+line_num_47,ChartX line_chart_num,automatic,0.0,non-numeric x labels,0
+line_num_76,ChartX line_chart_num,automatic,0.0,non-numeric x labels,0
+line_num_470,ChartX line_chart_num,automatic,0.8181818181818182,numeric mismatch at sampled positions,8
+line_num_256,ChartX line_chart_num,automatic,0.0,non-numeric x labels,0
+line_num_89,ChartX line_chart_num,automatic,0.0,non-numeric x labels,0
+line_num_195,ChartX line_chart_num,automatic,0.8,line and markers selected in the same ink,12
+line_num_317,ChartX line_chart_num,automatic,0.88,partial coverage of labelled x positions,8
+line_num_178,ChartX line_chart_num,automatic,0.6428571428571429,partial coverage of labelled x positions,10
+line_num_434,ChartX line_chart_num,automatic,0.45161290322580644,partial coverage of labelled x positions,11
+line_num_154,ChartX line_chart_num,automatic,0.0,non-numeric x labels,0
+line_num_372,ChartX line_chart_num,automatic,0.0,non-numeric x labels,0
+line_num_417,ChartX line_chart_num,automatic,0.0,non-numeric x labels,0
+line_num_438,ChartX line_chart_num,automatic,0.0,non-numeric x labels,0
+line_num_177,ChartX line_chart_num,automatic,0.8125,numeric mismatch at sampled positions,16
+line_num_180,ChartX line_chart_num,automatic,0.9655172413793104,numeric mismatch at sampled positions,10
+line_num_236,ChartX line_chart_num,automatic,0.0,non-numeric x labels,0
+line_num_91,ChartX line_chart_num,automatic,0.0,non-numeric x labels,0
+line_num_288,ChartX line_chart_num,automatic,0.47619047619047616,partial coverage of labelled x positions,10
+line_num_385,ChartX line_chart_num,automatic,0.75,numeric mismatch at sampled positions,14
+line_num_243,ChartX line_chart_num,automatic,0.9056603773584906,partial coverage of labelled x positions,20
+line_num_404,ChartX line_chart_num,automatic,0.5405405405405406,partial coverage of labelled x positions,9
+line_num_77,ChartX line_chart_num,automatic,1.0,complete numeric match,10
+line_num_395,ChartX line_chart_num,automatic,0.5454545454545454,partial coverage of labelled x positions,14
+line_num_93,ChartX line_chart_num,automatic,0.0,non-numeric x labels,0
+line_num_283,ChartX line_chart_num,automatic,0.0,axis reading or calibration,0
+line_num_181,ChartX line_chart_num,automatic,0.0,non-numeric x labels,0
+line_num_269,ChartX line_chart_num,automatic,0.0,axis reading or calibration,0
+line_num_160,ChartX line_chart_num,automatic,0.4827586206896552,partial coverage of labelled x positions,8
+line_num_437,ChartX line_chart_num,automatic,0.0,non-numeric x labels,0
+line_num_182,ChartX line_chart_num,automatic,0.0,non-numeric x labels,0
+line_num_277,ChartX line_chart_num,automatic,0.65,line and markers selected in the same ink,12
+line_num_351,ChartX line_chart_num,automatic,0.9565217391304348,numeric mismatch at sampled positions,8
+line_num_217,ChartX line_chart_num,automatic,0.9333333333333333,numeric mismatch at sampled positions,12
+plotqa_0000,PlotQA dot-line,automatic,0.9090909090909091,numeric mismatch at sampled positions,12
+plotqa_0000,PlotQA dot-line,hinted,0.5454545454545454,selected ink absent from annotation palette,8
+plotqa_0000,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0001,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0001,PlotQA dot-line,hinted,0.0,series detection or count,0
+plotqa_0001,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0002,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0002,PlotQA dot-line,hinted,0.8571428571428571,partial coverage of labelled x positions,6
+plotqa_0002,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0003,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0003,PlotQA dot-line,hinted,0.6666666666666666,partial coverage of labelled x positions,6
+plotqa_0003,PlotQA dot-line,markers,0.0,one or more empty marker series,0
+plotqa_0004,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0004,PlotQA dot-line,hinted,0.0,series detection or count,0
+plotqa_0004,PlotQA dot-line,markers,0.4,one or more empty marker series,0
+plotqa_0015,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0015,PlotQA dot-line,hinted,0.0,selected ink absent from annotation palette,7
+plotqa_0015,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0026,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0026,PlotQA dot-line,hinted,0.0,series detection or count,0
+plotqa_0026,PlotQA dot-line,markers,0.0,one or more empty marker series,0
+plotqa_0037,PlotQA dot-line,automatic,0.9090909090909091,partial coverage of labelled x positions,10
+plotqa_0037,PlotQA dot-line,hinted,0.9090909090909091,partial coverage of labelled x positions,10
+plotqa_0037,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0048,PlotQA dot-line,automatic,1.0,complete numeric match,16
+plotqa_0048,PlotQA dot-line,hinted,0.9333333333333333,partial coverage of labelled x positions,14
+plotqa_0048,PlotQA dot-line,markers,0.0,one or more empty marker series,0
+plotqa_0059,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0059,PlotQA dot-line,hinted,0.0,series detection or count,0
+plotqa_0059,PlotQA dot-line,markers,0.0,one or more empty marker series,0
+plotqa_0070,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0070,PlotQA dot-line,hinted,0.8888888888888888,partial coverage of labelled x positions,8
+plotqa_0070,PlotQA dot-line,markers,0.0,one or more empty marker series,0
+plotqa_0081,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0081,PlotQA dot-line,hinted,0.0,series detection or count,0
+plotqa_0081,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0092,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0092,PlotQA dot-line,hinted,0.9090909090909091,partial coverage of labelled x positions,10
+plotqa_0092,PlotQA dot-line,markers,0.0,one or more empty marker series,0
+plotqa_0103,PlotQA dot-line,automatic,1.0,complete numeric match,10
+plotqa_0103,PlotQA dot-line,hinted,0.8888888888888888,partial coverage of labelled x positions,8
+plotqa_0103,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0114,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0114,PlotQA dot-line,hinted,0.9090909090909091,partial coverage of labelled x positions,10
+plotqa_0114,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0115,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0115,PlotQA dot-line,hinted,0.9230769230769231,partial coverage of labelled x positions,12
+plotqa_0115,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0126,PlotQA dot-line,automatic,1.0,complete numeric match,14
+plotqa_0126,PlotQA dot-line,hinted,0.9230769230769231,partial coverage of labelled x positions,12
+plotqa_0126,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0137,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0137,PlotQA dot-line,hinted,0.0,series detection or count,0
+plotqa_0137,PlotQA dot-line,markers,0.0,one or more empty marker series,0
+plotqa_0148,PlotQA dot-line,automatic,1.0,complete numeric match,12
+plotqa_0148,PlotQA dot-line,hinted,0.9090909090909091,partial coverage of labelled x positions,10
+plotqa_0148,PlotQA dot-line,markers,0.2857142857142857,one or more empty marker series,0
+plotqa_0159,PlotQA dot-line,automatic,0.8,numeric mismatch at sampled positions,8
+plotqa_0159,PlotQA dot-line,hinted,1.0,complete numeric match,6
+plotqa_0159,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0170,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0170,PlotQA dot-line,hinted,1.0,complete numeric match,6
+plotqa_0170,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0181,PlotQA dot-line,automatic,0.9230769230769231,partial coverage of labelled x positions,13
+plotqa_0181,PlotQA dot-line,hinted,0.9230769230769231,partial coverage of labelled x positions,12
+plotqa_0181,PlotQA dot-line,markers,0.5454545454545454,one or more empty marker series,0
+plotqa_0192,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0192,PlotQA dot-line,hinted,0.8571428571428571,partial coverage of labelled x positions,6
+plotqa_0192,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0203,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0203,PlotQA dot-line,hinted,0.0,no sampled x in trace domain,0
+plotqa_0203,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0214,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0214,PlotQA dot-line,hinted,0.0,series detection or count,0
+plotqa_0214,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0225,PlotQA dot-line,automatic,0.8571428571428571,numeric mismatch at sampled positions,12
+plotqa_0225,PlotQA dot-line,hinted,0.8571428571428571,partial coverage of labelled x positions,10
+plotqa_0225,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0226,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0226,PlotQA dot-line,hinted,0.8888888888888888,partial coverage of labelled x positions,8
+plotqa_0226,PlotQA dot-line,markers,0.3333333333333333,partial coverage of labelled x positions,2
+plotqa_0237,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0237,PlotQA dot-line,hinted,0.0,series detection or count,0
+plotqa_0237,PlotQA dot-line,markers,0.0,one or more empty marker series,0
+plotqa_0248,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0248,PlotQA dot-line,hinted,0.0,series detection or count,0
+plotqa_0248,PlotQA dot-line,markers,0.6666666666666666,one or more empty marker series,0
+plotqa_0259,PlotQA dot-line,automatic,1.0,complete numeric match,16
+plotqa_0259,PlotQA dot-line,hinted,0.9333333333333333,partial coverage of labelled x positions,14
+plotqa_0259,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0270,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0270,PlotQA dot-line,hinted,0.8571428571428571,partial coverage of labelled x positions,6
+plotqa_0270,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0281,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0281,PlotQA dot-line,hinted,0.0,series detection or count,0
+plotqa_0281,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0292,PlotQA dot-line,automatic,0.6,partial coverage of labelled x positions,6
+plotqa_0292,PlotQA dot-line,hinted,0.7692307692307693,partial coverage of labelled x positions,12
+plotqa_0292,PlotQA dot-line,markers,0.25,one or more empty marker series,0
+plotqa_0303,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0303,PlotQA dot-line,hinted,0.6666666666666666,partial coverage of labelled x positions,10
+plotqa_0303,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0314,PlotQA dot-line,automatic,1.0,complete numeric match,10
+plotqa_0314,PlotQA dot-line,hinted,0.8888888888888888,partial coverage of labelled x positions,8
+plotqa_0314,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0325,PlotQA dot-line,automatic,1.0,complete numeric match,16
+plotqa_0325,PlotQA dot-line,hinted,0.9333333333333333,partial coverage of labelled x positions,14
+plotqa_0325,PlotQA dot-line,markers,0.0,one or more empty marker series,0
+plotqa_0336,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0336,PlotQA dot-line,hinted,0.0,series detection or count,0
+plotqa_0336,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0337,PlotQA dot-line,automatic,1.0,complete numeric match,14
+plotqa_0337,PlotQA dot-line,hinted,0.9230769230769231,partial coverage of labelled x positions,12
+plotqa_0337,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0348,PlotQA dot-line,automatic,0.0,selected ink absent from annotation palette,12
+plotqa_0348,PlotQA dot-line,hinted,0.0,selected ink absent from annotation palette,10
+plotqa_0348,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0359,PlotQA dot-line,automatic,1.0,complete numeric match,14
+plotqa_0359,PlotQA dot-line,hinted,1.0,complete numeric match,12
+plotqa_0359,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0370,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0370,PlotQA dot-line,hinted,0.9230769230769231,partial coverage of labelled x positions,12
+plotqa_0370,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0381,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0381,PlotQA dot-line,hinted,0.8888888888888888,partial coverage of labelled x positions,8
+plotqa_0381,PlotQA dot-line,markers,0.0,one or more empty marker series,0
+plotqa_0392,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0392,PlotQA dot-line,hinted,0.3076923076923077,selected ink absent from annotation palette,12
+plotqa_0392,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0403,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0403,PlotQA dot-line,hinted,1.0,complete numeric match,10
+plotqa_0403,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0414,PlotQA dot-line,automatic,1.0,complete numeric match,12
+plotqa_0414,PlotQA dot-line,hinted,1.0,complete numeric match,10
+plotqa_0414,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0425,PlotQA dot-line,automatic,1.0,complete numeric match,10
+plotqa_0425,PlotQA dot-line,hinted,0.8888888888888888,partial coverage of labelled x positions,8
+plotqa_0425,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0436,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0436,PlotQA dot-line,hinted,0.0,series detection or count,0
+plotqa_0436,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0447,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0447,PlotQA dot-line,hinted,0.8888888888888888,partial coverage of labelled x positions,8
+plotqa_0447,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0448,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0448,PlotQA dot-line,hinted,0.9230769230769231,partial coverage of labelled x positions,12
+plotqa_0448,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0459,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0459,PlotQA dot-line,hinted,0.8888888888888888,partial coverage of labelled x positions,8
+plotqa_0459,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0470,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0470,PlotQA dot-line,hinted,0.0,series detection or count,0
+plotqa_0470,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0481,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0481,PlotQA dot-line,hinted,0.9230769230769231,partial coverage of labelled x positions,12
+plotqa_0481,PlotQA dot-line,markers,0.0,one or more empty marker series,0
+plotqa_0492,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0492,PlotQA dot-line,hinted,0.0,series detection or count,0
+plotqa_0492,PlotQA dot-line,markers,0.0,one or more empty marker series,0
+plotqa_0503,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0503,PlotQA dot-line,hinted,0.8571428571428571,partial coverage of labelled x positions,6
+plotqa_0503,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0514,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0514,PlotQA dot-line,hinted,0.0,series detection or count,0
+plotqa_0514,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0525,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0525,PlotQA dot-line,hinted,0.3333333333333333,selected ink absent from annotation palette,3
+plotqa_0525,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0536,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0536,PlotQA dot-line,hinted,0.5714285714285714,line and markers selected in the same ink,5
+plotqa_0536,PlotQA dot-line,markers,0.0,one or more empty marker series,0
+plotqa_0547,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0547,PlotQA dot-line,hinted,0.0,series detection or count,0
+plotqa_0547,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0558,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0558,PlotQA dot-line,hinted,0.0,selected ink absent from annotation palette,9
+plotqa_0558,PlotQA dot-line,markers,0.0,one or more empty marker series,0
+plotqa_0559,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0559,PlotQA dot-line,hinted,0.0,series detection or count,0
+plotqa_0559,PlotQA dot-line,markers,0.4,one or more empty marker series,0
+plotqa_0570,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0570,PlotQA dot-line,hinted,0.8571428571428571,partial coverage of labelled x positions,6
+plotqa_0570,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0581,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0581,PlotQA dot-line,hinted,0.8571428571428571,partial coverage of labelled x positions,6
+plotqa_0581,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0592,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0592,PlotQA dot-line,hinted,0.0,series detection or count,0
+plotqa_0592,PlotQA dot-line,markers,0.0,one or more empty marker series,0
+plotqa_0603,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0603,PlotQA dot-line,hinted,0.0,line and markers selected in the same ink,2
+plotqa_0603,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0614,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0614,PlotQA dot-line,hinted,0.0,series detection or count,0
+plotqa_0614,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0625,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0625,PlotQA dot-line,hinted,0.0,series detection or count,0
+plotqa_0625,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0636,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0636,PlotQA dot-line,hinted,0.0,series detection or count,0
+plotqa_0636,PlotQA dot-line,markers,0.6,partial coverage of labelled x positions,8
+plotqa_0647,PlotQA dot-line,automatic,1.0,complete numeric match,14
+plotqa_0647,PlotQA dot-line,hinted,0.9230769230769231,partial coverage of labelled x positions,12
+plotqa_0647,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0658,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0658,PlotQA dot-line,hinted,0.8571428571428571,partial coverage of labelled x positions,6
+plotqa_0658,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0669,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0669,PlotQA dot-line,hinted,0.8571428571428571,partial coverage of labelled x positions,6
+plotqa_0669,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0670,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0670,PlotQA dot-line,hinted,0.0,no sampled x in trace domain,0
+plotqa_0670,PlotQA dot-line,markers,0.0,one or more empty marker series,0
+plotqa_0681,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0681,PlotQA dot-line,hinted,0.0,series detection or count,0
+plotqa_0681,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0692,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0692,PlotQA dot-line,hinted,0.8571428571428571,partial coverage of labelled x positions,6
+plotqa_0692,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0703,PlotQA dot-line,automatic,1.0,complete numeric match,14
+plotqa_0703,PlotQA dot-line,hinted,0.9230769230769231,partial coverage of labelled x positions,12
+plotqa_0703,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0714,PlotQA dot-line,automatic,1.0,complete numeric match,10
+plotqa_0714,PlotQA dot-line,hinted,0.8888888888888888,partial coverage of labelled x positions,8
+plotqa_0714,PlotQA dot-line,markers,0.0,one or more empty marker series,0
+plotqa_0725,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0725,PlotQA dot-line,hinted,0.0,series detection or count,0
+plotqa_0725,PlotQA dot-line,markers,0.0,one or more empty marker series,0
+plotqa_0736,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0736,PlotQA dot-line,hinted,0.0,series detection or count,0
+plotqa_0736,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0747,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0747,PlotQA dot-line,hinted,0.8888888888888888,partial coverage of labelled x positions,8
+plotqa_0747,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0758,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0758,PlotQA dot-line,hinted,0.9230769230769231,partial coverage of labelled x positions,12
+plotqa_0758,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0769,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0769,PlotQA dot-line,hinted,0.0,series detection or count,0
+plotqa_0769,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0780,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0780,PlotQA dot-line,hinted,0.8888888888888888,partial coverage of labelled x positions,8
+plotqa_0780,PlotQA dot-line,markers,0.0,one or more empty marker series,0
+plotqa_0781,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0781,PlotQA dot-line,hinted,0.9230769230769231,partial coverage of labelled x positions,12
+plotqa_0781,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0792,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0792,PlotQA dot-line,hinted,0.0,series detection or count,0
+plotqa_0792,PlotQA dot-line,markers,0.0,one or more empty marker series,0
+plotqa_0803,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0803,PlotQA dot-line,hinted,0.0,series detection or count,0
+plotqa_0803,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0814,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0814,PlotQA dot-line,hinted,0.8571428571428571,partial coverage of labelled x positions,6
+plotqa_0814,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0825,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0825,PlotQA dot-line,hinted,0.9090909090909091,partial coverage of labelled x positions,10
+plotqa_0825,PlotQA dot-line,markers,0.0,one or more empty marker series,0
+plotqa_0836,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0836,PlotQA dot-line,hinted,0.9230769230769231,partial coverage of labelled x positions,12
+plotqa_0836,PlotQA dot-line,markers,0.7272727272727273,one or more empty marker series,0
+plotqa_0847,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0847,PlotQA dot-line,hinted,0.9230769230769231,selected ink absent from annotation palette,10
+plotqa_0847,PlotQA dot-line,markers,0.6,partial coverage of labelled x positions,4
+plotqa_0858,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0858,PlotQA dot-line,hinted,0.0,series detection or count,0
+plotqa_0858,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0869,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0869,PlotQA dot-line,hinted,0.8888888888888888,partial coverage of labelled x positions,8
+plotqa_0869,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0880,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0880,PlotQA dot-line,hinted,0.8571428571428571,partial coverage of labelled x positions,6
+plotqa_0880,PlotQA dot-line,markers,0.0,one or more empty marker series,0
+plotqa_0891,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0891,PlotQA dot-line,hinted,0.0,series detection or count,0
+plotqa_0891,PlotQA dot-line,markers,0.0,one or more empty marker series,0
+plotqa_0892,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0892,PlotQA dot-line,hinted,0.0,series detection or count,0
+plotqa_0892,PlotQA dot-line,markers,0.0,one or more empty marker series,0
+plotqa_0903,PlotQA dot-line,automatic,1.0,complete numeric match,10
+plotqa_0903,PlotQA dot-line,hinted,0.8888888888888888,partial coverage of labelled x positions,8
+plotqa_0903,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0914,PlotQA dot-line,automatic,0.75,numeric mismatch at sampled positions,8
+plotqa_0914,PlotQA dot-line,hinted,0.8571428571428571,partial coverage of labelled x positions,6
+plotqa_0914,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0925,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0925,PlotQA dot-line,hinted,0.8888888888888888,partial coverage of labelled x positions,12
+plotqa_0925,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0936,PlotQA dot-line,automatic,0.7272727272727273,partial coverage of labelled x positions,8
+plotqa_0936,PlotQA dot-line,hinted,0.9230769230769231,partial coverage of labelled x positions,12
+plotqa_0936,PlotQA dot-line,markers,0.0,one or more empty marker series,0
+plotqa_0947,PlotQA dot-line,automatic,1.0,complete numeric match,14
+plotqa_0947,PlotQA dot-line,hinted,0.9230769230769231,selected ink absent from annotation palette,12
+plotqa_0947,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0958,PlotQA dot-line,automatic,1.0,complete numeric match,14
+plotqa_0958,PlotQA dot-line,hinted,0.9230769230769231,partial coverage of labelled x positions,12
+plotqa_0958,PlotQA dot-line,markers,0.0,one or more empty marker series,0
+plotqa_0969,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0969,PlotQA dot-line,hinted,0.9090909090909091,partial coverage of labelled x positions,10
+plotqa_0969,PlotQA dot-line,markers,0.0,no markers from any legend key,0
+plotqa_0980,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0980,PlotQA dot-line,hinted,0.9230769230769231,partial coverage of labelled x positions,12
+plotqa_0980,PlotQA dot-line,markers,0.0,one or more empty marker series,0
+plotqa_0991,PlotQA dot-line,automatic,0.0,axis reading or calibration,0
+plotqa_0991,PlotQA dot-line,hinted,0.0,series detection or count,0
+plotqa_0991,PlotQA dot-line,markers,0.0,no markers from any legend key,0
