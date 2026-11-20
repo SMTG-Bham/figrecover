@@ -378,13 +378,12 @@ def test_finds_markers_partly_hidden_and_reports_those_hidden(
     # 5.5 and at 4, but for the lower edge.
     captured = capsys.readouterr()
     assert captured.err == (
-        "figrecover: markers found in each series: 16, 20, 17, 18\n"
-        "figrecover: series 1: 16 found, 3 probably hidden near x = 4, 5, 5.5\n"
-        "figrecover: series 3: 17 found, 2 probably hidden near x = 4.5, 5.5\n"
+        "figrecover: markers found in each series: 17, 20, 19, 18\n"
+        "figrecover: series 1: 17 found, 2 probably hidden near x = 4, 5\n"
         "figrecover: series 4: 18 found, 1 probably hidden near x = 5\n"
     )
     data = read_csv(captured.out, header="series,x,y")
-    on_curves = [16, 19, 16, 17]
+    on_curves = [17, 19, 18, 17]
     for series, (curve, count) in enumerate(
         zip([rising, falling, shallow, above], on_curves, strict=True), start=1
     ):

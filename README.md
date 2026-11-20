@@ -318,14 +318,13 @@ The preview rings each marker, and each key, in a colour for its series:
   ```
 
   ```text
-  figrecover: markers found in each series: 16, 20, 17, 18
-  figrecover: series 1: 16 found, 3 probably hidden near x = 4, 5, 5.5
-  figrecover: series 3: 17 found, 2 probably hidden near x = 4.5, 5.5
+  figrecover: markers found in each series: 17, 20, 19, 18
+  figrecover: series 1: 17 found, 2 probably hidden near x = 4, 5
   figrecover: series 4: 18 found, 1 probably hidden near x = 5
   ```
 
-  The circle at x = 5 lies wholly under a square, and those at 4 and 5.5
-  show half and a third of their ink between others. Markers mostly hidden
+  The circle at x = 5 lies wholly under a square. At x = 5.5, the
+  exposed third of the circle is enough to identify it. Markers mostly hidden
   can also be taken for another's: there, one square is a triangle, one
   triangle a diamond and one diamond a circle. Check the preview.
 - A series without markers gets a warning, as its `-m` position or the axes
@@ -1351,9 +1350,10 @@ With `-m`, steps 4 to 10 give way to these:
 6. Series usually share x positions. Where two of a series' markers lie
    further apart than one and a half times their usual spacing, and other
    series have markers at an x between them, the series' marker would lie
-   there, on the straight line between its two. If another series' marker
-   lies over that place, the marker is looked for again there, as in step
-   4, and is otherwise reported as probably hidden.
+   there, on the straight line between its two. Each overlapping marker is
+   checked in turn, nearest first. A match must explain the pixels better
+   and keep the markers within two pixels of the shared x. Otherwise the
+   missing marker is reported as probably hidden.
 7. Each marker's middle is placed to a fraction of a pixel.
 8. With `--error-bars`, each marker's box is the size of its key's marker,
    and its bars are followed as in step 8 above, in ink of any colour, 64
