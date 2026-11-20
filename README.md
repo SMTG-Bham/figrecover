@@ -1292,6 +1292,13 @@ returns, exactly, as an `ErrorBars` for each.
 
 ## How it works
 
+Before following a curve, the image tracer checks for horizontal and
+vertical reference strokes that reach across the axes, including regular
+dashes and dots. It excludes their visible ink and prints the calibrated
+coordinate and colour. A lone flat stroke has no independent data beside
+it, so the reference classifier leaves it as data. A PDF supplies its
+clipped reference path coordinates directly.
+
 1. The image is read in colour and stretched to the full 0–255 range.
    Transparent pixels become white. If its axes are turned, it is levelled:
    lines at least a fifth of the image's shorter side long, within 10° of

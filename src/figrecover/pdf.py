@@ -1712,3 +1712,27 @@ def _holds(box: Box, point: Point) -> bool:
 def _written(box: Box | None) -> str:
     """Return a box's edges as they are written for --box."""
     return ",".join(f"{edge:g}" for edge in box or ())
+
+
+def pdf_references(
+    drawing: Drawing, calibration: Calibration
+) -> list[tuple[str, float, Colour]]:
+    """Read full-width or full-height clipped reference paths at page resolution."""
+    found = set()
+    for path in drawing.paths:
+        if path.stroke is None or path.fill is not None or path.clip == drawing.box:
+            continue
+        for points in path.subpaths:
+            low, high = points.min(axis=0), points.max(axis=0)
+            for axis in range(2):
+                along = 1 - axis
+                centre = float((high[axis] + low[axis]) / 2)
+                if (
+                    high[axis] - low[axis] < _FLAT
+                    and path.clip[axis] + 1 < centre < path.clip[axis + 2] - 1
+                    and low[along] <= path.clip[along] + 1
+                    and high[along] >= path.clip[along + 2] - 1
+                ):
+                    value = float(calibration.to_data([(centre, centre)])[0, axis])
+                    found.add(("xy"[axis], value, path.stroke))
+    return sorted(found)
