@@ -19,10 +19,10 @@ import cv2
 import numpy as np
 import numpy.typing as npt
 
-from . import __version__, annotations, interactive, legends, metadata
+from . import __version__, annotations, class_view, interactive, legends, metadata
 from .axes import SMALL_IMAGE, Axes, _Text
 from .calibration import MIN_POINTS, Calibration, Point
-from .classification import classify
+from .classification import classify, legend_objects, reference_objects
 from .digitize import (
     STYLES,
     Colour,
@@ -62,7 +62,7 @@ from .pdf import (
     trace_pdf_curves,
     trace_pdf_series,
 )
-from .plot_objects import without_objects
+from .plot_objects import PlotObject, without_objects
 from .svg import load_svg, render_svg
 
 type TraceRanges = list[dict[Point, Point]]
@@ -157,6 +157,7 @@ class _PagePreview:
     curves: list[npt.NDArray[np.float64]] = field(default_factory=list)
     colours: list[Colour] = field(default_factory=list)
     rings: list[Ring] = field(default_factory=list)
+    objects: list[PlotObject] = field(default_factory=list)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -203,6 +204,7 @@ def _protected_paths(
     outputs = {
         "-o": arguments.output,
         "--preview": arguments.preview,
+        "--classes": arguments.classes,
         "--metadata": arguments.metadata,
     }
     if arguments.axes_from:
@@ -244,9 +246,11 @@ def _run(options: argparse.Namespace, inputs: set[Path]) -> int:
     """Collect tables from successful inputs, reusing clicks and series choices."""
     batch = len(options.images) > 1
     records: list[metadata.InputRecord] = []
-    if batch and options.preview:
-        options.preview.mkdir(parents=True, exist_ok=True)
-    previews = {options.preview.resolve()} if options.preview and not batch else set()
+    visual_outputs = [path for path in (options.preview, options.classes) if path]
+    if batch:
+        for path in visual_outputs:
+            path.mkdir(parents=True, exist_ok=True)
+    previews = set() if batch else {path.resolve() for path in visual_outputs}
     selections: dict[str | None, list[_Selector]] = {}
     tables: list[_Table] = []
     status = 0
@@ -300,13 +304,15 @@ def _prepare_batch_input(
     """Validate input-specific options and choose a distinct preview destination."""
     if error := _input_error(arguments.image, arguments):
         raise ValueError(error)
-    if options.preview:
-        arguments.preview = _preview_path(options.preview, arguments.image, previews)
-        if arguments.preview.resolve() in inputs or (
-            options.output and arguments.preview.resolve() == options.output.resolve()
-        ):
-            msg = f"conflicting preview path: {arguments.preview}"
-            raise ValueError(msg)
+    for name in ("preview", "classes"):
+        directory = getattr(options, name)
+        if directory:
+            path = _preview_path(directory, arguments.image, previews, suffix=name)
+            if path.resolve() in inputs or (
+                options.output and path.resolve() == options.output.resolve()
+            ):
+                raise ValueError(f"conflicting {name} path: {path}")
+            setattr(arguments, name, path)
 
 
 def _start_record(arguments: argparse.Namespace, source: str) -> metadata.InputRecord:
@@ -353,13 +359,15 @@ def _finish_record(record: metadata.InputRecord, arguments: argparse.Namespace) 
         record.reproduce = metadata.reproduce(record, arguments.metadata, extra)
 
 
-def _preview_path(directory: Path, image: Path, used: set[Path]) -> Path:
+def _preview_path(
+    directory: Path, image: Path, used: set[Path], *, suffix: str = "preview"
+) -> Path:
     """Choose a distinct preview name when inputs share their stem."""
-    path = directory / f"{image.stem}.preview.png"
+    path = directory / f"{image.stem}.{suffix}.png"
     number = 1
     while path.resolve() in used:
         number += 1
-        path = directory / f"{image.stem}.{number}.preview.png"
+        path = directory / f"{image.stem}.{number}.{suffix}.png"
     used.add(path.resolve())
     return path
 
@@ -481,6 +489,13 @@ def _build_parser() -> argparse.ArgumentParser:
         "output, with a panel column)",
     )
     parser.add_argument(
+        "--classes",
+        type=Path,
+        metavar="IMAGE",
+        help="save the detected object classes and colour key; "
+        "with several inputs give a directory",
+    )
+    parser.add_argument(
         "--preview",
         type=Path,
         metavar="IMAGE",
@@ -568,6 +583,7 @@ def _digitize(arguments: argparse.Namespace) -> list[_Table]:
         if arguments.saved_legend is not None
         else legends.raster_entries(arguments.figure_image)
     )
+    entries = legends.line_patterns(arguments.figure_image, entries)
     if arguments.record:
         arguments.record.region.legend = entries
     tables: list[_Table] = []
@@ -575,17 +591,7 @@ def _digitize(arguments: argparse.Namespace) -> list[_Table]:
     colours: list[Colour] = []
     rings: list[Ring] = []
     for plot in plots:
-        left, bottom = plot.offset
-        height, width = plot.image.shape[:2]
-        arguments.legend = legends.scoped(
-            entries,
-            (
-                left + plot.calibration.origin[0],
-                bottom + plot.calibration.origin[1],
-                left + width,
-                bottom + height,
-            ),
-        )
+        arguments.legend = _plot_legend(plot, entries)
         if max(given.shape[:2]) <= SMALL_IMAGE:
             _print_resolution(plot)
         try:
@@ -628,6 +634,8 @@ def _digitize(arguments: argparse.Namespace) -> list[_Table]:
         msg = f"cannot trace the curves of any of the {len(plots)} panels"
         raise ValueError(msg)
 
+    if arguments.classes:
+        _raster_classes(arguments, plots, entries)
     if entries:
         _raster_legend_report(entries, plots, arguments)
     if arguments.preview:
@@ -640,6 +648,81 @@ def _digitize(arguments: argparse.Namespace) -> list[_Table]:
         ]
         _save_preview(arguments.preview, given, curves, colours, rings)
     return tables
+
+
+def _plot_legend(plot: _Plot, entries: Sequence[legends.Entry]) -> list[legends.Entry]:
+    """Select the matching legend rows for one raster panel."""
+    left, bottom = plot.offset
+    height, width = plot.image.shape[:2]
+    return legends.scoped(
+        entries,
+        (
+            left + plot.calibration.origin[0],
+            bottom + plot.calibration.origin[1],
+            left + width,
+            bottom + height,
+        ),
+    )
+
+
+def _raster_classes(
+    arguments: argparse.Namespace,
+    plots: Sequence[_Plot],
+    entries: Sequence[legends.Entry],
+) -> None:
+    """Classify each panel in levelled figure coordinates."""
+    image = arguments.figure_image
+    objects = []
+    for plot in plots:
+        x, y = plot.offset
+        scoped = _plot_legend(plot, entries)
+        local = [
+            replace(e, box=box, key=(e.key[0] - x, e.key[1] - y))
+            for e, box in zip(
+                scoped, legends.excluding(scoped, plot.offset), strict=True
+            )
+        ]
+        items = classify(
+            plot.image,
+            plot.calibration.origin,
+            calibration=plot.calibration,
+            entries=local,
+            texts=plot.texts,
+        )
+        top = image.shape[0] - int(y) - plot.image.shape[0]
+        objects += [
+            replace(o, left=o.left + int(x), top=o.top + top)
+            for o in items
+            if o.kind != "legend"
+        ]
+    objects.extend(legend_objects(image, entries))
+    _write_classes(arguments, image, objects)
+
+
+def _write_classes(
+    arguments: argparse.Namespace, image: Image, objects: Sequence[PlotObject]
+) -> None:
+    """Report the counts represented in a saved class view."""
+    counts = class_view.save(arguments.classes, image, objects)
+    summary = ", ".join(f"{kind} ({count})" for kind, count in sorted(counts.items()))
+    _notice(f"classes: {summary}", arguments.record)
+    excluded = {
+        "axes and ticks",
+        "reference line",
+        "gridline",
+        "legend",
+        "shaded band",
+        "background span",
+        "filled area",
+        "error bars",
+    }
+    if not arguments.no_annotations and not arguments.markers:
+        excluded.update(("annotation", "arrow or bracket"))
+    omitted = ", ".join(
+        f"{kind} ({counts[kind]})" for kind in sorted(excluded & counts.keys())
+    )
+    if omitted:
+        _notice(f"excluded from line traces: {omitted}", arguments.record)
 
 
 def _raster_legend_report(
@@ -828,18 +911,18 @@ def _trace(
         )
         if arguments.record:
             arguments.record.region.annotations = boxes
-        if boxes:
+        if boxes or shafts:
             _notice(
                 f"{_prefix(plot.name)}left out {len(boxes)} text "
                 f"region{'s' if len(boxes) != 1 else ''} and {shafts} "
                 f"arrow or bracket object{'s' if shafts != 1 else ''} in the plot area",
                 arguments.record,
             )
-    objects = classify(traced, origin, calibration=plot.calibration)
+    objects = reference_objects(traced, origin, plot.calibration)
     if objects:
         for obj in objects:
             _notice(
-                f"{_prefix(plot.name)}reference line at {obj.axis} = "
+                f"{_prefix(plot.name)}{obj.kind} at {obj.axis} = "
                 f"{obj.value:.6g} (-c {bytes(obj.colour).hex()})",
                 arguments.record,
             )
@@ -1046,7 +1129,77 @@ def _digitize_pdf(arguments: argparse.Namespace) -> list[_Table]:
             preview.colours,
             preview.rings,
         )
+    if arguments.classes:
+        image = _render(drawing)
+        preview.objects.extend(legend_objects(image, _rendered_keys(drawing, entries)))
+        _write_classes(arguments, image, preview.objects)
     return tables
+
+
+def _rendered_box(drawing: Drawing, bounds: Box) -> Box:
+    """Translate page coordinates to bottom-left pixels of a rendered selection."""
+    left, bottom, right, top = bounds
+    x, y, _, _ = drawing.box
+    return (
+        (left - x) * PREVIEW_SCALE,
+        (bottom - y) * PREVIEW_SCALE,
+        (right - x) * PREVIEW_SCALE,
+        (top - y) * PREVIEW_SCALE,
+    )
+
+
+def _rendered_keys(
+    drawing: Drawing, entries: Sequence[legends.Entry]
+) -> list[legends.Entry]:
+    """Locate legend samples in the rendered selection."""
+    x, y, _, _ = drawing.box
+    return [
+        replace(
+            e,
+            box=_rendered_box(drawing, e.box),
+            key=((e.key[0] - x) * PREVIEW_SCALE, (e.key[1] - y) * PREVIEW_SCALE),
+        )
+        for e in entries
+    ]
+
+
+def _vector_classes(
+    drawing: Drawing,
+    whole: Drawing,
+    calibration: Calibration,
+    entries: Sequence[legends.Entry],
+) -> list[PlotObject]:
+    """Map native page text and keys to the rendered panel for the class view."""
+    image = _render(drawing)
+    x0, y0, _, y1 = drawing.box
+    scale = PREVIEW_SCALE
+
+    words = []
+    for t in drawing.texts:
+        left, bottom, right, top = _rendered_box(
+            drawing, (t.left, t.bottom, t.right, t.top)
+        )
+        words.append(replace(t, left=left, bottom=bottom, right=right, top=top))
+    keys = _rendered_keys(drawing, entries)
+    origin = (
+        (calibration.origin[0] - x0) * scale,
+        (calibration.origin[1] - y0) * scale,
+    )
+    image = painted(
+        image,
+        [
+            _rendered_box(drawing, bounds)
+            for bounds in drawing.masks
+            if bounds not in {e.box for e in entries}
+        ],
+    )
+    objects = classify(image, origin, entries=keys, texts=words)
+    dx, dy = round((x0 - whole.box[0]) * scale), round((whole.box[3] - y1) * scale)
+    return [
+        replace(o, left=o.left + dx, top=o.top + dy)
+        for o in objects
+        if o.kind != "legend"
+    ]
 
 
 def _vector_table(
@@ -1080,6 +1233,10 @@ def _vector_table(
             else read_pdf_axes(drawing)
         )
         calibration, positions, names = _read_axes(axes, panel)
+    if arguments.classes:
+        preview.objects.extend(
+            _vector_classes(drawing, whole, calibration, arguments.legend)
+        )
     _report_pdf_references(drawing, calibration, arguments.record)
     selectors = arguments.colours or arguments.selections.get(panel)
     if arguments.markers:
@@ -1124,10 +1281,13 @@ def _vector_table(
         preview.curves.extend(pixels)
         preview.colours.extend(colours)
         preview.rings.extend(rings)
-    data = _data(calibration, curves, bars, aligned=True)
-    ranges: TraceRanges | None = [{} for _ in curves] if arguments.trace_range else None
     table = _Table(
-        arguments.source, panel, names, data, ranges, _series_names(arguments, inks)
+        arguments.source,
+        panel,
+        names,
+        _data(calibration, curves, bars, aligned=True),
+        [{} for _ in curves] if arguments.trace_range else None,
+        _series_names(arguments, inks),
     )
     if arguments.record:
         _record_plot(arguments, table, (calibration, positions, axes))

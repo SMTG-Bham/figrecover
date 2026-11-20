@@ -20,6 +20,8 @@ _MIN_GLYPH = 5
 _MIN_SHAFT = 20
 _MAX_SHAFT_RADIUS = 2.5
 _END_SHARE = 0.12
+_CAP_WIDTH = 3
+_HEAD_REACH = 12
 
 
 def _ink(image: Image) -> npt.NDArray[np.uint8]:
@@ -49,19 +51,35 @@ def _rectangle(text: _Text) -> Rectangle:
     )
 
 
-def _shaft(ys: npt.NDArray[np.intp], xs: npt.NDArray[np.intp]) -> bool:
+def _shaft(
+    ys: npt.NDArray[np.intp], xs: npt.NDArray[np.intp], *, labelled: bool
+) -> bool:
     """A thin straight shaft with a wider head or cap confined to an end."""
     points = np.column_stack((xs, ys)).astype(np.float32)
     vx, vy, cx, cy = cv2.fitLine(points, cv2.DIST_L1, 0, 0.01, 0.01).ravel()
     shifted = points - (cx, cy)
     along = shifted @ np.array((vx, vy))
-    across = abs(shifted @ np.array((-vy, vx)))
+    signed = shifted @ np.array((-vy, vx))
+    across = abs(signed)
     fraction = (along - along.min()) / np.ptp(along)
     middle = (fraction > _END_SHARE) & (fraction < 1 - _END_SHARE)
     radius = np.percentile(across[middle], 99)
-    return bool(
-        radius <= _MAX_SHAFT_RADIUS and np.max(across[~middle]) > radius * 2 + 0.7
-    )
+    if radius > _MAX_SHAFT_RADIUS or np.max(across[~middle]) <= radius * 2 + 0.7:
+        return False
+    if labelled:
+        return True
+    # An isolated bracket has two transverse caps. An isolated arrow has
+    # two wings that widen as they retreat from a narrow terminal point.
+    caps = []
+    for distance in (along - along.min(), along.max() - along):
+        tip = signed[distance <= _CAP_WIDTH]
+        rear = signed[(distance > _CAP_WIDTH) & (distance <= _HEAD_REACH)]
+        tip_width = min(float(tip.max()), float(-tip.min()))
+        rear_width = min(float(rear.max()), float(-rear.min()))
+        if rear_width > max(3, 2 * radius) and rear_width > 1.75 * max(1, tip_width):
+            return True
+        caps.append(tip_width > max(4, 2.5 * radius) and tip_width > 2 * rear_width)
+    return all(caps)
 
 
 def _text_boxes(
@@ -114,8 +132,6 @@ def excluded(
     roi = image[area.top : area.bottom, area.left : area.right]
     height = image.shape[0]
     boxes = _text_boxes(image, area, frames, texts) if saved is None else list(saved)
-    if not boxes:
-        return image, [], 0
     result = painted(image, boxes)
     plot = result[area.top : area.bottom, area.left : area.right]
     _, labels, stats, _ = cv2.connectedComponentsWithStats(_ink(plot))
@@ -129,12 +145,17 @@ def excluded(
             max(x0 - left - w, left - x1, y0 - top, top - h - y1) < y1 - y0
             for x0, y0, x1, y1 in boxes
         )
-        if near:
+        if near or 0.13 * max(plot.shape[:2]) <= max(w, h) <= 0.75 * max(
+            plot.shape[:2]
+        ):
             ys, xs = np.nonzero(labels[y : y + h, x : x + w] == index)
-            if _shaft(ys, xs):
+            if _shaft(ys, xs, labelled=near):
                 shafts[y + ys, x + xs] = 1
                 count += 1
     if count:
         edges = cv2.dilate(shafts, np.ones((3, 3), np.uint8))
-        plot[edges > 0] = np.median(roi, axis=(0, 1))
+        result = result.copy()
+        result[area.top : area.bottom, area.left : area.right][edges > 0] = np.median(
+            roi, axis=(0, 1)
+        )
     return result, boxes, count

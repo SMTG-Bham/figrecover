@@ -204,6 +204,7 @@ def recorded_axes(path: Path, image: Path) -> tuple[Axes, Region]:
                 tuple(row["box"]),
                 row["width"],
                 row["height"],
+                row.get("broken"),
             )
             for row in entry["region"].get("legend", [])
         ]

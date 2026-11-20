@@ -128,7 +128,9 @@ def _rows(
     return rows
 
 
-def references(plot: Image, left: int, top: int, height: int) -> list[PlotObject]:
+def references(
+    plot: Image, left: int, top: int, height: int, *, include_flat_data: bool = False
+) -> list[PlotObject]:
     """Find horizontal and vertical reference strokes, preserving a lone data line."""
     paper = np.median(plot.reshape(-1, 3)[::16], axis=0)
     result = []
@@ -177,5 +179,12 @@ def references(plot: Image, left: int, top: int, height: int) -> list[PlotObject
         if not any(
             max(w, h) > min(plot.shape[:2]) * 0.08 for _, _, w, h, _ in stats[1:]
         ):
-            return []
+            return (
+                [
+                    PlotObject("data line", o.colour, o.left, o.top, o.mask)
+                    for o in result
+                ]
+                if include_flat_data
+                else []
+            )
     return result

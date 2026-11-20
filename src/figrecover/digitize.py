@@ -16,7 +16,7 @@ import numpy.typing as npt
 from .calibration import Point
 from .errorbars import ErrorBars, _Bars, _filled_markers, _read_bars
 from .halftone import recover_greys
-from .plot_objects import PlotObject, without_objects
+from .plot_objects import PlotObject, references, without_objects
 
 type Image = npt.NDArray[np.uint8]
 type Colour = tuple[int, int, int]
@@ -52,6 +52,7 @@ _MIXED = 12  # groups of a colour's pixels this many degrees apart are several i
 _MIXED_SHARE = 0.25  # such groups each hold this fraction of the colour's pixels
 _MAX_PART = 1.25  # allow for rounding and clustering of the two measured layer colours
 _LAYER_COLOURS = 4  # background, band, stroke, and the stroke within the band
+_BAND_EDGE_COVER = 0.65  # fraction of both boundaries painted with the outline ink
 _BAND_DEPTH = 2.5  # a band is at least this many times as thick as its stroke
 _BAND_BORDER = 1 / 3  # a stroke may run partly inside the overlap of two bands
 _PART = 0.1  # an overlap of translucent colours shows this much of each, or more
@@ -348,6 +349,9 @@ def _curve_colours(image: Image, origin: Point) -> list[Colour]:
     return [colour for colour, _, reason in candidates if reason is None]
 
 
+_GRID_REASON = "is drawn in lines across the plot, as grid lines are"
+
+
 def _candidates(image: Image, origin: Point) -> list[tuple[Colour, int, str | None]]:
     """Return the colours in a plot that could be curves', most pixels first.
 
@@ -360,6 +364,9 @@ def _candidates(image: Image, origin: Point) -> list[tuple[Colour, int, str | No
     labels = _without_edges(raw, palette, width=5 if plot is not original else 3)
     depths = [_depth(raw == index) for index in range(1, len(palette))]
     bands = _bands(raw, palette, depths)
+    outlines = _band_edges(
+        raw, bands | {i for i, d in enumerate(depths, 1) if d > _AREA_DEPTH}
+    )
     aliases = _band_strokes(raw, palette, depths)
     counts = np.bincount(aliases[labels].ravel(), minlength=len(palette))
     candidates = []
@@ -373,11 +380,18 @@ def _candidates(image: Image, origin: Point) -> list[tuple[Colour, int, str | No
             reason = "fills areas"
         elif index in bands:
             reason = "is a band around a thinner stroke"
+        elif index in outlines:
+            reason = "outlines a shaded band"
         elif _draws_grid(own):
-            reason = "is drawn in lines across the plot, as grid lines are"
+            reason = _GRID_REASON
         elif aliases[index] != index or _composite(palette, labels, index):
             reason = "is where two translucent colours overlap"
         candidates.append((_to_colour(measured[index]), int(counts[index]), reason))
+    if len(candidates) == 1 and candidates[0][2] == _GRID_REASON:
+        lines = references(plot, 0, 0, len(plot), include_flat_data=True)
+        if len(lines) == 1 and lines[0].kind == "data line":
+            colour, count, _ = candidates[0]
+            return [(colour, count, None)]
     return candidates
 
 
@@ -518,7 +532,7 @@ def find_series(image: Image, origin: Point = (0, 0)) -> list[Series]:
     while any(queues):
         first = max((queue for queue in queues if queue), key=lambda queue: queue[0][1])
         every.append(first.pop(0)[0])
-    return every
+    return [series for series in every if len(series.points)]
 
 
 def trace_curve(image: Image, origin: Point = (0, 0)) -> npt.NDArray[np.float64]:
@@ -1541,6 +1555,40 @@ def _bands(
             border = neighbours > _BAND_BORDER * np.count_nonzero(ring)
             bands.update((np.flatnonzero(possible & border) + 1).tolist())
     return bands
+
+
+def _band_edges(labels: npt.NDArray[np.intp], bands: set[int]) -> set[int]:
+    """Find inks confined to the upper and lower outline of a filled strip."""
+    outlines: set[int] = set()
+    columns = np.arange(labels.shape[1])
+    for index in bands:
+        # Antialiasing can give the fill's colour to single pixels beside a
+        # remote data line. Only the broad interior defines this perimeter.
+        mask = cv2.morphologyEx(
+            (labels == index).astype(np.uint8),
+            cv2.MORPH_OPEN,
+            np.ones((5, 5), np.uint8),
+        )
+        present = mask.any(axis=0)
+        xx = columns[present]
+        upper = mask.argmax(axis=0)
+        lower = len(mask) - 1 - mask[::-1].argmax(axis=0)
+        rows = np.arange(len(mask))[:, None]
+        envelope = ((rows >= upper) & (rows <= lower) & present).astype(np.uint8)
+        near = (
+            cv2.morphologyEx(envelope, cv2.MORPH_GRADIENT, np.ones((7, 7), np.uint8))
+            > 0
+        )
+        counts = np.bincount(labels.ravel())
+        touching = np.bincount(labels[near], minlength=len(counts))
+        for ink in np.flatnonzero(touching[1:] > _BAND_EDGE_COVER * counts[1:]) + 1:
+            beside = cv2.dilate((labels == ink).astype(np.uint8), np.ones((5, 5)))
+            if (
+                min(beside[upper[xx], xx].mean(), beside[lower[xx], xx].mean())
+                > _BAND_EDGE_COVER
+            ):
+                outlines.add(int(ink))
+    return outlines
 
 
 def _band_strokes(

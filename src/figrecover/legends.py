@@ -27,6 +27,7 @@ class Entry:
     box: Rectangle
     width: float
     height: float
+    broken: bool | None = None
 
 
 def _aligned(a: Entry, b: Entry) -> bool:
@@ -89,9 +90,10 @@ def _words(image: Image) -> list[_Text]:
 def raster_entries(image: Image, texts: Sequence[_Text] | None = None) -> list[Entry]:
     """Match a compact sample to the left of each printed word."""
     if texts is None:
-        provisional = raster_entries(image, _words(image))
-        if not provisional:
+        candidates = _matched_entries(image, _words(image))
+        if not candidates:
             return []
+        provisional = grouped(candidates)
         try:
             named = raster_entries(image, _read_text(image))
         except ModuleNotFoundError:
@@ -118,6 +120,11 @@ def raster_entries(image: Image, texts: Sequence[_Text] | None = None) -> list[E
                 if p.key not in accounted and any(_aligned(p, n) for n in result)
             ]
         )
+    return grouped(_matched_entries(image, texts))
+
+
+def _matched_entries(image: Image, texts: Sequence[_Text]) -> list[Entry]:
+    """Pair individual samples with adjacent words before testing alignment."""
     shapes = _shapes(image)
     entries = []
     for text in texts:
@@ -153,7 +160,38 @@ def raster_entries(image: Image, texts: Sequence[_Text] | None = None) -> list[E
                 y1 - y0,
             )
         )
-    return grouped(entries)
+    return entries
+
+
+def line_patterns(image: Image, entries: Sequence[Entry]) -> list[Entry]:
+    """Distinguish continuous and broken samples when two labels share an ink."""
+    result = []
+    for entry in entries:
+        peers = [
+            e for e in entries if e.colour == entry.colour and e.width >= 2 * e.height
+        ]
+        width = max((e.width for e in peers), default=0)
+        if len({e.name for e in peers}) <= 1 or entry.width < 2 * entry.height:
+            result.append(entry)
+            continue
+        right = round(entry.key[0] + entry.width / 2)
+        x = max(0, round(right - width) - 1)
+        y = round(image.shape[0] - entry.key[1])
+        strip = image[max(0, y - 2) : max(0, y + 3), x : max(0, right + 1)]
+        close = np.abs(strip.astype(np.int16) - entry.colour).max(axis=2) <= _INK
+        positions = np.flatnonzero(close.any(axis=0))
+        measured = entry
+        if len(positions) and np.ptp(positions) >= 0.7 * width:
+            first, last = float(x + positions[0]), float(x + positions[-1] + 1)
+            measured = replace(
+                entry,
+                broken=bool(np.any(np.diff(positions) > 1)),
+                key=((first + last) / 2, entry.key[1]),
+                width=last - first,
+                box=(min(entry.box[0], first - 2), *entry.box[1:]),
+            )
+        result.append(measured)
+    return result
 
 
 def closest(colour: Colour, entries: Sequence[Entry]) -> int:

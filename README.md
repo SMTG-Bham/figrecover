@@ -142,6 +142,7 @@ in blue, so you can check the result at a glance:
 | `-c`, `--colour RRGGBB[:STYLE]` | Hexadecimal colour of a curve to trace, such as `1f77b4`, with a style to pick one of several curves of that colour, such as `000000:dashed`. Repeat for several curves. See [Several curves](#several-curves). |
 | `-m`, `--marker X,Y` | Pixel position of the marker in a series' legend key, or in a PDF file its position in points, to find the series by its markers' shape and colour. Repeat for each series. See [Markers](#markers). |
 | `-o`, `--output FILE` | CSV file to write. Default: standard output. |
+| `--classes IMAGE` | Save a colour-coded image of the detected plot objects. For several inputs, give a directory. |
 | `--preview PATH` | Save a preview image. For several inputs, give a directory for the previews. |
 | `--metadata FILE` | Save a JSON record of the digitization. |
 | `--axes-from FILE` | Reuse the recorded ticks and axis titles for a matching single plot. |
@@ -1314,6 +1315,25 @@ coordinate and colour. A lone flat stroke has no independent data beside
 it, so the reference classifier leaves it as data. A PDF supplies its
 clipped reference path coordinates directly.
 
+To inspect the classification, run `figrecover figure.png --classes objects.png`.
+The image has a colour key, and the terminal gives a count for each class.
+Lines, marker groups and error-bar groups are counted per detected series.
+Regularly spaced parallel rules appear as gridlines. Broad fills can appear as
+shaded bands or background spans. A matching legend label can identify a mean,
+replicate, fitted or theoretical curve. When two labels share an ink,
+a continuous sample and a broken sample can distinguish their strokes. An unlabelled stroke is a **data line**.
+A line passing through measured marker centres is a connecting line. Isolated
+arrows and brackets can be recognised from a narrow shaft with two wings
+or a transverse cap at each end. The view
+uses levelled raster coordinates. PDF and SVG views use two pixels per page
+point and native text and legend positions. Vector CSV coordinates and
+reference values come from the original drawing.
+
+In Python, `classify(image, origin, calibration=calibration)` returns objects
+with a kind, measured colour and local pixel mask. Pass them to
+`trace_curves(image, colours, origin, objects=objects)` to apply the exclusions.
+Reference objects carry their axis, pixel coordinate and calibrated value.
+
 1. The image is read in colour and stretched to the full 0–255 range.
    Transparent pixels become white. If its axes are turned, it is levelled:
    lines at least a fifth of the image's shorter side long, within 10° of
@@ -1648,16 +1668,16 @@ this size can still be misread, including axis titles.
   curves that are 120 pixels or longer.
 - Panels are found by axis lines that meet, so a figure of plots without
   them, or of plots whose axes touch, as plots sharing an axis can, is read
-  as one plot. Legends shared by several panels are not read. Panels and
-  insets are found in images only: in a PDF or SVG file, give `--box` to read
-  one.
-- Insets and legends are painted out only inside a frame of four lines that
+  as one plot. Shared legends can identify matching series across panels.
+  Vector panels with distinct clipping regions and a shared legend can be read
+  together. Use `--box` to select other vector layouts.
+- An inset needs a frame of four lines that
   stands clear of the axes' own frame: an inset in the corner of the axes,
   sharing two of their lines, is traced as part of the plot, and not read as
   a panel of its own. So is an inset whose curve meets its frame where a
   curve of a like colour runs behind it, as the two look like one curve
   crossing a box. The tick labels and titles of an inset, outside its frame,
-  are left in the plot's area, as other text in it is. `--remove-grid`
+  can remain in the plot area when OCR misses them. `--remove-grid`
   removes the lines of an inset's frame 120 pixels or longer before the
   frame is found, so give it only for plots without insets. In a PDF file,
   insets are not left out: their curves are read with the plot's.

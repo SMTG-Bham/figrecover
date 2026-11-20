@@ -108,3 +108,17 @@ def test_unframed_legend_is_masked_without_ocr(
         xx, yy = np.asarray([r[1:] for r in rows if r[0] == n], dtype=float).T
         truth = 1 + 0.5 * np.sin(xx) if n == "1" else 1.6 + 0.5 * np.cos(xx)
         assert np.quantile(abs(yy - truth) / 3, 0.95) < 0.01
+
+
+@pytest.mark.parametrize("extension", ["png", "pdf"])
+def test_shared_legend_appears_once_in_class_view(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], extension: str
+) -> None:
+    source = tmp_path / f"outside.{extension}"
+    view = tmp_path / "view.png"
+    draw(source, "outside")
+    assert main([str(source), "-n", "2", "--classes", str(view)]) == 0
+    report = capsys.readouterr().err
+    assert "legend (2)" in report
+    assert "data line (4)" in report
+    assert view.exists()
