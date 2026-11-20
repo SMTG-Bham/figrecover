@@ -17,6 +17,12 @@ import numpy.typing as npt
 from .calibration import Calibration, Point, Tick
 from .digitize import Image, ink_mask
 
+SMALL_IMAGE = 400
+"""Maximum image side in pixels for small-label OCR and resolution reporting."""
+
+_FAINT_LINE = 38  # minimum contrast from the background for subpixel axis lines
+_AXIS_SPAN = 0.45  # minimum fraction of rows or columns occupied by an axis
+
 MIN_TICKS = 3
 """Fewest labelled ticks read on each axis, so that a misread label shows."""
 
@@ -252,12 +258,37 @@ def read_axes(image: Image) -> Axes:
     return _read_axes(image, _read_text(image))
 
 
-def _read_axes(image: Image, texts: list[_Text]) -> Axes:
+def _read_axes(image: Image, texts: list[_Text], *, retry_small: bool = True) -> Axes:
     """Read the axes of a plot from the lines of text that OCR found in its image.
 
     See ``read_axes``.
     """
-    ink = ink_mask(image)
+    try:
+        return _fit_axes(image, texts, ink_mask(image))
+    except _NoTicksError:
+        if not retry_small or max(image.shape[:2]) > SMALL_IMAGE:
+            raise
+        faint = np.max(np.abs(image - np.median(image.reshape(-1, 3), axis=0)), axis=2)
+        ink = np.asarray(faint > _FAINT_LINE, dtype=np.uint8) * 255
+        boxes = _small_tick_boxes(ink > 0)
+        if not boxes:
+            raise
+        ticks = _read_small_ticks(image, boxes)
+        # Keep titles and scale factors. The retry replaces the lines whose
+        # boxes overlap newly measured ticks, including their misread digits.
+        words = [
+            t
+            for t in texts
+            if not any(
+                a - 1 <= t.x <= c + 1 and b - 1 <= image.shape[0] - t.y <= d + 1
+                for a, b, c, d in boxes
+            )
+        ]
+        return _fit_axes(image, [*words, *ticks], ink)
+
+
+def _fit_axes(image: Image, texts: list[_Text], ink: npt.NDArray[np.uint8]) -> Axes:
+    """Fit and check both axes using measured text and visible ink."""
     texts = _with_slanted_labels(image, ink, texts)
     texts = _with_vertical_labels(image, ink, texts)
     if _decimal_comma(texts):
@@ -352,7 +383,10 @@ def _read_text(image: Image, *, flip: bool = True) -> list[_Text]:
     """
     # The engine keeps the options of its last call, so each call gives them.
     found = _engine()(
-        cv2.cvtColor(image, cv2.COLOR_RGB2BGR), use_cls=flip, return_word_box=False
+        cv2.cvtColor(image, cv2.COLOR_RGB2BGR),
+        use_det=True,
+        use_cls=flip,
+        return_word_box=False,
     )
     if found.boxes is None:
         return []
@@ -361,6 +395,65 @@ def _read_text(image: Image, *, flip: bool = True) -> list[_Text]:
         _boxed(text, box, float(score), height)
         for box, text, score in zip(found.boxes, found.txts, found.scores, strict=True)
     ]
+
+
+def _strips(mask: npt.NDArray[np.bool_]) -> list[tuple[int, int]]:
+    """Return the half-open intervals of true values in a projection."""
+    ends = np.flatnonzero(np.diff(np.r_[False, mask, False]))
+    return list(zip(ends[::2].tolist(), ends[1::2].tolist(), strict=True))
+
+
+def _small_tick_boxes(ink: npt.NDArray[np.bool_]) -> list[tuple[int, int, int, int]]:
+    """Locate short lines of tick text immediately below and left of the axes."""
+    h, w = ink.shape
+    xs = np.flatnonzero(ink.sum(axis=0) > h * _AXIS_SPAN)
+    ys = np.flatnonzero(ink.sum(axis=1) > w * _AXIS_SPAN)
+    if not xs.size or not ys.size:
+        return []
+    x_axis, y_axis = int(xs[0]), int(ys[-1])
+    start = y_axis + 2
+    below = _strips(ink[start:, x_axis + 4 :].any(axis=1))
+    left = _strips(ink[: y_axis + 6, : max(0, x_axis - 1)].any(axis=0))
+    if not below or not left:
+        return []
+    top, bottom = (edge + start for edge in below[0])
+    # Join neighbouring glyphs of the same number across a one-pixel space.
+    across = ink[top:bottom].any(axis=0)
+    joined = cv2.dilate(across[None, :].astype(np.uint8), np.ones((1, 3), np.uint8))[0]
+    boxes = [
+        (a + 1, top, c - 1, bottom)
+        for a, c in _strips(joined > 0)
+        if a >= x_axis - 6 and c > a + 2
+    ]
+    a, c = left[-1]
+    strip = ink[: y_axis + 6, a:c]
+    for t, b in _strips(strip.any(axis=1)):
+        cols = np.flatnonzero(strip[t:b].any(axis=0))
+        boxes.append((int(cols[0]) + a, t, int(cols[-1]) + a + 1, b))
+    return boxes
+
+
+def _read_small_ticks(
+    image: Image, boxes: Sequence[tuple[int, int, int, int]]
+) -> list[_Text]:
+    """Enlarge each isolated label and recognise its glyphs directly."""
+    h, w = image.shape[:2]
+    texts = []
+    for a, t, c, b in boxes:
+        patch = image[max(0, t - 1) : min(h, b + 1), max(0, a - 1) : min(w, c + 1)]
+        big = cv2.resize(patch, None, fx=8, fy=8, interpolation=cv2.INTER_CUBIC)
+        big = cv2.copyMakeBorder(big, 1, 1, 1, 1, cv2.BORDER_REPLICATE)
+        read = _engine()(
+            cv2.cvtColor(big, cv2.COLOR_RGB2BGR),
+            use_det=False,
+            use_cls=False,
+            return_word_box=False,
+        )
+        if read.txts:
+            texts.append(
+                _Text(_normal(read.txts[0]), a, h - b, c, h - t, float(read.scores[0]))
+            )
+    return texts
 
 
 def _read_words(image: Image) -> list[_Text]:
@@ -373,7 +466,10 @@ def _read_words(image: Image) -> list[_Text]:
     here it reads each line as it lies, and one upside down less surely.
     """
     found = _engine()(
-        cv2.cvtColor(image, cv2.COLOR_RGB2BGR), use_cls=False, return_word_box=True
+        cv2.cvtColor(image, cv2.COLOR_RGB2BGR),
+        use_det=True,
+        use_cls=False,
+        return_word_box=True,
     )
     if found.boxes is None:
         return []

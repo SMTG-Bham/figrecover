@@ -1541,6 +1541,20 @@ Use `--trace-range` to inspect the vertical stroke extent of a raster curve,
 especially near a steep peak.
 
 
+For images up to 400 pixels on the longer side, the CLI reports how much one
+pixel spans on each axis. A logarithmic axis reports a multiplier per pixel.
+When the first OCR pass finds too few ticks, figrecover looks for long axis
+lines, isolates their labels and enlarges each label for recognition. It
+traces curves at their original resolution.
+
+On the labelled 40 dpi test plot (256 × 160), the tick digits are 4–5 pixels
+tall and the nominal line is 0.83 pixels wide. All six x ticks and nine y
+ticks were recovered. The largest curve error was 1.33% of the y range,
+compared with 0.62% at 50 dpi. On three local runs after loading the OCR
+engine, the second calibration pass added 0.46–0.99 seconds. Text near
+this size can still be misread, including axis titles.
+
+
 - In an image, curves of one colour are told apart by their dashes and
   where they run, not by the widths of their lines. Curves that run together
   for long stretches, or touch so closely that their lines overlap by more
