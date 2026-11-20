@@ -182,6 +182,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 def _input_error(image: Path, arguments: argparse.Namespace) -> str | None:
     """Return the reason a file cannot use the given options, if any."""
+    if arguments.figure and not _is_pdf(image):
+        return "--figure chooses a captioned figure on a PDF page"
     if arguments.page and _is_svg(image):
         return "--page chooses a page of a PDF file; an SVG file has only one"
     if (arguments.page or arguments.box) and not _is_drawing(image):
@@ -266,7 +268,13 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="N",
         help="the page of the PDF file to read, from 1 (default: 1)",
     )
-    parser.add_argument(
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument(
+        "--figure",
+        metavar="LABEL",
+        help="read the PDF figure with this caption label, such as 2 or S1",
+    )
+    selection.add_argument(
         "--box",
         type=_box,
         metavar="X0,Y0,X1,Y1",
@@ -618,7 +626,9 @@ def _digitize_pdf(arguments: argparse.Namespace) -> _Table:
     drawing = (
         load_svg(arguments.image, arguments.box)
         if _is_svg(arguments.image)
-        else load_pdf(arguments.image, arguments.page or 1, arguments.box)
+        else load_pdf(
+            arguments.image, arguments.page or 1, arguments.box, figure=arguments.figure
+        )
     )
     _check_positions(arguments.markers, drawing.box, "-m position")
     if arguments.remove_grid:

@@ -12,6 +12,7 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 
+from . import pdf_figures
 from .axes import (
     _LINE_COVER,
     _SCALE,
@@ -50,7 +51,8 @@ from .digitize import (
 )
 from .errorbars import ErrorBars
 
-type Box = tuple[float, float, float, float]
+type Box = pdf_figures.Box
+
 """A rectangle's left, bottom, right and top edges, in points."""
 
 PREVIEW_SCALE = 2
@@ -245,7 +247,11 @@ def _pdfium() -> Any:
 
 
 def load_pdf(
-    path: str | os.PathLike[str], page: int = 1, box: Box | None = None
+    path: str | os.PathLike[str],
+    page: int = 1,
+    box: Box | None = None,
+    *,
+    figure: str | None = None,
 ) -> Drawing:
     """Read what is drawn on a page of a PDF: its text, paths and images.
 
@@ -269,6 +275,9 @@ def load_pdf(
             on it. Text whose middle lies outside it is left out, and so are
             paths and images wholly outside it; the rest is hidden beyond it,
             as though clipped. Defaults to the whole page.
+        figure: Label of a captioned figure, such as 2 or S1, to select by
+            its caption instead of measuring a box. When several figures
+            are found, give a label or a box to choose between them.
 
     Returns:
         What is drawn on the page, within the box.
@@ -289,11 +298,17 @@ def load_pdf(
         raise ValueError(msg)
     sheet = document[page - 1]
     bounds = _edges(sheet.get_bbox())
+    texts = _texts(sheet)
+    if box is None:
+        box = pdf_figures.select_figure(texts, _graphics(sheet), bounds, page, figure)
+    elif figure is not None:
+        msg = "choose --box or --figure"
+        raise ValueError(msg)
     area = bounds if box is None else _overlap(bounds, box)
     if area is None:
         msg = f"the box {_written(box)} lies off the page, {_written(bounds)}"
         raise ValueError(msg)
-    texts = [text for text in _texts(sheet) if _holds(area, (text.x, text.y))]
+    texts = [text for text in texts if _holds(area, (text.x, text.y))]
     paths: list[_Path] = []
     pictures: list[_Picture] = []
     for drawn, matrix, clip, anchor in _objects(sheet, area):
@@ -304,6 +319,16 @@ def load_pdf(
     return Drawing(
         os.fspath(path), page, area, tuple(texts), tuple(paths), tuple(pictures)
     )
+
+
+def _graphics(sheet: Any) -> Iterator[pdf_figures.Graphic]:
+    """Yield top-level forms, images and paths with their page-space bounds."""
+    raw = _pdfium().raw
+    kinds = (raw.FPDF_PAGEOBJ_FORM, raw.FPDF_PAGEOBJ_IMAGE, raw.FPDF_PAGEOBJ_PATH)
+    for obj in sheet.get_objects(filter=kinds, max_depth=1):
+        yield pdf_figures.Graphic(
+            _edges(obj.get_bounds()), obj.type != raw.FPDF_PAGEOBJ_PATH
+        )
 
 
 def render_pdf(drawing: Drawing, scale: float = PREVIEW_SCALE) -> Image:

@@ -22,6 +22,8 @@ from figrecover import (
     trace_pdf_curves,
     trace_pdf_series,
 )
+from figrecover.cli import main
+from figrecover.pdf_figures import _label
 
 type Curve = Callable[[npt.NDArray[np.float64]], npt.NDArray[np.float64]]
 
@@ -958,3 +960,142 @@ def test_reports_unreadable_files_and_missing_pages(tmp_path: Path) -> None:
 def test_reports_a_missing_pdf_extra(tmp_path: Path) -> None:
     with pytest.raises(ModuleNotFoundError, match="pdf extra"):
         load_pdf(tmp_path / "plot.pdf")
+
+
+def captioned_page(directory: Path, *, columns: bool) -> Path:
+    """Place two Matplotlib figures, caption lines and article text on a page."""
+    positions = [(40, 470), (329, 470) if columns else (40, 190)]
+    body = [
+        "Figure 2 shows a change across both samples.",
+        "The signals were recorded under the same conditions.",
+        "We repeated the measurement for each reference sample.",
+        "All samples were prepared using the same procedure.",
+        "The data from independent runs agreed closely.",
+    ]
+    content = []
+    for (x, y), caption in zip(
+        positions, ("Fig. 2. Ringing", "Figure S1. Four series"), strict=True
+    ):
+        content.append(text(caption, x, y - 14))
+        content.extend(
+            text(line, x, y - 35 - 12 * i, size=8) for i, line in enumerate(body)
+        )
+    base = write_pdf(directory / "body.pdf", "\n".join(content), size=(600, 800))
+    with pypdfium2.PdfDocument(base) as paper:
+        page = paper[0]
+        for (x, y), name in zip(positions, ("labelled", "series"), strict=True):
+            with pypdfium2.PdfDocument(EXAMPLES / f"{name}.pdf") as figure:
+                placed = figure.page_as_xobject(0, paper).as_pageobject()
+                placed.transform(pypdfium2.PdfMatrix().scale(0.5, 0.5).translate(x, y))
+                page.insert_obj(placed)
+        page.gen_content()
+        paper.save(directory / "article.pdf")
+    return directory / "article.pdf"
+
+
+@pytest.mark.parametrize("columns", [True, False])
+def test_selects_captioned_figures_on_a_page(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], *, columns: bool
+) -> None:
+    file = captioned_page(tmp_path, columns=columns)
+    left, bottom = (329, 470) if columns else (40, 190)
+    assert main([str(file)]) == 1
+    message = capsys.readouterr().err
+    assert "page 1: choose a figure with --figure" in message
+    assert "figure 2: --box" in message
+    assert "figure S1: --box" in message
+    selected = load_pdf(file, figure="s1")
+    np.testing.assert_allclose(
+        selected.box, [left, bottom, left + 230.4, bottom + 144], atol=2
+    )
+    assert main([str(file), "--figure", "S1"]) == 0
+    output = capsys.readouterr().out
+    assert main([str(file), "--box", ",".join(map(str, selected.box))]) == 0
+    assert capsys.readouterr().out == output
+    assert load_pdf(file, figure="2").box == (39, 469, 272, 615)
+    with pytest.raises(ValueError, match="no figure 9"):
+        load_pdf(file, figure="9")
+    with pytest.raises(ValueError, match="choose --box or --figure"):
+        load_pdf(file, box=(0, 0, 10, 10), figure="S1")
+
+
+@pytest.mark.parametrize(
+    ("line", "number"),
+    [
+        ("Fig 2: Response", "2"),
+        ("Fig.2. Response", "2"),
+        ("Supplementary Figure 3. Response", "3"),
+        ("Suppl. Fig. S3 (continued)", "S3"),
+        ("Figure 4 in vitro effects", "4"),
+        ("Figure 5 continued", "5"),
+        ("FIG4 is a gene", None),
+        ("Figure 2 shows the trend", None),
+        ("Figure 3.", None),
+        ("Figure 2, Table S3).", None),
+        ("See Figure 3", None),
+    ],
+)
+def test_distinguishes_captions_from_prose(line: str, number: str | None) -> None:
+    assert _label(line) == number
+
+
+def test_selects_flat_drawings_and_respects_body_text(tmp_path: Path) -> None:
+    # A page background, a flat plot with separate strokes, and another
+    # drawing separated from the caption by a paragraph of body text.
+    content = "\n".join(
+        [
+            "1 g 0 0 400 600 re f",
+            "0 g",
+            plot(CURVE),
+            text("Figure 1. Results", 50, 285),
+            text("Figure 2. Other results", 50, 550),
+            text("All samples from the reference group were examined again.", 40, 480),
+            "0 0 1 RG 60 350 m 180 380 l 220 320 l S",
+            "360 420 m 365 425 l S",
+        ]
+    )
+    file = write_pdf(tmp_path / "flat.pdf", content, size=(400, 600))
+    selected = load_pdf(file, figure="1")
+    assert selected.box[1] < 30
+    assert selected.box[3] < 285
+    assert read_pdf_axes(selected).x_title == "Time (s)"
+    # Only the first caption has graphics on its side of the body text.
+    assert load_pdf(file).box == (0, 0, 400, 600)
+    with pytest.raises(ValueError, match="no figure 2"):
+        load_pdf(file, figure="2")
+
+
+def test_figure_option_needs_a_pdf(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit):
+        main(["plot.png", "--figure", "2"])
+    assert (
+        "--figure chooses a captioned figure on a PDF page" in capsys.readouterr().err
+    )
+    with pytest.raises(ValueError, match="no figure 2"):
+        load_pdf(EXAMPLES / "labelled.pdf", figure="2")
+
+
+def test_one_caption_preserves_whole_page_and_can_select_raster_figure(
+    tmp_path: Path,
+) -> None:
+    base = write_pdf(
+        tmp_path / "caption.pdf", text("Figure 7. Response", 40, 440), size=(600, 800)
+    )
+    file = tmp_path / "one.pdf"
+    with (
+        pypdfium2.PdfDocument(base) as paper,
+        pypdfium2.PdfDocument(EXAMPLES / "rasterised.pdf") as source,
+    ):
+        page = paper[0]
+        obj = source.page_as_xobject(0, paper).as_pageobject()
+        obj.transform(pypdfium2.PdfMatrix().translate(40, 455))
+        page.insert_obj(obj)
+        page.gen_content()
+        paper.save(file)
+    whole = load_pdf(file)
+    np.testing.assert_array_equal(whole.box, (0, 0, 600, 800))
+    selected = load_pdf(file, figure="7")
+    assert selected.pictures
+    assert selected.box != whole.box
+    raw = load_pdf(file, box=selected.box)
+    np.testing.assert_array_equal(curves(selected)[0], curves(raw)[0])

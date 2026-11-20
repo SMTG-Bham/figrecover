@@ -138,6 +138,7 @@ in blue, so you can check the result at a glance:
 | `--no-level` | Read the image as it is, without levelling it. |
 | `--error-bars` | Also read the error bars of each marker, and add their bounds to the CSV. See [Error bars](#error-bars). |
 | `--page N` | The page of a PDF file to read, from 1. Default: 1. |
+| `--figure LABEL` | Select a captioned PDF figure by its label, such as `2` or `S1`. |
 | `--box X0,Y0,X1,Y1` | The part of a PDF file's page to read, such as one figure, as its left, bottom, right and top edges in points. Default: the whole page. |
 
 ### Batches
@@ -874,6 +875,20 @@ OCR, and the curves are lines through points whose positions the PDF holds:
 ```bash
 figrecover examples/labelled.pdf --preview labelled.pdf.png
 ```
+
+For a paper with several figures on one page, start with `figrecover paper.pdf
+--page 3`. When figrecover identifies multiple figures, it prints their caption
+labels and boxes and asks you to choose. For example:
+
+```bash
+figrecover paper.pdf --page 3 --figure S1 -o supplement.csv
+```
+
+Figrecover associates labels such as “Fig. 2” and “Supplementary Figure S1”
+with nearby vector drawings or images in the same column. It checks for
+intervening article text. With one figure or no recognised captions, the
+default is the whole page. Use `--box` to select a region manually.
+
 
 ```text
 figrecover: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10
