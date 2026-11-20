@@ -28,3 +28,8 @@ repos:
     rev: v1.31.1
     hooks:
       - id: zizmor
+
+  - repo: https://github.com/python-jsonschema/check-jsonschema
+    rev: 0.39.0
+    hooks:
+      - id: check-citation-file-format

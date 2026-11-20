@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+message: "Please cite figrecover when publishing data recovered with this software."
+type: software
+title: figrecover
+authors:
+  - given-names: Louie
+    family-names: Slocombe
+version: "0.1.0"
+license: LGPL-3.0-or-later
+repository-code: "https://github.com/SMTG-Bham/figrecover"
+abstract: >-
+  figrecover recovers the points of curves from plot images, including scanned
+  figures and screenshots, and writes CSV in the plot's units. It also reads
+  the drawing objects in PDF and SVG figures.
+keywords:
+  - digitize
+  - plot
+  - figure
+  - image
+  - data extraction
+references:
+  - type: software
+    title: PlotDigitizer
+    authors:
+      - given-names: Dilawar
+        family-names: Singh
+    repository-code: "https://github.com/dilawar/PlotDigitizer"

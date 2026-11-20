@@ -8,6 +8,12 @@ PDF and SVG files too, exactly, from what they draw rather than from pixels.
 It suits batches of similar plots: calibrate once, then digitize every image
 the same way from the command line.
 
+## Citing
+
+Use **Cite this repository** on GitHub to copy the citation or download it
+as BibTeX. Include the version you used. For an unreleased checkout,
+include its Git commit as well. See [CITATION.cff](CITATION.cff).
+
 ## Installation
 
 figrecover runs on Linux only, and needs Python 3.14 (a standard build;
@@ -185,13 +191,12 @@ over them, those where two translucent colours overlap, such as two shaded
 bands, and very pale ones, less than 64 levels from the background; trace a
 pale curve with `-c` instead. Curves in neighbouring colours of a colour map,
 such as viridis, are told apart, and two `-c` colours that match the same
-curve are an error. When `-n` finds too few curves, it says which it found
-and which colours it left out, and why, with how many pixels show each:
+curve are an error. When `-n` finds too few curves, it gives the `-c` options
+for those it found and explains which colours it left out. For example,
+asking for three curves in [the grid example](#grids) gives this error.
 
 ```text
-figrecover: error: found only 1 of 3 curves, #000000 (1286 pixels); left out
-#646464 (2041 pixels), as it is drawn in lines across the plot, as grid lines
-are; #c8dcf0 (1732 pixels), as it is too pale, 54 levels from the background
+figrecover: error: found only 1 of 3 curves, -c 000000; left out #404040 (3078 pixels), as it is drawn in lines across the plot, as grid lines are
 ```
 
 In a greyscale image, such as a photocopy, colours that differed may have
@@ -319,14 +324,13 @@ The preview rings each marker, and each key, in a colour for its series:
   ```
 
   ```text
-  figrecover: markers found in each series: 16, 20, 17, 18
-  figrecover: series 1: 16 found, 3 probably hidden near x = 4, 5, 5.5
-  figrecover: series 3: 17 found, 2 probably hidden near x = 4.5, 5.5
+  figrecover: markers found in each series: 17, 20, 19, 18
+  figrecover: series 1: 17 found, 2 probably hidden near x = 4, 5
   figrecover: series 4: 18 found, 1 probably hidden near x = 5
   ```
 
-  The circle at x = 5 lies wholly under a square, and those at 4 and 5.5
-  show half and a third of their ink between others. Markers mostly hidden
+  The circle at x = 5 lies wholly under a square. At x = 5.5, the
+  exposed third of the circle is enough to identify it. Markers mostly hidden
   can also be taken for another's: there, one square is a triangle, one
   triangle a diamond and one diamond a circle. Check the preview.
 - A series without markers gets a warning, as its `-m` position or the axes
@@ -1352,9 +1356,10 @@ With `-m`, steps 4 to 10 give way to these:
 6. Series usually share x positions. Where two of a series' markers lie
    further apart than one and a half times their usual spacing, and other
    series have markers at an x between them, the series' marker would lie
-   there, on the straight line between its two. If another series' marker
-   lies over that place, the marker is looked for again there, as in step
-   4, and is otherwise reported as probably hidden.
+   there, on the straight line between its two. Each overlapping marker is
+   checked in turn, nearest first. A match must explain the pixels better
+   and keep the markers within two pixels of the shared x. Otherwise the
+   missing marker is reported as probably hidden.
 7. Each marker's middle is placed to a fraction of a pixel.
 8. With `--error-bars`, each marker's box is the size of its key's marker,
    and its bars are followed as in step 8 above, in ink of any colour, 64
@@ -1595,11 +1600,14 @@ protection.
    [trusted publisher](https://docs.pypi.org/trusted-publishers/) on PyPI, with
    workflow `release.yml` and environment `pypi`, and create a `pypi`
    environment in the repository settings.
-2. Bump the version, for example `uv version --bump minor`, and update
-   `CHANGELOG.md`.
-3. Publish a GitHub release tagged with the version prefixed by `v`, such as
+2. Enable the repository in the release owner's [Zenodo GitHub settings](https://zenodo.org/account/settings/github/)
+   before publishing the first release.
+3. Bump the version, for example `uv version --bump minor`. Update the
+   version and `date-released` in `CITATION.cff`, and update `CHANGELOG.md`.
+4. Publish a GitHub release tagged with the version prefixed by `v`, such as
    `v0.1.0`. The release workflow checks the tag, builds the distributions and
-   uploads them to PyPI.
+   uploads them to PyPI. After Zenodo archives the first release, add the
+   concept DOI for all versions to the Citing section.
 
 ## Project layout
 

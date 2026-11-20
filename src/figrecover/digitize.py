@@ -2943,13 +2943,11 @@ def _rethink(
 ) -> list[_Marker]:
     """Look again for markers probably hidden altogether, where series share x.
 
-    Where ``_missing`` finds a series' marker probably hidden, under the
-    nearest marker of another key of its colour, its key's marker is fitted
-    there, as ``_fit`` fits it, and the story around it told, as ``_story``
-    tells it, given the other markers. If the story holds a marker of the
-    other's key too, and differs less from the image than the other alone,
-    as ``_misfits`` measures them, the story replaces the other, as when the
-    other was taken to lie where the hidden marker does.
+    At each shared x where ``_missing`` predicts a marker, consider the
+    overlapping markers of its colour in order of distance. Fit the missing
+    key there and use ``_story`` to reconstruct the overlap. Keep the first
+    reconstruction that explains the pixels better, includes the original
+    key, and keeps the markers aligned with the shared x.
 
     Returns:
         The markers, with those replaced.
@@ -2971,7 +2969,7 @@ def _rethink(
                     (row, column), (marker.row, marker.column)
                 ),
             )
-            for other in nearest[:1]:  # the marker it lies under
+            for other in nearest:  # several markers can overlap at a crossing
                 known = [
                     marker
                     for marker in markers
@@ -2980,8 +2978,10 @@ def _rethink(
                 fit = _fit(area[colour], found[index], index, row, column)[1]
                 story = _story(area[colour], found, fit, known)
                 before, after = _misfits(area[colour], [[other], story])
-                if after < before and any(
-                    marker.key == other.key for marker in story[1:]
+                if (
+                    after < before
+                    and any(marker.key == other.key for marker in story[1:])
+                    and all(abs(marker.column - column) <= _ALIGNED for marker in story)
                 ):
                     markers = [
                         *known,
@@ -2992,6 +2992,7 @@ def _rethink(
                             if found[marker.key].colour != colour
                         ),
                     ]
+                    break
     return markers
 
 

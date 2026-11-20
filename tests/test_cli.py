@@ -378,13 +378,12 @@ def test_finds_markers_partly_hidden_and_reports_those_hidden(
     # 5.5 and at 4, but for the lower edge.
     captured = capsys.readouterr()
     assert captured.err == (
-        "figrecover: markers found in each series: 16, 20, 17, 18\n"
-        "figrecover: series 1: 16 found, 3 probably hidden near x = 4, 5, 5.5\n"
-        "figrecover: series 3: 17 found, 2 probably hidden near x = 4.5, 5.5\n"
+        "figrecover: markers found in each series: 17, 20, 19, 18\n"
+        "figrecover: series 1: 17 found, 2 probably hidden near x = 4, 5\n"
         "figrecover: series 4: 18 found, 1 probably hidden near x = 5\n"
     )
     data = read_csv(captured.out, header="series,x,y")
-    on_curves = [16, 19, 16, 17]
+    on_curves = [17, 19, 18, 17]
     for series, (curve, count) in enumerate(
         zip([rising, falling, shallow, above], on_curves, strict=True), start=1
     ):
@@ -1200,7 +1199,10 @@ def test_can_be_cancelled(monkeypatch: pytest.MonkeyPatch) -> None:
         (["missing.png", *POINTS, *LOCATIONS], "cannot read image"),
         ([*SPECTRUM, "-l", "80,44"], "got 3 data points but 1 pixel locations"),
         ([*SPECTRUM, *LOCATIONS, "--preview", "no/such/dir.png"], "cannot write"),
-        ([*SERIES, "-n", "5"], "found only 4 of 5 curves"),
+        (
+            [*SERIES, "-n", "5"],
+            "found only 4 of 5 curves, -c 2ca02c -c 1f77b4 -c ff7f0e -c 000000",
+        ),
         ([*SERIES, "-c", "00ffff"], "no curve of colour #00ffff found"),
         (
             [*STYLES_AT_POINTS, "-c", "000000", "-c", "0" * 6],
@@ -1211,7 +1213,13 @@ def test_can_be_cancelled(monkeypatch: pytest.MonkeyPatch) -> None:
             [*STYLES_AT_POINTS, "-c", "000000:solid2", "-c", "000000:solid2"],
             "-c 000000:solid2 is given twice",
         ),
-        ([*STYLES_AT_POINTS, "-n", "4"], "found only 3 of 4 curves"),
+        (
+            [*STYLES_AT_POINTS, "-n", "4"],
+            (
+                "found only 3 of 4 curves, -c 000000:dotted -c 000000:dashed "
+                "-c 000000:solid"
+            ),
+        ),
         (
             [*STYLES_AT_POINTS, "-c", "000000:dashed2"],
             "found only 1 dashed series of colour #000000",

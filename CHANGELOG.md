@@ -4,6 +4,9 @@
 
 The first release.
 
+- GitHub provides a software citation from `CITATION.cff`. CI validates its
+  format and checks the version against the package metadata.
+
 - The `figrecover` command writes the curves in an image of a plot as CSV, in
   the plot's own units, from three or more reference points.
 - Curves are told apart by colour, even neighbouring colours of a colour map,
