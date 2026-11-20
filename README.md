@@ -8,6 +8,12 @@ PDF and SVG files too, exactly, from what they draw rather than from pixels.
 It suits batches of similar plots: calibrate once, then digitize every image
 the same way from the command line.
 
+## Citing
+
+Use **Cite this repository** on GitHub to copy the citation or download it
+as BibTeX. Include the version you used. For an unreleased checkout,
+include its Git commit as well. See [CITATION.cff](CITATION.cff).
+
 ## Installation
 
 figrecover runs on Linux only, and needs Python 3.14 (a standard build;
@@ -1594,11 +1600,14 @@ protection.
    [trusted publisher](https://docs.pypi.org/trusted-publishers/) on PyPI, with
    workflow `release.yml` and environment `pypi`, and create a `pypi`
    environment in the repository settings.
-2. Bump the version, for example `uv version --bump minor`, and update
-   `CHANGELOG.md`.
-3. Publish a GitHub release tagged with the version prefixed by `v`, such as
+2. Enable the repository in the release owner's [Zenodo GitHub settings](https://zenodo.org/account/settings/github/)
+   before publishing the first release.
+3. Bump the version, for example `uv version --bump minor`. Update the
+   version and `date-released` in `CITATION.cff`, and update `CHANGELOG.md`.
+4. Publish a GitHub release tagged with the version prefixed by `v`, such as
    `v0.1.0`. The release workflow checks the tag, builds the distributions and
-   uploads them to PyPI.
+   uploads them to PyPI. After Zenodo archives the first release, add the
+   concept DOI for all versions to the Citing section.
 
 ## Project layout
 
