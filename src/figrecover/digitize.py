@@ -47,6 +47,7 @@ _INK_BIN_WIDTH = 8  # directions are grouped in bins this many levels wide, abou
 _MIXED = 12  # groups of a colour's pixels this many degrees apart are several inks
 _MIXED_SHARE = 0.25  # such groups each hold this fraction of the colour's pixels
 _MAX_PART = 1.25  # allow for rounding and clustering of the two measured layer colours
+_LAYER_COLOURS = 4  # background, band, stroke, and the stroke within the band
 _BAND_DEPTH = 2.5  # a band is at least this many times as thick as its stroke
 _BAND_BORDER = 1 / 3  # a stroke may run partly inside the overlap of two bands
 _PART = 0.1  # an overlap of translucent colours shows this much of each, or more
@@ -355,7 +356,8 @@ def _candidates(image: Image, origin: Point) -> list[tuple[Colour, int, str | No
     labels = _without_edges(raw, palette)
     depths = [_depth(raw == index) for index in range(1, len(palette))]
     bands = _bands(raw, palette, depths)
-    counts = np.bincount(labels.ravel(), minlength=len(palette))
+    aliases = _band_strokes(raw, palette, depths)
+    counts = np.bincount(aliases[labels].ravel(), minlength=len(palette))
     candidates = []
     for index, colour in enumerate(palette[1:], start=1):
         own = labels == index
@@ -369,7 +371,7 @@ def _candidates(image: Image, origin: Point) -> list[tuple[Colour, int, str | No
             reason = "is a band around a thinner stroke"
         elif _draws_grid(own):
             reason = "is drawn in lines across the plot, as grid lines are"
-        elif _composite(palette, labels, index):
+        elif aliases[index] != index or _composite(palette, labels, index):
             reason = "is where two translucent colours overlap"
         candidates.append((_to_colour(colour), int(counts[index]), reason))
     return candidates
@@ -744,7 +746,9 @@ def _masks(
     """
     plot, left, top = _plot_area(image, origin)
     palette = _palette(plot)
-    indices = [_match(palette, colour) for colour in colours]
+    raw = _classify(plot, palette)
+    aliases = _band_strokes(raw, palette)
+    indices = [int(aliases[_match(palette, colour)]) for colour in colours]
     for (first, index), (second, other) in itertools.combinations(
         zip(colours, indices, strict=True), 2
     ):
@@ -754,7 +758,7 @@ def _masks(
                 f"match the curve of colour #{bytes(_to_colour(palette[index])).hex()}"
             )
             raise ValueError(msg)
-    labels = _labelled(plot, palette)
+    labels = aliases[_without_edges(raw, palette)]
     for colour, index in zip(colours, indices, strict=True):
         if _fills_areas(labels == index):
             msg = f"colour #{bytes(colour).hex()} fills areas rather than a curve"
@@ -1445,6 +1449,54 @@ def _bands(
     return bands
 
 
+def _band_strokes(
+    labels: npt.NDArray[np.intp],
+    palette: npt.NDArray[np.float64],
+    depths: Sequence[float] | None = None,
+) -> npt.NDArray[np.intp]:
+    """Identify a stroke's blended shade where it enters a filled band.
+
+    A thin shade inside a broad fill must touch the same stroke outside the
+    fill. Its RGB offset from the page background must also be a positive
+    mixture of that stroke and the fill. Select the closest colour fit.
+    """
+    aliases = np.arange(len(palette))
+    if len(palette) < _LAYER_COLOURS:
+        return aliases
+    if depths is None:
+        depths = [_depth(labels == i) for i in range(1, len(palette))]
+    fills = [i for i, depth in enumerate(depths, 1) if depth > _AREA_DEPTH]
+    if not fills:
+        return aliases
+    offsets = palette - palette[0]
+    strokes = [i for i, depth in enumerate(depths, 1) if depth <= _AREA_DEPTH]
+    neighbours = {}
+    for i in strokes:
+        own = labels == i
+        ring = (cv2.dilate(own.astype(np.uint8), np.ones((5, 5))) > 0) & ~own
+        neighbours[i] = np.bincount(labels[ring], minlength=len(palette)) / max(
+            1, ring.sum()
+        )
+    for shade in strokes:
+        best = _FINE_SAME_COLOUR / 2
+        for fill in fills:
+            if neighbours[shade][fill] < _SURROUNDED:
+                continue
+            for stroke in strokes:
+                if (
+                    depths[shade - 1] > 1.5 * depths[stroke - 1]
+                    or not neighbours[shade][stroke]
+                    or neighbours[stroke][fill] >= _BAND_BORDER
+                ):
+                    continue
+                layers = offsets[[fill, stroke]].T
+                parts = np.linalg.lstsq(layers, offsets[shade])[0]
+                error = float(np.linalg.norm(layers @ parts - offsets[shade]))
+                if error < best and np.all((parts >= _PART) & (parts <= _MAX_PART)):
+                    aliases[shade], best = stroke, error
+    return aliases
+
+
 def _composite(
     colours: npt.NDArray[np.float64], labels: npt.NDArray[np.intp], index: int
 ) -> bool:
@@ -1602,19 +1654,6 @@ def _classify(plot: Image, colours: npt.NDArray[np.float64]) -> npt.NDArray[np.i
         np.take_along_axis(distance, best, axis=-1) <= _MATCH_DISTANCE
     )
     return np.where(shown[..., 0], best[..., 0], 0)
-
-
-def _labelled(plot: Image, colours: npt.NDArray[np.float64]) -> npt.NDArray[np.intp]:
-    """Label each pixel with the index of its colour, leaving out darker ones' edges.
-
-    Pixels are labelled as ``_classify`` labels them. Antialiasing blends
-    the edges of a curve with the background, so those of a dark curve show
-    lighter colours on its ray, such as a lighter grey curve's. Pixels of a
-    colour that touch those of a stronger colour, within ``_MIXED`` degrees
-    of its direction from the background, are taken for that colour's edges,
-    and labelled 0.
-    """
-    return _without_edges(_classify(plot, colours), colours)
 
 
 def _without_edges(

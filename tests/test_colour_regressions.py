@@ -10,7 +10,15 @@ import numpy.typing as npt
 import pytest
 from matplotlib.figure import Figure
 
-from figrecover import Image, find_series, trace_curves
+from figrecover import (
+    Image,
+    find_pdf_series,
+    find_series,
+    load_pdf,
+    read_pdf_axes,
+    trace_curves,
+    trace_pdf_curves,
+)
 from figrecover.cli import main
 from figrecover.digitize import _stroke_ranges
 
@@ -166,3 +174,93 @@ def test_interpolated_points_without_stroke_pixels_have_empty_ranges() -> None:
     (spans,) = _stroke_ranges(image, [ink], [curve], (0, 0))
     assert np.isnan(spans[:2]).all()
     np.testing.assert_array_equal(spans[2], (48, 50))
+
+
+@pytest.mark.parametrize(
+    "over", [True, False], ids=["band-over-line", "translucent-line-over-band"]
+)
+@pytest.mark.parametrize("vector", [False, True], ids=["png", "pdf"])
+def test_line_crossing_a_translucent_band_has_no_missing_segment(
+    tmp_path: Path, *, over: bool, vector: bool
+) -> None:
+    figure = Figure(figsize=(6.4, 4), dpi=100)
+    axes = figure.subplots()
+    blue = 1.2 + 0.6 * np.sin(X)
+    orange = 1.6 + 0.6 * np.cos(X)
+    axes.plot(X, blue, color="C0", linewidth=1.5)
+    axes.plot(X, orange, color="C1", alpha=1 if over else 0.5, linewidth=1.5)
+    axes.fill_between(
+        X,
+        blue - 0.3,
+        blue + 0.3,
+        color="C0",
+        alpha=0.3,
+        linewidth=0,
+        zorder=3 if over else 1,
+    )
+    axes.set(xlim=(0, 10), ylim=(0, 3))
+    if vector:
+        file = tmp_path / "band.pdf"
+        figure.savefig(file)
+        drawing = load_pdf(file)
+        fit = read_pdf_axes(drawing).calibration
+        found = find_pdf_series(drawing, fit.origin)
+        # Both original continuous paths survive vector clipping.
+        assert len(found) == 2
+        for series in found:
+            x, y = fit.to_data(series.points).T
+            truth = blue if series.colour == (31, 119, 180) else orange
+            np.testing.assert_allclose(y, np.interp(x, X, truth), atol=1e-5)
+    else:
+        image = image_of(figure)
+        found = find_series(image, ORIGIN)
+        assert len(found) == 2
+        (explicit,) = trace_curves(image, [(255, 127, 14)], ORIGIN)
+        x, y = axes.transData.inverted().transform(explicit).T
+        assert np.max(np.abs(y - np.interp(x, X, orange)) / 3) < 0.005
+        assert np.max(np.diff(explicit[:, 0])) <= 2
+        assert len(np.unique(explicit[:, 0])) >= 0.98 * (axes.bbox.width - 6)
+
+
+@pytest.mark.parametrize("vector", [False, True], ids=["png", "pdf"])
+def test_overlapping_alpha_bands_and_half_opacity_blue(
+    tmp_path: Path, *, vector: bool
+) -> None:
+    figure = Figure(figsize=(6.4, 4), dpi=100)
+    axes = figure.subplots()
+    blue = 1.2 + 0.6 * np.sin(X)
+    orange = 1.6 + 0.6 * np.cos(X)
+    for i, truth in enumerate([blue, orange]):
+        axes.plot(X, truth, color=f"C{i}", linewidth=1.5)
+        axes.fill_between(
+            X, truth - 0.3, truth + 0.3, color=f"C{i}", alpha=0.3, linewidth=0
+        )
+    axes.set(xlim=(0, 10), ylim=(0, 3))
+    file = tmp_path / "bands.pdf"
+    if vector:
+        figure.savefig(file)
+        drawing = load_pdf(file)
+        fit = read_pdf_axes(drawing).calibration
+        series = find_pdf_series(drawing, fit.origin)
+        points = [fit.to_data(s.points) for s in series]
+    else:
+        series = find_series(image_of(figure), ORIGIN)
+        points = [axes.transData.inverted().transform(s.points) for s in series]
+    assert {s.colour for s in series} == {(31, 119, 180), (255, 127, 14)}
+    for s, data in zip(series, points, strict=True):
+        x, y = data.T
+        truth = blue if s.colour == (31, 119, 180) else orange
+        assert np.max(np.abs(y - np.interp(x, X, truth)) / 3) < 0.005
+    axes.clear()
+    axes.plot(X, blue, color="C0", alpha=0.5, linewidth=1.5)
+    axes.set(xlim=(0, 10), ylim=(0, 3))
+    if vector:
+        figure.savefig(file)
+        drawing = load_pdf(file)
+        fit = read_pdf_axes(drawing).calibration
+        (curve,) = trace_pdf_curves(drawing, [(31, 119, 180)], fit.origin)
+        x, y = fit.to_data(curve).T
+    else:
+        (curve,) = trace_curves(image_of(figure), [(31, 119, 180)], ORIGIN)
+        x, y = axes.transData.inverted().transform(curve).T
+    assert np.max(np.abs(y - np.interp(x, X, blue)) / 3) < 0.005
