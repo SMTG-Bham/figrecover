@@ -132,13 +132,34 @@ in blue, so you can check the result at a glance:
 | `-c`, `--colour RRGGBB[:STYLE]` | Hexadecimal colour of a curve to trace, such as `1f77b4`, with a style to pick one of several curves of that colour, such as `000000:dashed`. Repeat for several curves. See [Several curves](#several-curves). |
 | `-m`, `--marker X,Y` | Pixel position of the marker in a series' legend key, or in a PDF file its position in points, to find the series by its markers' shape and colour. Repeat for each series. See [Markers](#markers). |
 | `-o`, `--output FILE` | CSV file to write. Default: standard output. |
-| `--preview IMAGE` | Also save a faded copy of the image with the recovered curves drawn on it. |
+| `--preview PATH` | Save a preview image. For several inputs, give a directory for the previews. |
 | `--remove-grid` | Paint over grid lines before tracing. |
 | `--level DEGREES` | The angle by which the image's axes are turned anticlockwise, or clockwise if negative, to turn it back by. Default: find it; see [Turned images](#turned-images). |
 | `--no-level` | Read the image as it is, without levelling it. |
 | `--error-bars` | Also read the error bars of each marker, and add their bounds to the CSV. See [Error bars](#error-bars). |
 | `--page N` | The page of a PDF file to read, from 1. Default: 1. |
 | `--box X0,Y0,X1,Y1` | The part of a PDF file's page to read, such as one figure, as its left, bottom, right and top edges in points. Default: the whole page. |
+
+### Batches
+
+Give several files to write one table with a leading `source` column.
+For example, to recover four curves from each of a set of similar plots:
+
+```bash
+figrecover plots/*.png -n 4 -o curves.csv --preview previews/
+```
+
+With `-n`, the first successful input supplies the colours and styles for
+each panel. Later files reuse those selectors so the series numbers stay in
+the same order. Use a separate run for plots with different series.
+With `-p`, click once and use those positions throughout the batch.
+Without `-p`, figrecover reads the axes separately for each input.
+
+Preview files are named `<stem>.preview.png` in the directory you give.
+Repeated stems receive a number, such as `plot.2.preview.png`. With `-o`
+and named panels, each panel gets a CSV containing its sources. A failed
+input is reported by name. The remaining inputs still run and the command
+returns status 1 if any failed.
 
 ### Several curves
 
@@ -169,8 +190,8 @@ series,x,y
 
 ![Four crossing curves, each recovered in its own colour](examples/series.preview.png)
 
-Which curve has the most pixels can change from one plot to the next, so for
-a batch, pass the printed `-c` options instead of `-n`. They fix the order of
+Which curve has the most pixels can change from one plot to the next.
+Across separate runs, pass the printed `-c` options to fix the order of
 the series, and each picks the curve whose colour is nearest, so they also
 work on similar plots whose colours differ slightly, such as JPEG files. Give
 only the `-c` options of the curves you want. The colours of plotting
