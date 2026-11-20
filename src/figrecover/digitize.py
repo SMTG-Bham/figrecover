@@ -46,6 +46,9 @@ _SAME_INK = 6  # inks whose directions from the background are this many degrees
 _INK_BIN_WIDTH = 8  # directions are grouped in bins this many levels wide, about 4°
 _MIXED = 12  # groups of a colour's pixels this many degrees apart are several inks
 _MIXED_SHARE = 0.25  # such groups each hold this fraction of the colour's pixels
+_MAX_PART = 1.25  # allow for rounding and clustering of the two measured layer colours
+_BAND_DEPTH = 2.5  # a band is at least this many times as thick as its stroke
+_BAND_BORDER = 1 / 3  # a stroke may run partly inside the overlap of two bands
 _PART = 0.1  # an overlap of translucent colours shows this much of each, or more
 _SURROUNDED = 0.5  # and this fraction of the pixels around it show one or the other
 _MIN_CURVE_FRACTION = 0.75  # a curve has at least this many pixels per column
@@ -348,7 +351,10 @@ def _candidates(image: Image, origin: Point) -> list[tuple[Colour, int, str | No
     """
     plot = _plot_area(image, origin)[0]
     palette = _palette(plot)
-    labels = _labelled(plot, palette)
+    raw = _classify(plot, palette)
+    labels = _without_edges(raw, palette)
+    depths = [_depth(raw == index) for index in range(1, len(palette))]
+    bands = _bands(raw, palette, depths)
     counts = np.bincount(labels.ravel(), minlength=len(palette))
     candidates = []
     for index, colour in enumerate(palette[1:], start=1):
@@ -357,8 +363,10 @@ def _candidates(image: Image, origin: Point) -> list[tuple[Colour, int, str | No
         reason = None
         if contrast < _CONTRAST:
             reason = f"is too pale, {contrast} levels from the background"
-        elif _fills_areas(own):
+        elif depths[index - 1] > _AREA_DEPTH:
             reason = "fills areas"
+        elif index in bands:
+            reason = "is a band around a thinner stroke"
         elif _draws_grid(own):
             reason = "is drawn in lines across the plot, as grid lines are"
         elif _composite(palette, labels, index):
@@ -406,7 +414,7 @@ def trace_curves(
         ValueError: If no curve has one of the colours, two of them match the
             same curve, or one fills areas.
     """
-    masks, _, left, top = _masks(image, colours, origin)
+    masks, _, _, left, top = _masks(image, colours, origin)
     height = image.shape[0]
     curves = [_follow(in_colour, left, top, height) for in_colour in masks]
     for colour, points in zip(colours, curves, strict=True):
@@ -458,10 +466,10 @@ def trace_series(
         ValueError: If no curve has one of the colours, two of them match the
             same curve, or one fills areas.
     """
-    masks, found, left, top = _masks(image, colours, origin)
+    masks, found, ink, left, top = _masks(image, colours, origin)
     height = image.shape[0]
     return [
-        [series for series, _ in _styled(in_colour, colour, left, top, height)]
+        [series for series, _ in _styled(in_colour, colour, ink, (left, top), height)]
         for in_colour, colour in zip(masks, found, strict=True)
     ]
 
@@ -485,10 +493,10 @@ def find_series(image: Image, origin: Point = (0, 0)) -> list[Series]:
         share a share each, the most first.
     """
     colours = _curve_colours(image, origin)
-    masks, found, left, top = _masks(image, colours, origin)
+    masks, found, ink, left, top = _masks(image, colours, origin)
     height = image.shape[0]
     styled = [
-        _styled(in_colour, colour, left, top, height)
+        _styled(in_colour, colour, ink, (left, top), height)
         for in_colour, colour in zip(masks, found, strict=True)
     ]
     queues = [[pairs[0] for pairs in styled if len(pairs) == 1]]
@@ -722,13 +730,13 @@ def find_marker_series(
 
 def _masks(
     image: Image, colours: Sequence[Colour], origin: Point
-) -> tuple[list[npt.NDArray[np.bool_]], list[Colour], int, int]:
+) -> tuple[list[npt.NDArray[np.bool_]], list[Colour], npt.NDArray[np.bool_], int, int]:
     """Return the pixels of each colour in the plot area, as ``trace_curves`` has them.
 
     Returns:
         A mask of the pixels of each colour, in the plot area; the common
-        colour that each colour picks; and the left and top edges of the
-        plot area.
+        colour that each colour picks; the mask of all labelled ink; and the
+        left and top edges of the plot area.
 
     Raises:
         ValueError: If no curve has one of the colours, two of them match the
@@ -752,7 +760,13 @@ def _masks(
             msg = f"colour #{bytes(colour).hex()} fills areas rather than a curve"
             raise ValueError(msg)
     masks = [_without_bars(labels, index) for index in indices]
-    return masks, [_to_colour(palette[index]) for index in indices], left, top
+    return (
+        masks,
+        [_to_colour(palette[index]) for index in indices],
+        labels > 0,
+        left,
+        top,
+    )
 
 
 def find_error_bars(
@@ -1364,8 +1378,36 @@ def _fills_areas(in_colour: npt.NDArray[np.bool_]) -> bool:
     Most pixels of a line lie close to its edges, and most of an area's lie
     more than ``_AREA_DEPTH`` pixels inside it.
     """
+    return _depth(in_colour) > _AREA_DEPTH
+
+
+def _depth(in_colour: npt.NDArray[np.bool_]) -> float:
+    """Return the median distance of a colour's pixels from its edge."""
     depth = cv2.distanceTransform(in_colour.astype(np.uint8), cv2.DIST_L2, 3)
-    return bool(np.median(depth[in_colour]) > _AREA_DEPTH)
+    return float(np.median(depth[in_colour])) if np.any(in_colour) else 0.0
+
+
+def _bands(
+    labels: npt.NDArray[np.intp],
+    palette: npt.NDArray[np.float64],
+    depths: Sequence[float],
+) -> set[int]:
+    """Find pale, broad strips bordering a thinner stroke of the same ink."""
+    bands: set[int] = set()
+    widths = np.asarray(depths)
+    inks, strengths = _inks(palette[1:] - palette[0])
+    for index, depth in enumerate(depths):
+        paler = (inks @ inks[index] >= math.cos(math.radians(_MIXED))) & (
+            strengths < strengths[index]
+        )
+        possible = paler & (widths >= _BAND_DEPTH * depth)
+        if np.any(possible):
+            stroke = labels == index + 1
+            ring = (cv2.dilate(stroke.astype(np.uint8), np.ones((3, 3))) > 0) & ~stroke
+            neighbours = np.bincount(labels[ring], minlength=len(palette))[1:]
+            border = neighbours > _BAND_BORDER * np.count_nonzero(ring)
+            bands.update((np.flatnonzero(possible & border) + 1).tolist())
+    return bands
 
 
 def _composite(
@@ -1375,7 +1417,9 @@ def _composite(
 
     Translucent colours drawn over each other, such as two shaded bands,
     give a colour whose offset from the background, ``colours[0]``, is a
-    blend of theirs: at least ``_PART`` of each, within ``_FINE_SAME_COLOUR``.
+    blend of theirs, within ``_FINE_SAME_COLOUR``. Each layer contributes
+    between ``_PART`` and ``_MAX_PART`` of its measured strength. A greater
+    contribution can indicate an opaque stroke seen through a band.
     The overlap lies among them, so ``_SURROUNDED`` of the pixels around its
     own, within 2 pixels, show one of the two, while those around a curve
     show mostly the background.
@@ -1390,7 +1434,7 @@ def _composite(
             continue
         blend = offsets[[first, second]].T
         parts = np.linalg.lstsq(blend, offsets[index])[0]
-        if np.all(parts >= _PART) and (
+        if np.all((parts >= _PART) & (parts <= _MAX_PART)) and (
             np.linalg.norm(blend @ parts - offsets[index]) <= _FINE_SAME_COLOUR
         ):
             return True
@@ -1535,7 +1579,13 @@ def _labelled(plot: Image, colours: npt.NDArray[np.float64]) -> npt.NDArray[np.i
     of its direction from the background, are taken for that colour's edges,
     and labelled 0.
     """
-    labels = _classify(plot, colours)
+    return _without_edges(_classify(plot, colours), colours)
+
+
+def _without_edges(
+    labels: npt.NDArray[np.intp], colours: npt.NDArray[np.float64]
+) -> npt.NDArray[np.intp]:
+    """Remove pixels on the edges of a darker colour on the same ink ray."""
     inks, strengths = _inks(colours - colours[0])
     alike = inks @ inks.T >= math.cos(math.radians(_MIXED))
     edges = np.zeros(labels.shape, dtype=np.bool_)
@@ -1590,7 +1640,7 @@ def _follow(
     minimum = in_curve.shape[1] * _MIN_BRANCH
     major = {
         (column, run)
-        for track in _tracks(columns, runs, _width(runs), gaps=False)
+        for track in _tracks(columns, runs, _width(runs), covered=None)
         if track.span >= minimum
         for column, run in zip(track.columns, track.runs, strict=True)
     }
@@ -1680,7 +1730,7 @@ def _tracks(
     runs: Sequence[Sequence[npt.NDArray[np.intp]]],
     width: float,
     *,
-    gaps: bool,
+    covered: npt.NDArray[np.bool_] | None,
 ) -> list[_Track]:
     """Follow the tracks of a curve across the runs of its pixels in each column.
 
@@ -1694,12 +1744,13 @@ def _tracks(
     tracks of the runs it overlaps.
 
     A track whose run overlaps none in the next column ends there, unless
-    ``gaps`` is true: then it carries on in a run that no track has taken,
+    ``covered`` is given: then it carries on in a run that no track has taken,
     nearest where it is headed, at most ``_GAP_WIDTHS`` times ``width``, the
     width of the curve's line, from its end, and either at most a pixel from
     where it is headed or in a direction from its end that turns by at most
     ``_TURN`` degrees from the track's, as the next dash of a dashed curve
-    does. A track no longer than ``_DOT`` line widths, such as a dot of a
+    does. A gap mostly covered by other ink can also continue a track.
+    A track no longer than ``_DOT`` line widths, such as a dot of a
     dotted curve, heads no way yet: it carries on in the nearest such run at
     most ``_DOT_GAP`` line widths from its end, whichever way it lies. So
     does a track taken out of a run that it shares, by ``_released``, as a
@@ -1736,14 +1787,14 @@ def _tracks(
                 parents[index] += carried
             if near:
                 _divide(carried, near, now, hosts, column)
-        if gaps:
+        if covered is not None:
             lost += _released(hosts, now, column, width)
             waiting = [
                 track
                 for track in waiting + lost
                 if column - track.columns[-1] <= _GAP_WIDTHS * width
             ]
-            _bridge(waiting, now, hosts, column, width)
+            _bridge(waiting, list(zip(now, hosts, strict=True)), column, width, covered)
         for index, run in enumerate(now):
             if not hosts[index]:
                 parent = parents[index][0] if parents[index] else None
@@ -1822,17 +1873,27 @@ def _released(
     return released
 
 
+def _covered_gap(
+    ink: npt.NDArray[np.bool_], x0: int, y0: float, x1: int, y1: float
+) -> bool:
+    """Return whether intervening ink could conceal the path between two runs."""
+    steps = math.ceil(max(x1 - x0, abs(y1 - y0)))
+    xs = np.rint(np.linspace(x0, x1, steps + 1)[1:-1]).astype(np.intp)
+    ys = np.rint(np.linspace(y0, y1, steps + 1)[1:-1]).astype(np.intp)
+    return bool(np.count_nonzero(ink[ys, xs]) > len(xs) / 2)
+
+
 def _bridge(
     waiting: list[_Track],
-    runs: Sequence[npt.NDArray[np.intp]],
-    hosts: list[list[_Track]],
+    runs: Sequence[tuple[npt.NDArray[np.intp], list[_Track]]],
     column: int,
     width: float,
+    covered: npt.NDArray[np.bool_],
 ) -> None:
     """Carry tracks that lost their runs on across a gap, as ``_tracks`` says.
 
-    ``hosts`` holds the tracks in each run of the column so far, which this
-    adds to, and the tracks carried on are taken out of ``waiting``;
+    Each run comes with the tracks it holds so far. Tracks carried
+    across a gap are added there and taken out of ``waiting``;
     ``width`` is the width of the curve's line. The nearest pairs of tracks
     and runs are joined first: those nearest where the tracks are headed, or
     a dot's nearest its end.
@@ -1841,8 +1902,8 @@ def _bridge(
     for number, track in enumerate(waiting):
         row, slope = track.heading(column)
         across = column - track.columns[-1]
-        for index, run in enumerate(runs):
-            if hosts[index]:
+        for index, (run, hosts) in enumerate(runs):
+            if hosts:
                 continue
             if track.span <= _DOT * width:  # a dot, which heads no way yet
                 target = float(np.clip(track.rows[-1], run[0], run[-1]))
@@ -1854,15 +1915,20 @@ def _bridge(
             down = target - track.rows[-1]
             turn = abs(math.degrees(math.atan2(down, across) - math.atan(slope)))
             if math.hypot(across, down) <= _GAP_WIDTHS * width and (
-                abs(target - row) <= 1 or turn <= _TURN
+                abs(target - row) <= 1
+                or turn <= _TURN
+                or _covered_gap(
+                    covered, track.columns[-1], track.rows[-1], column, target
+                )
             ):
                 pairs.append(
                     (abs(target - row), math.hypot(across, down), number, index)
                 )
     carried: set[int] = set()
     for _, _, number, index in sorted(pairs):
-        if number not in carried and not hosts[index]:
-            hosts[index].append(waiting[number])
+        hosts = runs[index][1]
+        if number not in carried and not hosts:
+            hosts.append(waiting[number])
             carried.add(number)
     waiting[:] = [
         track for number, track in enumerate(waiting) if number not in carried
@@ -1938,7 +2004,11 @@ def _place(
 
 
 def _styled(
-    in_colour: npt.NDArray[np.bool_], colour: Colour, left: int, top: int, height: int
+    in_colour: npt.NDArray[np.bool_],
+    colour: Colour,
+    ink: npt.NDArray[np.bool_],
+    corner: tuple[int, int],
+    height: int,
 ) -> list[tuple[Series, float]]:
     """Return the curves of a colour as series, most pixels first, with their pixels.
 
@@ -1947,8 +2017,9 @@ def _styled(
     pixels are tall, are left out of the pixels that make the curves, and,
     if there are curves too, come first, as a series of their own. The
     curve's pixels are in a part of an image ``height`` pixels tall, from
-    column ``left`` and row ``top``.
+    its top left ``corner``.
     """
+    left, top = corner
     in_curve = _without_specks(in_colour)
     columns = np.flatnonzero(in_curve.any(axis=0))
     runs = [_runs(np.flatnonzero(in_curve[:, column])) for column in columns]
@@ -1958,9 +2029,10 @@ def _styled(
     runs = [_runs(np.flatnonzero(lines[:, column])) for column in columns]
     at = dict(zip(columns.tolist(), runs, strict=True))
     minimum = in_curve.shape[1] * _MIN_BRANCH
-    tracks = _tracks(columns, runs, _width(runs), gaps=True)
+    hidden = (ink & ~in_colour) | marked
+    tracks = _tracks(columns, runs, _width(runs), covered=hidden)
     curves = _curves([track for track in tracks if track.span >= minimum])
-    described = [_described(curve, at, marked) for curve in curves]
+    described = [_described(curve, at, hidden) for curve in curves]
     found = []
     if len(centres) and curves:
         # The centre of the pixel in column c and row r is at
@@ -2202,7 +2274,7 @@ def _style(
     of the box around its runs. A curve inked along at least ``_SOLID`` of
     its length, counting the gaps between its dashes, but not those whose
     straight line across lies mostly within a pixel of ``marked`` pixels,
-    where markers were taken out, is solid. Otherwise a
+    where markers or ink of another colour hide the line, is solid. Otherwise a
     dash is a dot if its length, less the width of the line, which the box
     takes in across the dash, is at most ``_DOT`` times the width, and the
     curve is dotted if at least ``_DOTTED`` of its dashes are dots, dashed if
