@@ -3,10 +3,14 @@
 import csv
 import dataclasses
 import gzip
+import hashlib
+import json
 import runpy
+import shlex
 import sys
 import warnings
 from collections.abc import Callable, Sequence
+from importlib import metadata as packages
 from pathlib import Path
 
 import cv2
@@ -26,6 +30,7 @@ from figrecover import (
     cli,
     interactive,
     load_image,
+    metadata,
 )
 from figrecover.cli import _names, _options, main
 
@@ -1314,6 +1319,12 @@ def test_accepts_points_with_spaces_and_exponents(
         ([LABELLED_PDF, "--box", "0,0,1"], "expected a box written as x0,y0,x1,y1"),
         ([LABELLED_PDF, "--box", "0,0,inf,1"], "expected finite numbers in the box"),
         ([LABELLED_PDF, "--box", "1,0,0,1"], "whose x1 and y1 exceed its x0 and y0"),
+        (["plot.png", "--axes-from", "a.json", *POINTS], "choose --axes-from or -p"),
+        (
+            ["plot.png", "--axes-from", "a.json", "-o", "a.json"],
+            "overwrite the calibration",
+        ),
+        (["plot.png", "-o", "a.json", "--metadata", "a.json"], "name the same file"),
         ([], "required: image"),
     ],
 )
@@ -1462,3 +1473,164 @@ def test_batch_with_no_readable_inputs_leaves_output_alone(
     assert "missing1.png: error:" in captured.err
     assert "missing2.png: error:" in captured.err
     assert output.read_text() == "previous result\n"
+
+
+@pytest.mark.parametrize(
+    ("arguments", "kind"),
+    [
+        ([LABELLED, "-n", "1"], "image"),
+        ([LABELLED_PDF], "pdf"),
+        ([str(EXAMPLES / "labelled-text.svg")], "svg"),
+        ([str(EXAMPLES / "skewed.png")], "image"),
+        ([*MARKERS, *MARKER_KEYS], "image"),
+        ([*ERRORS, *POINTS, *ERROR_LOCATIONS], "image"),
+        ([*GRID, *GRID_LOCATIONS, "--remove-grid"], "image"),
+        (
+            [
+                LOGARITHMIC,
+                "-p",
+                "1,1",
+                "-p",
+                "10,1",
+                "-p",
+                "1,10",
+                *LOCATIONS,
+                "--log",
+                "xy",
+            ],
+            "image",
+        ),
+    ],
+)
+def test_metadata_reproduces_single_plot(
+    arguments: list[str],
+    kind: str,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = "points" if "-p" in arguments else "ticks"
+    sidecar = tmp_path / "run with spaces.json"
+    argv = [*arguments, "--metadata", str(sidecar)]
+    assert main(argv) == 0
+    first = capsys.readouterr()
+    document = json.loads(sidecar.read_text())
+    (entry,) = document["inputs"]
+    assert document["figrecover"] == __version__
+    assert document["argv"] == argv
+    assert "+00:00" in document["created_utc"]
+    assert all(document["versions"].values())
+    assert entry["kind"] == kind
+    assert (
+        entry["sha256"] == hashlib.sha256(Path(arguments[0]).read_bytes()).hexdigest()
+    )
+    assert entry["error"] is None
+    assert entry["page"] == (1 if kind == "pdf" else None)
+    assert (entry["box"] is None) == (kind == "image")
+    (plot,) = entry["plots"]
+    fit = plot["calibration"]
+    assert fit["source"] == source
+    for axis in ("x", "y"):
+        assert len(fit[axis]["ticks"]) >= 2
+        assert fit[axis]["residual_px"] >= 0
+    assert sum(s["points"] for s in plot["series"]) == len(first.out.splitlines()) - 1
+    if arguments[0] == LABELLED:
+        (series,) = plot["series"]
+        assert fit["x"]["title"] == "Time (s)"
+        assert series["style"] == "solid"
+        assert series["width"] > 0
+        assert f"colours: -c {series['selector']}" in first.err
+    if source == "points":
+        assert entry["points"]
+        assert entry["locations"]
+    if "-m" in arguments:
+        assert len(entry["markers"]) == len(plot["series"]) == 4
+    if arguments[0].endswith("skewed.png"):
+        assert abs(entry["level_degrees"]) > 0.1
+
+    def unexpected(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("replay attempted to discover axes, click points or rank colours")
+
+    for name in ("read_panels", "read_pdf_axes", "find_series", "find_pdf_series"):
+        monkeypatch.setattr(cli, name, unexpected)
+    monkeypatch.setattr(interactive, "pick_points", unexpected)
+    # Recording a replay must also retain the calibration for a later replay.
+    command = shlex.split(document["reproduce"])
+    assert command[0] == "figrecover"
+    assert main(command[1:]) == 0
+    assert capsys.readouterr().out == first.out
+    assert main([*command[1:], "--metadata", str(tmp_path / "replayed.json")]) == 0
+    assert capsys.readouterr().out == first.out
+
+
+@pytest.mark.parametrize("image", [PANELS, INSET])
+def test_metadata_records_each_panel(image: str, tmp_path: Path) -> None:
+    sidecar = tmp_path / "panels.json"
+    assert main([image, "--metadata", str(sidecar)]) == 0
+    document = json.loads(sidecar.read_text())
+    (entry,) = document["inputs"]
+    assert len(entry["plots"]) >= 2
+    assert len({p["panel"] for p in entry["plots"]}) == len(entry["plots"])
+    assert "reproduce" not in entry
+    assert "reproduce" not in document
+
+
+def test_metadata_records_clicks_warnings_and_failed_inputs(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sidecar = tmp_path / "batch.json"
+    picks = [(80, 44), (576, 44), (80, 147)]
+    monkeypatch.setattr(interactive, "pick_points", lambda *_args: picks)
+    argv = [SERIES[0], str(tmp_path / "missing.png"), LABELLED, *POINTS, "-n", "2"]
+    assert main([*argv, "--metadata", str(sidecar)]) == 1
+    captured = capsys.readouterr()
+    good, missing, grey = json.loads(sidecar.read_text())["inputs"]
+    assert good["plots"][0]["calibration"]["source"] == "clicked"
+    assert good["locations"] == list(map(list, picks))
+    assert f"locations: {' '.join(LOCATIONS)}" in captured.err
+    assert missing["sha256"] is None
+    assert missing["error"]
+    assert grey["sha256"]
+    assert grey["error"]
+    assert grey["warnings"]
+    assert grey["warnings"][0] in captured.err
+    assert main(argv) == 1
+    assert capsys.readouterr().out == captured.out
+
+
+def test_metadata_rejects_missing_calibration_and_records_errors(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    sidecar = tmp_path / "record.json"
+    assert main([LABELLED, "-n", "9", "--metadata", str(sidecar)]) == 1
+    document = json.loads(sidecar.read_text())
+    assert "found only" in document["inputs"][0]["error"]
+    assert main([SERIES[0], "--axes-from", str(sidecar)]) == 1
+    assert "no valid single-plot calibration" in capsys.readouterr().err
+
+
+def test_metadata_reapplies_crop_and_painted_label() -> None:
+    image = np.ones((12, 10, 3), dtype=np.uint8)
+    part = image[3:10, 1:8].copy()
+    part[1:3, 2:6] = [254, 255, 253]
+    region = metadata.Region.from_image(image, part, (1, 2))
+    assert region.crop == (1, 3, 8, 10)
+    assert region.label == (2, 1, 6, 3)
+    np.testing.assert_array_equal(region.apply(image), part)
+    assert np.all(image == 1)
+
+
+def test_metadata_records_missing_optional_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def version(name: str) -> str:
+        if name == "rapidocr":
+            raise packages.PackageNotFoundError(name)
+        return "1"
+
+    monkeypatch.setattr(packages, "version", version)
+    sidecar = tmp_path / "manual.json"
+    assert main([*SERIES, "--metadata", str(sidecar)]) == 0
+    assert json.loads(sidecar.read_text())["versions"]["rapidocr"] is None
