@@ -11,7 +11,7 @@ import re
 import sys
 import warnings
 from collections.abc import Callable, Iterator, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TextIO
 
@@ -19,7 +19,7 @@ import cv2
 import numpy as np
 import numpy.typing as npt
 
-from . import __version__, annotations, interactive, metadata
+from . import __version__, annotations, interactive, legends, metadata
 from .axes import SMALL_IMAGE, Axes, _Text
 from .calibration import MIN_POINTS, Calibration, Point
 from .digitize import (
@@ -51,7 +51,9 @@ from .pdf import (
     find_pdf_error_bars,
     find_pdf_markers,
     find_pdf_series,
+    legend_panels,
     load_pdf,
+    pdf_legend,
     read_pdf_axes,
     remove_pdf_grid,
     render_pdf,
@@ -142,6 +144,16 @@ class _Table:
     columns: tuple[str, str]
     curves: Sequence[npt.NDArray[np.float64]]
     ranges: TraceRanges | None = None
+    names: tuple[str | None, ...] = ()
+
+
+@dataclass
+class _PagePreview:
+    """Page coordinates from every panel of a vector preview."""
+
+    curves: list[npt.NDArray[np.float64]] = field(default_factory=list)
+    colours: list[Colour] = field(default_factory=list)
+    rings: list[Ring] = field(default_factory=list)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -241,7 +253,10 @@ def _run(options: argparse.Namespace, inputs: set[Path]) -> int:
         arguments.source = source if batch else None
         arguments.selections = selections.copy()
         arguments.measured = {}
+        arguments.legend = []
+        arguments.legend_names = ()
         arguments.saved_annotations = None
+        arguments.saved_legend = None
         arguments.calibration_source = "points" if options.locations else "clicked"
         arguments.record = (
             _start_record(arguments, source) if options.metadata else None
@@ -543,20 +558,31 @@ def _digitize(arguments: argparse.Namespace) -> list[_Table]:
     with the curves and rings turned back onto it.
     """
     if _is_drawing(arguments.image):
-        return [_digitize_pdf(arguments)]
+        return _digitize_pdf(arguments)
     given, levelling, plots = _plots(arguments)
-    if arguments.markers and len(plots) > 1:
-        msg = (
-            f"-m finds the markers of one plot, but the image has {len(plots)} "
-            "panels; crop it to one"
-        )
-        raise ValueError(msg)
-
+    entries = (
+        arguments.saved_legend
+        if arguments.saved_legend is not None
+        else legends.raster_entries(arguments.figure_image)
+    )
+    if arguments.record:
+        arguments.record.region.legend = entries
     tables: list[_Table] = []
     curves: list[npt.NDArray[np.float64]] = []
     colours: list[Colour] = []
     rings: list[Ring] = []
     for plot in plots:
+        left, bottom = plot.offset
+        height, width = plot.image.shape[:2]
+        arguments.legend = legends.scoped(
+            entries,
+            (
+                left + plot.calibration.origin[0],
+                bottom + plot.calibration.origin[1],
+                left + width,
+                bottom + height,
+            ),
+        )
         if max(given.shape[:2]) <= SMALL_IMAGE:
             _print_resolution(plot)
         try:
@@ -576,6 +602,7 @@ def _digitize(arguments: argparse.Namespace) -> list[_Table]:
                 plot.columns,
                 _data(plot.calibration, traced, bars, aligned=aligned),
                 ranges,
+                arguments.legend_names,
             )
         )
         if arguments.record:
@@ -598,6 +625,8 @@ def _digitize(arguments: argparse.Namespace) -> list[_Table]:
         msg = f"cannot trace the curves of any of the {len(plots)} panels"
         raise ValueError(msg)
 
+    if entries:
+        _raster_legend_report(entries, plots, arguments)
     if arguments.preview:
         # Drawn on the image as given, so positions are turned back to it.
         curves = [levelling.back(curve) for curve in curves]
@@ -608,6 +637,66 @@ def _digitize(arguments: argparse.Namespace) -> list[_Table]:
         ]
         _save_preview(arguments.preview, given, curves, colours, rings)
     return tables
+
+
+def _raster_legend_report(
+    entries: Sequence[legends.Entry],
+    plots: Sequence[_Plot],
+    arguments: argparse.Namespace,
+) -> None:
+    """Report the physical legend location and which panels may use it."""
+    owners = [
+        p.name
+        for p in plots
+        if any(
+            p.offset[0] + p.calibration.origin[0]
+            <= e.key[0]
+            <= p.offset[0] + p.image.shape[1]
+            and p.offset[1] + p.calibration.origin[1]
+            <= e.key[1]
+            <= p.offset[1] + p.image.shape[0]
+            for e in entries
+        )
+    ]
+    scope = "in this plot"
+    if len(plots) > 1:
+        scope = (
+            "in panel "
+            + ", ".join(str(n) for n in owners)
+            + ", shared by matching series"
+            if owners
+            else "outside the panels, shared across panels"
+        )
+    _report_legend(entries, scope, arguments)
+
+
+def _report_legend(
+    entries: Sequence[legends.Entry], scope: str, arguments: argparse.Namespace
+) -> None:
+    """Print reusable colour selectors and their figure scope."""
+    labels = []
+    for i, entry in enumerate(entries, 1):
+        selector = f"-c {bytes(entry.colour).hex()}"
+        if arguments.markers and sum(e.colour == entry.colour for e in entries) > 1:
+            selector = f"-m {entry.key[0]:g},{entry.key[1]:g}"
+        labels.append(f"{entry.name or i} = {selector}")
+    _notice(f"legend ({scope}): {', '.join(labels)}", arguments.record)
+
+
+def _series_names(
+    arguments: argparse.Namespace, inks: Sequence[Colour]
+) -> tuple[str | None, ...]:
+    """Name returned series in selection order, including user-supplied keys."""
+    entries = arguments.legend
+    if arguments.markers:
+        return tuple(
+            e.name if (e := legends.marker_entry(key, entries)) else None
+            for key in arguments.markers
+        )
+    return tuple(
+        entries[i].name if i < len(entries) else None
+        for i in (legends.closest(ink, entries) for ink in inks)
+    )
 
 
 def _print_resolution(plot: _Plot) -> None:
@@ -671,6 +760,7 @@ def _plots(arguments: argparse.Namespace) -> tuple[Image, Levelling, list[_Plot]
     image, levelling = _level(painted(given, arguments.mask), arguments.level)
     if arguments.record:
         arguments.record.level_degrees = levelling.angle
+    arguments.figure_image = image
     # From here on, -m positions are those in the levelled image.
     arguments.markers = _as_points(levelling.points(arguments.markers))
     if arguments.axes_from:
@@ -679,6 +769,7 @@ def _plots(arguments: argparse.Namespace) -> tuple[Image, Levelling, list[_Plot]
         offset = (left, image.shape[0] - bottom)
         image = region.apply(image)
         arguments.saved_annotations = region.annotations
+        arguments.saved_legend = region.legend
         if arguments.record:
             arguments.record.region = region
         calibration, pixels, names = _read_axes(axes, None)
@@ -727,7 +818,7 @@ def _trace(
         --error-bars, the error bars of each curve's markers.
     """
     origin = plot.calibration.origin
-    traced = plot.image
+    traced = painted(plot.image, legends.excluding(arguments.legend, plot.offset))
     if not arguments.no_annotations and not arguments.markers:
         traced, boxes, shafts = annotations.excluded(
             traced, origin, plot.texts, arguments.saved_annotations
@@ -749,10 +840,18 @@ def _trace(
     selectors = arguments.colours or arguments.selections.get(plot.name)
     if arguments.markers:
         curves = _found_markers(
-            traced, arguments.markers, plot.calibration, arguments.record
+            traced,
+            arguments.markers,
+            plot,
+            arguments.record,
+            key_image=arguments.figure_image,
         )
         colours = _series_colours(len(curves))
-        rings += _marker_rings(arguments.markers, curves, colours)
+        rings += _marker_rings(
+            [(x - plot.offset[0], y - plot.offset[1]) for x, y in arguments.markers],
+            curves,
+            colours,
+        )
     elif selectors:
         with _warnings_printed(_prefix(plot.name), arguments.record):
             curves = _chosen(
@@ -776,7 +875,13 @@ def _trace(
         colours = _distinct(inks)
     bars = None
     if arguments.error_bars and arguments.markers:
-        bars = find_marker_error_bars(traced, arguments.markers, origin)
+        bars = find_marker_error_bars(
+            traced,
+            arguments.markers,
+            origin,
+            key_image=arguments.figure_image,
+            offset=plot.offset,
+        )
     elif arguments.error_bars:
         bars = _bars_by_colour(traced, inks, origin)
         # A series of markers gives the middles that their bars run from.
@@ -789,6 +894,7 @@ def _trace(
         if arguments.trace_range
         else None
     )
+    arguments.legend_names = _series_names(arguments, inks)
     return curves, colours, rings, bars, ranges
 
 
@@ -864,7 +970,7 @@ def _warnings_printed(
                 _notice(f"{prefix}{warning.message}", record)
 
 
-def _digitize_pdf(arguments: argparse.Namespace) -> _Table:
+def _digitize_pdf(arguments: argparse.Namespace) -> list[_Table]:
     """Write the curves in a plot on a page of the PDF file, or the SVG file, as CSV.
 
     Positions on the page are in points, and the preview shows the part of
@@ -877,12 +983,59 @@ def _digitize_pdf(arguments: argparse.Namespace) -> _Table:
             arguments.image, arguments.page or 1, arguments.box, figure=arguments.figure
         )
     )
-    drawing = replace(drawing, masks=tuple(arguments.mask))
+    entries = pdf_legend(drawing)
+    panels = (
+        legend_panels(drawing)
+        if entries and not arguments.points and not arguments.axes_from
+        else []
+    )
     if arguments.record:
         arguments.record.box = drawing.box
         arguments.record.page = drawing.page if arguments.record.kind == "pdf" else None
+        arguments.record.plot_count = len(panels) or 1
+    drawings: Sequence[tuple[str | None, Drawing]] = panels or [(None, drawing)]
+    tables = []
+    preview = _PagePreview()
+    for name, panel in drawings:
+        arguments.legend = legends.scoped(entries, panel.box)
+        view = replace(
+            panel, masks=tuple(arguments.mask) + tuple(e.box for e in entries)
+        )
+        table = _vector_table(
+            view,
+            drawing,
+            arguments,
+            name,
+            preview,
+        )
+        tables.append(table)
+    if entries:
+        _report_legend(
+            entries,
+            "shared across matching panels" if panels else "in this plot",
+            arguments,
+        )
+    if arguments.preview:
+        _save_preview(
+            arguments.preview,
+            _render(drawing),
+            preview.curves,
+            preview.colours,
+            preview.rings,
+        )
+    return tables
+
+
+def _vector_table(
+    drawing: Drawing,
+    whole: Drawing,
+    arguments: argparse.Namespace,
+    panel: str | None,
+    preview: _PagePreview,
+) -> _Table:
+    """Trace a vector panel and collect its preview in full-page coordinates."""
     axes = None
-    _check_positions(arguments.markers, drawing.box, "-m position")
+    _check_positions(arguments.markers, whole.box, "-m position")
     if arguments.remove_grid:
         drawing = remove_pdf_grid(drawing)
     if arguments.points:
@@ -903,15 +1056,18 @@ def _digitize_pdf(arguments: argparse.Namespace) -> _Table:
             if arguments.axes_from
             else read_pdf_axes(drawing)
         )
-        calibration, positions, names = _read_axes(axes, None)
-    selectors = arguments.colours or arguments.selections.get(None)
+        calibration, positions, names = _read_axes(axes, panel)
+    selectors = arguments.colours or arguments.selections.get(panel)
     if arguments.markers:
         curves = _counted(
-            find_pdf_markers(drawing, arguments.markers, calibration.origin),
+            find_pdf_markers(
+                drawing, arguments.markers, calibration.origin, key_drawing=whole
+            ),
             arguments.markers,
             arguments.record,
         )
         colours = _series_colours(len(curves))
+        inks: list[Colour] = []
     elif selectors:
         origin = calibration.origin
         curves = _chosen(
@@ -919,15 +1075,17 @@ def _digitize_pdf(arguments: argparse.Namespace) -> _Table:
             lambda colours: trace_pdf_curves(drawing, colours, origin),
             lambda colours: trace_pdf_series(drawing, colours, origin),
         )
-        colours = _distinct([selector.colour for selector in selectors])
+        inks = [selector.colour for selector in selectors]
+        colours = _distinct(inks)
     else:
-        found = _found(find_pdf_series(drawing, calibration.origin), arguments, None)
+        found = _found(find_pdf_series(drawing, calibration.origin), arguments, panel)
         curves = [series.points for series in found]
-        colours = _distinct([series.colour for series in found])
+        inks = [series.colour for series in found]
+        colours = _distinct(inks)
     bars = find_pdf_error_bars(drawing, curves) if arguments.error_bars else None
 
     if arguments.preview:
-        corner = np.array(drawing.box[:2])
+        corner = np.array(whole.box[:2])
         pixels = [(curve - corner) * PREVIEW_SCALE for curve in curves]
         rings: list[Ring] = [
             ((x, y), 6, (0, 0, 255))
@@ -939,11 +1097,14 @@ def _digitize_pdf(arguments: argparse.Namespace) -> _Table:
         if bars is not None:  # drawn over the curves, in their colours
             pixels += _bar_dots(bars, -corner * PREVIEW_SCALE, PREVIEW_SCALE)
             colours = [*colours, *colours]
-        image = _render(drawing)
-        _save_preview(arguments.preview, image, pixels, colours, rings)
+        preview.curves.extend(pixels)
+        preview.colours.extend(colours)
+        preview.rings.extend(rings)
     data = _data(calibration, curves, bars, aligned=True)
     ranges: TraceRanges | None = [{} for _ in curves] if arguments.trace_range else None
-    table = _Table(arguments.source, None, names, data, ranges)
+    table = _Table(
+        arguments.source, panel, names, data, ranges, _series_names(arguments, inks)
+    )
     if arguments.record:
         _record_plot(arguments, table, (calibration, positions, axes))
     return table
@@ -1180,6 +1341,7 @@ def _found(
         )
         raise ValueError(msg + left_out())
     found = list(every[:wanted])
+    found.sort(key=lambda s: legends.closest(s.colour, arguments.legend))
     if count is not None or arguments.record:
         written = _options(found, every)
         selectors = [_selector(option) for option in written]
@@ -1275,8 +1437,10 @@ def _written(selector: _Selector) -> str:
 def _found_markers(
     image: Image,
     keys: Sequence[Point],
-    calibration: Calibration,
+    plot: _Plot,
     record: metadata.InputRecord | None,
+    *,
+    key_image: Image | None = None,
 ) -> list[npt.NDArray[np.float64]]:
     """Find the series of markers in a plot, and print what was found.
 
@@ -1290,7 +1454,14 @@ def _found_markers(
     """
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        found = find_marker_series(image, keys, calibration.origin)
+        found = find_marker_series(
+            image,
+            keys,
+            plot.calibration.origin,
+            key_image=key_image,
+            offset=plot.offset,
+        )
+    calibration = plot.calibration
     for warning in caught:
         _notice(str(warning.message), record)
     markers = _counted([series.points for series in found], keys, record)
@@ -1475,7 +1646,7 @@ def _write_csv(file: Path | TextIO, tables: Sequence[_Table], *, panels: bool) -
     columns = {table.columns for table in tables}
     names = columns.pop() if len(columns) == 1 else ("x", "y")
     sources = tables[0].source is not None
-    series = any(len(table.curves) > 1 for table in tables)
+    series = any(len(table.curves) > 1 or any(table.names) for table in tables)
     every = [curve for table in tables for curve in table.curves]
     width = max((curve.shape[1] for curve in every), default=len(names))
     across = len(names) + BOUNDS.index("x_low")  # where bounds across start
@@ -1498,7 +1669,8 @@ def _write_csv(file: Path | TextIO, tables: Sequence[_Table], *, panels: bool) -
             start = [
                 *[table.source] * sources,
                 *[table.panel or ""] * panels,
-                *[str(number)] * series,
+                *[(table.names[number - 1] if table.names else None) or str(number)]
+                * series,
             ]
             padding = [""] * max(0, width - curve.shape[1])
             if table.ranges is None:

@@ -1,5 +1,7 @@
 """Tests for levelling images of plots whose axes are turned, as scans can be."""
 
+import csv
+import io
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
@@ -366,7 +368,17 @@ def test_finds_markers_by_their_keys_where_they_lie(
 
     assert main([saved(tmp_path, image), *POINTS, *options]) == 0
 
-    data = read_csv(capsys.readouterr().out, "series,x,y")
+    _, *rows = csv.reader(io.StringIO(capsys.readouterr().out))
+    names = ["Decay", "Growth", "Wave", "Trend"]
+    data = np.asarray(
+        [
+            [
+                int(row[0]) if row[0].isdigit() else names.index(row[0]) + 1,
+                *map(float, row[1:]),
+            ]
+            for row in rows
+        ]
+    )
     curves: list[Curve] = [
         lambda x: 2.5 * np.exp(-x / 3),
         lambda x: 2.5 * (1 - np.exp(-x / 3)),
