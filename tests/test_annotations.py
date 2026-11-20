@@ -141,3 +141,12 @@ def test_manual_annotation_replay_without_ocr(
 
 def unavailable(*_args: object, **_kwargs: object) -> list[object]:
     raise ModuleNotFoundError("OCR is unavailable")
+
+
+def test_short_data_mark_next_to_text_is_preserved() -> None:
+    image = np.full((130, 180, 3), 255, dtype=np.uint8)
+    image[50:55, 90:97] = 0
+    image[68:72, 80:117] = 0
+    masked, _, count = annotations.excluded(image, (0, 0), None, [(78, 55, 119, 65)])
+    assert np.array_equal(masked[50:55, 90:97], image[50:55, 90:97])
+    assert count == 0

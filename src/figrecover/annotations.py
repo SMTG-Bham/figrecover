@@ -15,6 +15,7 @@ from .masks import Rectangle, painted
 _CONTRAST = 26
 _MIN_CONFIDENCE = 0.7
 _MIN_LETTERS = 2
+_MIN_WORD_ASPECT = 0.65  # short horizontal labels; vertical caps mimic letters
 _MIN_GLYPH = 5
 _MIN_SHAFT = 20
 _MAX_SHAFT_RADIUS = 2.5
@@ -78,11 +79,15 @@ def _text_boxes(
             return []
     boxes = []
     for text in texts:
-        if text.score < _MIN_CONFIDENCE or (
-            sum(c.isalpha() for c in text.text) < _MIN_LETTERS
-            and not (
-                any(c.isalpha() for c in text.text)
-                and any(c.isdigit() for c in text.text)
+        if (
+            text.right - text.left < _MIN_WORD_ASPECT * (text.top - text.bottom)
+            or text.score < _MIN_CONFIDENCE
+            or (
+                sum(c.isalpha() for c in text.text) < _MIN_LETTERS
+                and not (
+                    any(c.isalpha() for c in text.text)
+                    and any(c.isdigit() for c in text.text)
+                )
             )
         ):
             continue
