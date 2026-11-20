@@ -279,6 +279,10 @@ greyscale copy of `examples/series.png`, the blue and green curves both
 become `#5c5c5c`, and `-n 4` gives them as `-c 5c5c5c:solid` and
 `-c 5c5c5c:solid2`. Series can be found by their [markers](#markers) too.
 
+For a greyscale scan with a regular dot screen, figrecover measures the
+screen's spacing and angle and averages over one repeating cell before
+finding the curves. The axes are read from the original scan.
+
 Curves that share a colour are told apart by how they are drawn and where
 they run. figrecover follows each curve of a colour across the image,
 through the places where it crosses or touches another, and across the gaps
@@ -1568,8 +1572,10 @@ this size can still be misread, including axis titles.
   and each key's marker is taken to be of one colour, that of its strongest
   ink. In a greyscale image, curves of one grey are told apart only by their
   dashes and where they run, and a lighter curve loses a few pixels where it
-  touches a darker one. Halftone screens, as in printed and photocopied
-  figures, are not undone.
+  touches a darker one. Greyscale dot screens with two perpendicular repeats
+  of about 2.2 to 9 scan pixels can be detected when the plot contains a
+  textured patch at least 128 pixels square. Irregular dithering and finer
+  screens can still break a curve into dots.
 - A curve needs enough pixels to span the plot, so short curves may not be
   found, and dots of fewer than four pixels are ignored, so sparse dotted
   lines may not be either.

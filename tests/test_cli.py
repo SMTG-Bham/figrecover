@@ -287,6 +287,11 @@ def test_says_when_the_image_is_greyscale(
     )
     assert_recovers_series(captured.out, [growth, trend, decay, wave])
 
+    assert main([str(image), *POINTS, *LOCATIONS, "-c", "5c5c5c"]) == 0
+    warning = capsys.readouterr().err
+    assert "2 curves" in warning
+    assert "5c5c5c" in warning
+
 
 def test_traces_the_given_colours(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
