@@ -306,7 +306,7 @@ def test_red_and_darkred_stay_distinct_in_compressed_crossings(
     encoded = cv2.imencode(".jpg", png[..., ::-1], [cv2.IMWRITE_JPEG_QUALITY, 75])[1]
     bgr = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
     assert bgr is not None
-    for image in (png, cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)):
+    for image in (png, cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB).astype(np.uint8)):
         found = find_series(image, ORIGIN)[:2]
         assert len({s.colour for s in found}) == 2
         selected = trace_curves(image, colours, ORIGIN)
