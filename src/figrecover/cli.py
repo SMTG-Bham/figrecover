@@ -22,6 +22,7 @@ import numpy.typing as npt
 from . import __version__, annotations, interactive, legends, metadata
 from .axes import SMALL_IMAGE, Axes, _Text
 from .calibration import MIN_POINTS, Calibration, Point
+from .classification import classify
 from .digitize import (
     STYLES,
     Colour,
@@ -54,12 +55,14 @@ from .pdf import (
     legend_panels,
     load_pdf,
     pdf_legend,
+    pdf_references,
     read_pdf_axes,
     remove_pdf_grid,
     render_pdf,
     trace_pdf_curves,
     trace_pdf_series,
 )
+from .plot_objects import without_objects
 from .svg import load_svg, render_svg
 
 type TraceRanges = list[dict[Point, Point]]
@@ -832,6 +835,15 @@ def _trace(
                 f"arrow or bracket object{'s' if shafts != 1 else ''} in the plot area",
                 arguments.record,
             )
+    objects = classify(traced, origin, calibration=plot.calibration)
+    if objects:
+        for obj in objects:
+            _notice(
+                f"{_prefix(plot.name)}reference line at {obj.axis} = "
+                f"{obj.value:.6g} (-c {bytes(obj.colour).hex()})",
+                arguments.record,
+            )
+        traced = without_objects(traced, objects)
     if arguments.remove_grid:
         traced = remove_grid(traced)
     rings: list[Ring] = [(pixel, 6, (0, 0, 255)) for pixel in plot.pixels]
@@ -970,6 +982,17 @@ def _warnings_printed(
                 _notice(f"{prefix}{warning.message}", record)
 
 
+def _report_pdf_references(
+    drawing: Drawing, calibration: Calibration, record: metadata.InputRecord | None
+) -> None:
+    """Report clipped vector reference lines in their native units."""
+    for axis, value, ink in pdf_references(drawing, calibration):
+        _notice(
+            f"reference line at {axis} = {value:.6g} (-c {bytes(ink).hex()})",
+            record,
+        )
+
+
 def _digitize_pdf(arguments: argparse.Namespace) -> list[_Table]:
     """Write the curves in a plot on a page of the PDF file, or the SVG file, as CSV.
 
@@ -1057,6 +1080,7 @@ def _vector_table(
             else read_pdf_axes(drawing)
         )
         calibration, positions, names = _read_axes(axes, panel)
+    _report_pdf_references(drawing, calibration, arguments.record)
     selectors = arguments.colours or arguments.selections.get(panel)
     if arguments.markers:
         curves = _counted(

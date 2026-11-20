@@ -4,6 +4,7 @@ from importlib.metadata import version
 
 from .axes import Axes, read_axes
 from .calibration import Calibration, Point, Tick
+from .classification import classify
 from .digitize import (
     STYLES,
     Colour,
@@ -40,6 +41,7 @@ from .pdf import (
     trace_pdf_curves,
     trace_pdf_series,
 )
+from .plot_objects import PlotObject
 from .svg import load_svg, render_svg
 
 __version__ = version("figrecover")
@@ -56,11 +58,13 @@ __all__ = [
     "Levelling",
     "MarkerSeries",
     "Panel",
+    "PlotObject",
     "Point",
     "Series",
     "Style",
     "Tick",
     "__version__",
+    "classify",
     "find_colours",
     "find_error_bars",
     "find_marker_error_bars",

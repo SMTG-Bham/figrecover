@@ -16,6 +16,7 @@ import numpy.typing as npt
 from .calibration import Point
 from .errorbars import ErrorBars, _Bars, _filled_markers, _read_bars
 from .halftone import recover_greys
+from .plot_objects import PlotObject, without_objects
 
 type Image = npt.NDArray[np.uint8]
 type Colour = tuple[int, int, int]
@@ -381,7 +382,11 @@ def _candidates(image: Image, origin: Point) -> list[tuple[Colour, int, str | No
 
 
 def trace_curves(
-    image: Image, colours: Sequence[Colour], origin: Point = (0, 0)
+    image: Image,
+    colours: Sequence[Colour],
+    origin: Point = (0, 0),
+    *,
+    objects: Sequence[PlotObject] = (),
 ) -> list[npt.NDArray[np.float64]]:
     """Find the curves drawn in the given colours.
 
@@ -406,6 +411,8 @@ def trace_curves(
         origin: Pixel position where the axes cross, measured from the
             bottom-left corner.
 
+        objects: Classified non-data objects to exclude before tracing.
+
     Returns:
         One ``(n, 2)`` array per colour, of the pixel ``(x, y)`` coordinates of
         pixel centres, measured from the bottom-left corner and sorted by x,
@@ -419,6 +426,7 @@ def trace_curves(
         ValueError: If no curve has one of the colours, two of them match the
             same curve, or one fills areas.
     """
+    image = without_objects(image, objects)
     masks, _, _, left, top = _masks(image, colours, origin)
     height = image.shape[0]
     curves = [_follow(in_colour, left, top, height) for in_colour in masks]
