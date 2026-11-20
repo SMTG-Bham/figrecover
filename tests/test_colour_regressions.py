@@ -17,9 +17,9 @@ def image_of(figure: Figure) -> Image:
     """Render a plot to the RGB pixels that the CLI reads from a PNG."""
     buffer = io.BytesIO()
     figure.savefig(buffer, format="png", backend="agg")
-    return cv2.imdecode(np.frombuffer(buffer.getvalue(), np.uint8), cv2.IMREAD_COLOR)[
-        ..., ::-1
-    ].copy()
+    bgr = cv2.imdecode(np.frombuffer(buffer.getvalue(), np.uint8), cv2.IMREAD_COLOR)
+    assert bgr is not None
+    return np.asarray(bgr[..., ::-1], dtype=np.uint8).copy()
 
 
 @pytest.mark.parametrize("width", [2, 2.5, 3])
