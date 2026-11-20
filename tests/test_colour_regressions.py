@@ -264,3 +264,74 @@ def test_overlapping_alpha_bands_and_half_opacity_blue(
         (curve,) = trace_curves(image_of(figure), [(31, 119, 180)], ORIGIN)
         x, y = axes.transData.inverted().transform(curve).T
     assert np.max(np.abs(y - np.interp(x, X, blue)) / 3) < 0.005
+
+
+@pytest.mark.parametrize("width", [0.25, 0.5, 0.75, 1.0])
+def test_nominal_tab_red_selects_the_measured_thin_stroke(width: float) -> None:
+    fig = Figure(figsize=(6.4, 4), dpi=100)
+    ax = fig.subplots()
+    truth = 1.2 + np.exp(-X / 4) * np.cos(2 * X)
+    ax.plot(X, truth, color="tab:red", linewidth=width)
+    ax.set(xlim=(0, 10), ylim=(0, 3))
+    ax.spines[["top", "right"]].set_visible(False)
+    image = image_of(fig)
+    (series,) = find_series(image, ORIGIN)
+    nominal = (214, 39, 40)
+    (selected,) = trace_curves(image, [nominal], ORIGIN)
+    np.testing.assert_array_equal(selected, series.points)
+    xx, yy = ax.transData.inverted().transform(selected).T
+    assert np.max(np.abs(yy - np.interp(xx, X, truth))) / 3 < 0.005
+    # The displayed colour is supported by a real pixel of the stroke.
+    assert np.min(np.linalg.norm(image.astype(float) - series.colour, axis=2)) < 5
+    if width == 0.5:
+        assert series.colour[1] > nominal[1] + 30
+
+
+@pytest.mark.parametrize("phase", [0, 0.5, 1, 1.5, 2, 2.5])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_red_and_darkred_stay_distinct_in_compressed_crossings(
+    phase: float, *, reverse: bool
+) -> None:
+    fig = Figure(figsize=(6.4, 4), dpi=100)
+    ax = fig.subplots()
+    curves = [
+        1.2 + 0.65 * np.sin(X + phase),
+        1.5 + 0.5 * np.cos(0.8 * X + 0.21 * phase),
+    ]
+    colours = [(255, 0, 0), (139, 0, 0)]
+    for index in [1, 0] if reverse else [0, 1]:
+        ax.plot(X, curves[index], color=("red", "darkred")[index], linewidth=0.75)
+    ax.set(xlim=(0, 10), ylim=(0, 3))
+    png = image_of(fig)
+    encoded = cv2.imencode(".jpg", png[..., ::-1], [cv2.IMWRITE_JPEG_QUALITY, 75])[1]
+    bgr = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+    assert bgr is not None
+    for image in (png, cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)):
+        found = find_series(image, ORIGIN)[:2]
+        assert len({s.colour for s in found}) == 2
+        selected = trace_curves(image, colours, ORIGIN)
+        for points, truth in zip(selected, curves, strict=True):
+            xx, yy = ax.transData.inverted().transform(points).T
+            assert len(np.unique(xx)) > 0.75 * ax.bbox.width
+            assert np.percentile(np.abs(yy - np.interp(xx, X, truth)) / 3, 95) <= 0.005
+            assert any(np.array_equal(points, s.points) for s in found)
+
+
+def test_six_thin_tab10_strokes_preserve_their_curves() -> None:
+    fig = Figure(figsize=(6.4, 4), dpi=100)
+    ax = fig.subplots()
+    truths = [i + 0.3 * np.sin(X + i * 0.2) for i in range(6)]
+    for i, truth in enumerate(truths):
+        ax.plot(X, truth, color=f"C{i}", linewidth=0.75)
+    ax.set(xlim=(0, 10), ylim=(-0.5, 5.5))
+    found = find_series(image_of(fig), ORIGIN)
+    assert len(found) == 6
+    matched = set()
+    for series in found:
+        xx, yy = ax.transData.inverted().transform(series.points).T
+        distances = [
+            np.max(np.abs(yy - np.interp(xx, X, truth))) / 6 for truth in truths
+        ]
+        assert min(distances) < 0.005
+        matched.add(int(np.argmin(distances)))
+    assert len(matched) == 6
