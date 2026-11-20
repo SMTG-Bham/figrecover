@@ -57,6 +57,7 @@ class Panel:
     offset: Point
     axes: Axes
     inset_of: Panel | None = None
+    texts: tuple[_Text, ...] = ()
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -143,7 +144,13 @@ def read_panels(image: Image) -> list[Panel]:
         axes = _read_axes(image, texts)
         label = _label(texts, boxes[0], image.shape[0]) if boxes else None
         painted = _painted(image, label, boxes[0]) if boxes else image
-        panel = Panel(_letter(label), painted, (0, 0), axes)
+        panel = Panel(
+            _letter(label),
+            painted,
+            (0, 0),
+            axes,
+            texts=tuple(t for t in texts if t != label),
+        )
         return [panel, *_insets(panel, [text for text in texts if text != label])]
 
     pieces = [
@@ -183,8 +190,8 @@ def read_panels(image: Image) -> list[Panel]:
     for letter, index in zip(letters, found, strict=True):
         piece = pieces[index]
         offset = (piece.part.left, height - piece.part.bottom)
-        panel = Panel(letter, piece.traced, offset, read[index])
         texts = [text for text in piece.texts if text != piece.label]
+        panel = Panel(letter, piece.traced, offset, read[index], texts=tuple(texts))
         plots += [panel, *_insets(panel, texts)]
     return plots
 
@@ -250,7 +257,9 @@ def _insets(panel: Panel, texts: Sequence[_Text]) -> list[Panel]:
         except ValueError:
             continue  # a legend, say
         offset = (panel.offset[0] + part.left, panel.offset[1] + height - part.bottom)
-        insets.append(Panel(None, piece.traced, offset, axes, panel))
+        insets.append(
+            Panel(None, piece.traced, offset, axes, panel, tuple(piece.texts))
+        )
     return insets
 
 

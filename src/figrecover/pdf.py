@@ -50,6 +50,7 @@ from .digitize import (
     trace_curves,
 )
 from .errorbars import ErrorBars
+from .masks import painted
 
 type Box = pdf_figures.Box
 
@@ -178,6 +179,7 @@ class Drawing:
     texts: tuple[_Text, ...] = field(repr=False)
     paths: tuple[_Path, ...] = field(repr=False)
     pictures: tuple[_Picture, ...] = field(repr=False)
+    masks: tuple[Box, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -660,7 +662,10 @@ def find_pdf_markers(
             )
             raise ValueError(msg)
     plotted = [
-        marker for marker in markers if not _in_legend(marker, drawing.texts, origin)
+        marker
+        for marker in markers
+        if _unmasked_marker(marker, drawing.masks)
+        and not _in_legend(marker, drawing.texts, origin)
     ]
     return [
         _dots(
@@ -1212,12 +1217,21 @@ def _longest(series: Sequence[_Series]) -> list[_Series]:
     )
 
 
+def _unmasked_marker(marker: _Marker, masks: Sequence[Box]) -> bool:
+    """Whether the marker centre lies outside all excluded page rectangles."""
+    x, y = marker.centre
+    return not any(
+        left <= x <= right and bottom <= y <= top for left, bottom, right, top in masks
+    )
+
+
 def _plotted(drawing: Drawing, origin: Point) -> list[_Marker]:
     """Return the markers drawn on a page, less those in a legend, in drawing order."""
     return [
         marker
         for marker in _markers(drawing)
-        if not _in_legend(marker, drawing.texts, origin)
+        if _unmasked_marker(marker, drawing.masks)
+        and not _in_legend(marker, drawing.texts, origin)
     ]
 
 
@@ -1322,6 +1336,9 @@ def _line(
         path = drawing.paths[index]
         for piece in _pieces(path):
             shown = _shown(piece, path.clip, origin)
+            for left, bottom, right, top in drawing.masks:
+                x, y = piece.T
+                shown &= ~((x >= left) & (x <= right) & (y >= bottom) & (y <= top))
             points.append(piece[shown])
             length += _length(piece, shown)
     return np.vstack(points), length
@@ -1372,9 +1389,19 @@ def _traced(drawing: Drawing, origin: Point) -> list[_Series]:
         inner = (np.array(origin) - corner) / scale
         inner[inner < 1] = -AXIS_MARGIN  # so no pixels are left out for the axes
         start = (float(inner[0]), float(inner[1]))
-        colours = _curve_colours(picture.image, start)
+        masks = [
+            (
+                (x0 - left) / scale[0],
+                (y0 - bottom) / scale[1],
+                (x1 - left) / scale[0],
+                (y1 - bottom) / scale[1],
+            )
+            for x0, y0, x1, y1 in drawing.masks
+        ]
+        image = painted(picture.image, masks)
+        colours = _curve_colours(image, start)
         for colour, curve in zip(
-            colours, trace_curves(picture.image, colours, start), strict=True
+            colours, trace_curves(image, colours, start), strict=True
         ):
             points = corner + curve * scale
             shown = _shown(points, picture.clip, origin)
