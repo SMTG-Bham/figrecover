@@ -1870,3 +1870,25 @@ def test_small_tick_patch_can_have_no_recognised_text(
     )
     image = np.full((10, 20, 3), 255, dtype=np.uint8)
     assert _read_small_ticks(image, [(2, 2, 6, 8)]) == []
+
+
+def test_missing_ticks_trigger_patch_recognition_independently_of_ocr_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image = np.full((60, 100, 3), 255, dtype=np.uint8)
+    image[5:48, 20] = 195
+    image[47, 20:91] = 195
+    for x in (20, 55, 90):
+        image[51:55, x - 1 : x + 2] = 30
+    for row in (5, 26, 47):
+        image[row - 1 : row + 2, 12:16] = 30
+    readings = iter(("0", "1", "2", "2", "1", "0"))
+
+    def recognise(_patch: Image, **_options: bool) -> SimpleNamespace:
+        return SimpleNamespace(txts=[next(readings)], scores=[0.99])
+
+    monkeypatch.setattr(axes, "_engine", lambda: recognise)
+    monkeypatch.setattr(axes, "_read_text", lambda _im: [])
+    fitted = read_axes(image)
+    assert [v for _, v in fitted.x_ticks] == [0, 1, 2]
+    assert [v for _, v in fitted.y_ticks] == [0, 1, 2]
