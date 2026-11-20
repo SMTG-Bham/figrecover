@@ -1,5 +1,6 @@
 """Tests for the command-line interface, using the example plots."""
 
+import csv
 import dataclasses
 import gzip
 import runpy
@@ -1344,3 +1345,120 @@ def test_module_runs_the_cli(
 
     assert exit_info.value.code == 0
     assert capsys.readouterr().out == f"{__version__}\n"
+
+
+def test_batch_reuses_clicked_points_and_first_colour_order(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Thicken the orange stroke to make the second image rank orange first.
+    second = tmp_path / "series.png"
+    bgr = cv2.imread(SERIES[0])
+    assert bgr is not None
+    orange = (14, 127, 255)
+    stroke = np.all(bgr == orange, axis=2).astype(np.uint8)
+    bgr[cv2.dilate(stroke, np.ones((3, 3))) > 0] = orange
+    cv2.imwrite(str(second), bgr)
+    assert main([str(second), *POINTS, *LOCATIONS, "-n", "4"]) == 0
+    assert "colours: -c ff7f0e" in capsys.readouterr().err
+
+    clicks = []
+
+    def pick(_image: Image, labels: Sequence[str]) -> list[Point]:
+        clicks.append(labels)
+        return [(80, 44), (576, 44), (80, 147)]
+
+    monkeypatch.setattr(interactive, "pick_points", pick)
+    preview = tmp_path / "previews"
+    assert (
+        main([SERIES[0], *POINTS, str(second), "-n", "4", "--preview", str(preview)])
+        == 0
+    )
+    captured = capsys.readouterr()
+    assert (
+        len(clicks)
+        == captured.err.count("locations:")
+        == captured.err.count("colours:")
+        == 1
+    )
+    rows = list(csv.DictReader(captured.out.splitlines()))
+    assert list(rows[0]) == ["source", "series", "x", "y"]
+    assert list(dict.fromkeys(row["source"] for row in rows)) == [
+        SERIES[0],
+        str(second),
+    ]
+    for source in [SERIES[0], str(second)]:
+        for number, function in enumerate([wave, decay, growth, trend], 1):
+            values = np.array(
+                [
+                    (float(row["x"]), float(row["y"]))
+                    for row in rows
+                    if row["source"] == source and int(row["series"]) == number
+                ]
+            )
+            assert_follows(values, function)
+    assert {path.name for path in preview.iterdir()} == {
+        "series.preview.png",
+        "series.2.preview.png",
+    }
+
+
+def test_batch_continues_after_failed_inputs(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["missing.png", *SERIES, LABELLED_PDF, "--no-level", "-n", "1"]) == 1
+    captured = capsys.readouterr()
+    assert "missing.png: error: cannot read image" in captured.err
+    assert f"{LABELLED_PDF}: error: --level" in captured.err
+    rows = list(csv.DictReader(captured.out.splitlines()))
+    assert {row["source"] for row in rows} == {SERIES[0]}
+    assert_follows(np.array([(float(row["x"]), float(row["y"])) for row in rows]), wave)
+
+
+def test_batch_keeps_sources_in_panel_files(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    panels = [spectrum_panel("a"), spectrum_panel("b")]
+    monkeypatch.setattr(cli, "read_panels", lambda _image: panels)
+    inputs = [SPECTRUM[0], LABELLED]
+    output = tmp_path / "out.csv"
+    assert main([*inputs, "-n", "1", "-o", str(output)]) == 0
+    assert capsys.readouterr().err.count("colours:") == 2
+    for name in "ab":
+        rows = list(
+            csv.DictReader(output.with_stem(f"out_{name}").read_text().splitlines())
+        )
+        assert list(dict.fromkeys(row["source"] for row in rows)) == inputs
+
+
+def test_batch_protects_inputs_from_generated_names(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    protected = tmp_path / "spectrum.preview.png"
+    protected.write_bytes(Path(SPECTRUM[0]).read_bytes())
+    before = protected.read_bytes()
+    assert (
+        main([*SPECTRUM, str(protected), *LOCATIONS, "--preview", str(tmp_path)]) == 1
+    )
+    assert "conflicting preview path" in capsys.readouterr().err
+    assert protected.read_bytes() == before
+
+    monkeypatch.setattr(
+        cli, "read_panels", lambda _image: [spectrum_panel("a"), spectrum_panel("b")]
+    )
+    protected = tmp_path / "out_a.png"
+    protected.write_bytes(before)
+    assert main([SPECTRUM[0], str(protected), "-o", str(tmp_path / "out.png")]) == 1
+    assert "panel output would overwrite" in capsys.readouterr().err
+    assert protected.read_bytes() == before
+
+
+def test_batch_with_no_readable_inputs_leaves_output_alone(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    output = tmp_path / "existing.csv"
+    output.write_text("previous result\n")
+    assert main(["missing1.png", "missing2.png", "-o", str(output)]) == 1
+    captured = capsys.readouterr()
+    assert "missing1.png: error:" in captured.err
+    assert "missing2.png: error:" in captured.err
+    assert output.read_text() == "previous result\n"

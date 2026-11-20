@@ -127,6 +127,16 @@ class _Plot:
     columns: tuple[str, str]
 
 
+@dataclass(frozen=True, slots=True, eq=False)
+class _Table:
+    """The data rows and labels from one plot, ready to write as CSV."""
+
+    source: str | None
+    panel: str | None
+    columns: tuple[str, str]
+    curves: Sequence[npt.NDArray[np.float64]]
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the command-line interface.
 
@@ -138,7 +148,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         The exit status.
     """
     parser = _build_parser()
-    arguments = parser.parse_args(argv)
+    arguments = parser.parse_intermixed_args(argv)
     if arguments.locations and not arguments.points:
         parser.error("give the reference points of the -l locations with -p")
     if 0 < len(arguments.points) < MIN_POINTS:
@@ -147,15 +157,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error(
             "--log needs -p; figrecover finds logarithmic axes itself when reading them"
         )
-    if _is_svg(arguments.image) and arguments.page:
-        parser.error("--page chooses a page of a PDF file; an SVG file has only one")
-    if not _is_drawing(arguments.image) and (arguments.page or arguments.box):
-        parser.error("--page and --box choose what to read in a PDF or SVG file")
-    if _is_drawing(arguments.image) and arguments.level is not None:
-        parser.error("--level and --no-level level images, not PDF or SVG files")
+    sources = arguments.images
+    if len(sources) == 1 and (error := _input_error(Path(sources[0]), arguments)):
+        parser.error(error)
+    inputs = {Path(source).resolve() for source in sources}
     outputs = {"-o": arguments.output, "--preview": arguments.preview}
     for option, path in outputs.items():
-        if path is not None and path.resolve() == arguments.image.resolve():
+        if path is not None and path.resolve() in inputs:
             parser.error(f"{option} would overwrite the image")
     if (
         None not in outputs.values()
@@ -164,13 +172,74 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("-o and --preview name the same file")
 
     try:
-        _digitize(arguments)
+        return _run(arguments, inputs)
     except (ImportError, OSError, ValueError, cv2.error) as error:
         print(f"figrecover: error: {error}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
         return 130
-    return 0
+
+
+def _input_error(image: Path, arguments: argparse.Namespace) -> str | None:
+    """Return the reason a file cannot use the given options, if any."""
+    if arguments.page and _is_svg(image):
+        return "--page chooses a page of a PDF file; an SVG file has only one"
+    if (arguments.page or arguments.box) and not _is_drawing(image):
+        return "--page and --box choose what to read in a PDF or SVG file"
+    if arguments.level is not None and _is_drawing(image):
+        return "--level and --no-level level images, not PDF or SVG files"
+    return None
+
+
+def _run(options: argparse.Namespace, inputs: set[Path]) -> int:
+    """Collect tables from successful inputs, reusing clicks and series choices."""
+    batch = len(options.images) > 1
+    if batch and options.preview:
+        options.preview.mkdir(parents=True, exist_ok=True)
+    previews = {options.preview.resolve()} if options.preview and not batch else set()
+    selections: dict[str | None, list[_Selector]] = {}
+    tables: list[_Table] = []
+    status = 0
+    for source in options.images:
+        arguments = argparse.Namespace(**vars(options))
+        arguments.image = Path(source)
+        arguments.source = source if batch else None
+        arguments.selections = selections.copy()
+        try:
+            if batch:
+                if error := _input_error(arguments.image, arguments):
+                    raise ValueError(error)
+                if options.preview:
+                    arguments.preview = _preview_path(
+                        options.preview, arguments.image, previews
+                    )
+                    if arguments.preview.resolve() in inputs or (
+                        options.output
+                        and arguments.preview.resolve() == options.output.resolve()
+                    ):
+                        msg = f"conflicting preview path: {arguments.preview}"
+                        raise ValueError(msg)
+            tables.extend(_digitize(arguments))
+            selections.update(arguments.selections)
+        except (ImportError, OSError, ValueError, cv2.error) as error:
+            if not batch:
+                raise
+            print(f"figrecover: {source}: error: {error}", file=sys.stderr)
+            status = 1
+    if tables:
+        _write(options.output, tables, inputs | previews)
+    return status
+
+
+def _preview_path(directory: Path, image: Path, used: set[Path]) -> Path:
+    """Choose a distinct preview name when inputs share their stem."""
+    path = directory / f"{image.stem}.preview.png"
+    number = 1
+    while path.resolve() in used:
+        number += 1
+        path = directory / f"{image.stem}.{number}.preview.png"
+    used.add(path.resolve())
+    return path
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -184,9 +253,10 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--version", action="version", version=__version__)
     parser.add_argument(
-        "image",
-        type=Path,
-        help="image of the plot, or a PDF or SVG file, whose curves are read "
+        "images",
+        nargs="+",
+        metavar="image",
+        help="one or more images of plots, or a PDF or SVG file, whose curves are read "
         "exactly from its drawing (a PDF file needs the pdf extra); positions in "
         "them are in points from the bottom-left corner of the page",
     )
@@ -287,7 +357,7 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         metavar="IMAGE",
         help="also save a faded copy of the image with each recovered curve "
-        "drawn in its colour, or each series of markers in a colour of its own",
+        "drawn in its colour; with several inputs give a directory",
     )
     parser.add_argument(
         "--remove-grid", action="store_true", help="paint over grid lines first"
@@ -320,7 +390,7 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _digitize(arguments: argparse.Namespace) -> None:
+def _digitize(arguments: argparse.Namespace) -> list[_Table]:
     """Write the curves in the image, each of its panels or the PDF file, as CSV.
 
     A panel whose curves cannot be traced is left out, with a warning. With
@@ -332,8 +402,7 @@ def _digitize(arguments: argparse.Namespace) -> None:
     with the curves and rings turned back onto it.
     """
     if _is_drawing(arguments.image):
-        _digitize_pdf(arguments)
-        return
+        return [_digitize_pdf(arguments)]
     given, levelling, plots = _plots(arguments)
     if arguments.markers and len(plots) > 1:
         msg = (
@@ -342,7 +411,7 @@ def _digitize(arguments: argparse.Namespace) -> None:
         )
         raise ValueError(msg)
 
-    tables: list[tuple[_Plot, list[npt.NDArray[np.float64]]]] = []
+    tables: list[_Table] = []
     curves: list[npt.NDArray[np.float64]] = []
     colours: list[Colour] = []
     rings: list[Ring] = []
@@ -357,7 +426,14 @@ def _digitize(arguments: argparse.Namespace) -> None:
             print(f"figrecover: {message}: {error}", file=sys.stderr)
             continue
         aligned = bool(arguments.markers)  # error bars through the markers traced
-        tables.append((plot, _data(plot.calibration, traced, bars, aligned=aligned)))
+        tables.append(
+            _Table(
+                arguments.source,
+                plot.name,
+                plot.columns,
+                _data(plot.calibration, traced, bars, aligned=aligned),
+            )
+        )
         x, y = plot.offset
         curves += [curve + np.array([x, y]) for curve in traced]
         colours += traced_colours
@@ -380,7 +456,7 @@ def _digitize(arguments: argparse.Namespace) -> None:
             for centre, (_, radius, colour) in zip(centres, rings, strict=True)
         ]
         _save_preview(arguments.preview, given, curves, colours, rings)
-    _write(arguments.output, tables)
+    return tables
 
 
 def _level(image: Image, angle: float | None) -> tuple[Image, Levelling]:
@@ -426,7 +502,7 @@ def _plots(arguments: argparse.Namespace) -> tuple[Image, Levelling, list[_Plot]
         print(f"figrecover: {message}", file=sys.stderr)
     locations = arguments.locations
     if arguments.points and not locations:
-        locations = _click_locations(given, arguments.points)
+        locations.extend(_click_locations(given, arguments.points))
     image, levelling = _level(given, arguments.level)
     # From here on, -m positions are those in the levelled image.
     arguments.markers = _as_points(levelling.points(arguments.markers))
@@ -464,25 +540,26 @@ def _trace(
     rings: list[Ring] = [(pixel, 6, (0, 0, 255)) for pixel in plot.pixels]
     inks: list[Colour] = []  # the colour of each curve, as drawn
     styles: list[Style | None] = []  # and its style, if known
+    selectors = arguments.colours or arguments.selections.get(plot.name)
     if arguments.markers:
         curves = _found_markers(traced, arguments.markers, plot.calibration)
         colours = _series_colours(len(curves))
         rings += _marker_rings(arguments.markers, curves, colours)
-    elif arguments.colours:
+    elif selectors:
         with _warnings_printed(_prefix(plot.name)):
             curves = _chosen(
-                arguments.colours,
+                selectors,
                 lambda colours: trace_curves(traced, colours, origin),
                 lambda colours: trace_series(traced, colours, origin),
             )
-        inks = [selector.colour for selector in arguments.colours]
-        styles = [selector.style for selector in arguments.colours]
+        inks = [selector.colour for selector in selectors]
+        styles = [selector.style for selector in selectors]
         colours = _distinct(inks)
     else:
         found = _found(
             find_series(traced, origin),
-            arguments.series,
-            _prefix(plot.name),
+            arguments,
+            plot.name,
             lambda: _left_out(traced, origin),
         )
         curves = [series.points for series in found]
@@ -532,7 +609,7 @@ def _warnings_printed(prefix: str) -> Iterator[None]:
                 print(f"figrecover: {prefix}{warning.message}", file=sys.stderr)
 
 
-def _digitize_pdf(arguments: argparse.Namespace) -> None:
+def _digitize_pdf(arguments: argparse.Namespace) -> _Table:
     """Write the curves in a plot on a page of the PDF file, or the SVG file, as CSV.
 
     Positions on the page are in points, and the preview shows the part of
@@ -548,7 +625,9 @@ def _digitize_pdf(arguments: argparse.Namespace) -> None:
         drawing = remove_pdf_grid(drawing)
     if arguments.points:
         _check_positions(arguments.locations, drawing.box, "-l location")
-        positions = arguments.locations or _click_positions(drawing, arguments.points)
+        positions = arguments.locations
+        if not positions:
+            positions.extend(_click_positions(drawing, arguments.points))
         calibration = Calibration.from_points(
             arguments.points,
             positions,
@@ -558,24 +637,23 @@ def _digitize_pdf(arguments: argparse.Namespace) -> None:
         names = ("x", "y")
     else:
         calibration, positions, names = _read_axes(read_pdf_axes(drawing), None)
+    selectors = arguments.colours or arguments.selections.get(None)
     if arguments.markers:
         curves = _counted(
             find_pdf_markers(drawing, arguments.markers, calibration.origin),
             arguments.markers,
         )
         colours = _series_colours(len(curves))
-    elif arguments.colours:
+    elif selectors:
         origin = calibration.origin
         curves = _chosen(
-            arguments.colours,
+            selectors,
             lambda colours: trace_pdf_curves(drawing, colours, origin),
             lambda colours: trace_pdf_series(drawing, colours, origin),
         )
-        colours = _distinct([selector.colour for selector in arguments.colours])
+        colours = _distinct([selector.colour for selector in selectors])
     else:
-        found = _found(
-            find_pdf_series(drawing, calibration.origin), arguments.series, ""
-        )
+        found = _found(find_pdf_series(drawing, calibration.origin), arguments, None)
         curves = [series.points for series in found]
         colours = _distinct([series.colour for series in found])
     bars = find_pdf_error_bars(drawing, curves) if arguments.error_bars else None
@@ -596,7 +674,7 @@ def _digitize_pdf(arguments: argparse.Namespace) -> None:
         image = _render(drawing)
         _save_preview(arguments.preview, image, pixels, colours, rings)
     data = _data(calibration, curves, bars, aligned=True)
-    _write_csv(arguments.output or sys.stdout, [(None, data)], names)
+    return _Table(arguments.source, None, names, data)
 
 
 def _is_pdf(path: Path) -> bool:
@@ -754,20 +832,20 @@ def _prefix(name: str | None) -> str:
 
 def _found(
     every: Sequence[Series],
-    count: int | None,
-    prefix: str,
+    arguments: argparse.Namespace,
+    panel: str | None,
     left_out: Callable[[], str] = str,
 ) -> list[Series]:
     """Return the first series found, and print the -c options to reuse if -n was given.
 
-    ``every`` holds every series found, in order, ``count`` is the number
-    given with -n, and ``prefix`` starts the message, naming the panel.
+    The -n options are kept per panel for subsequent inputs in a batch.
     ``left_out`` says what was left out and why, if anything, as
     ``_left_out`` does, to explain finding too few.
 
     Raises:
         ValueError: If fewer series were found than were asked for.
     """
+    count = arguments.series
     wanted = count or 1
     if len(every) < wanted:
         options = " ".join(f"-c {option}" for option in _options(every, every))
@@ -779,8 +857,10 @@ def _found(
         raise ValueError(msg + left_out())
     found = list(every[:wanted])
     if count is not None:
-        options = " ".join(f"-c {option}" for option in _options(found, every))
-        print(f"figrecover: {prefix}colours: {options}", file=sys.stderr)
+        written = _options(found, every)
+        arguments.selections[panel] = [_selector(option) for option in written]
+        options = " ".join(f"-c {option}" for option in written)
+        print(f"figrecover: {_prefix(panel)}colours: {options}", file=sys.stderr)
     return found
 
 
@@ -1037,54 +1117,33 @@ def _dotted(
     return np.linspace(start, end, count)
 
 
-def _write(
-    output: Path | None,
-    tables: Sequence[tuple[_Plot, Sequence[npt.NDArray[np.float64]]]],
-) -> None:
-    """Write the curves of each plot as CSV, to the output file or standard output.
-
-    The curves of an image of several panels, or with insets, go to a file
-    for each panel, named after it, such as out_a.csv for out.csv, or
-    out.csv itself for a panel without a name, as the plot that holds the
-    insets in an image of one plot is; or to standard output with a panel
-    column, empty for a panel without a name, whose x and y columns are
-    named after the axis titles if every panel's are the same, or x and y.
-    """
-    if len(tables) == 1 and tables[0][0].name is None:
-        plot, curves = tables[0]
-        _write_csv(output or sys.stdout, [(None, curves)], plot.columns)
-    elif output is not None:
-        paths = [
-            output.with_stem(f"{output.stem}_{plot.name}") if plot.name else output
-            for plot, _ in tables
-        ]
-        for path, (plot, curves) in zip(paths, tables, strict=True):
-            _write_csv(path, [(None, curves)], plot.columns)
-        print(f"figrecover: wrote {', '.join(map(str, paths))}", file=sys.stderr)
-    else:
-        columns = {plot.columns for plot, _ in tables}
-        names = columns.pop() if len(columns) == 1 else ("x", "y")
-        _write_csv(
-            sys.stdout, [(plot.name or "", curves) for plot, curves in tables], names
+def _write(output: Path | None, tables: Sequence[_Table], protected: set[Path]) -> None:
+    """Write one combined table to stdout, or one file per named panel."""
+    panels = any(table.panel is not None for table in tables)
+    if output is None or not panels:
+        _write_csv(output or sys.stdout, tables, panels=panels)
+        return
+    groups: dict[Path, list[_Table]] = {}
+    for table in tables:
+        path = (
+            output.with_stem(f"{output.stem}_{table.panel}") if table.panel else output
         )
+        if path.resolve() in protected:
+            msg = f"panel output would overwrite an input or preview: {path}"
+            raise ValueError(msg)
+        groups.setdefault(path, []).append(table)
+    for path, group in groups.items():
+        _write_csv(path, group, panels=False)
+    print(f"figrecover: wrote {', '.join(map(str, groups))}", file=sys.stderr)
 
 
-def _write_csv(
-    file: Path | TextIO,
-    tables: Sequence[tuple[str | None, Sequence[npt.NDArray[np.float64]]]],
-    names: tuple[str, str],
-) -> None:
-    """Write curves as CSV, from tables of curves named after their panels.
-
-    There is a panel column if the tables are named, rather than one named
-    None for an image of one plot, and a series column if a table has
-    several curves. Curves with the bounds of error bars, as ``_data`` gives
-    them, add the columns of ``BOUNDS``, those across only if some point has
-    them, and leave a bound that a point lacks empty.
-    """
-    series = any(len(curves) > 1 for _, curves in tables)
-    named = tables[0][0] is not None
-    every = [curve for _, curves in tables for curve in curves]
+def _write_csv(file: Path | TextIO, tables: Sequence[_Table], *, panels: bool) -> None:
+    """Write a common header and the rows of each source, panel and series."""
+    columns = {table.columns for table in tables}
+    names = columns.pop() if len(columns) == 1 else ("x", "y")
+    sources = tables[0].source is not None
+    series = any(len(table.curves) > 1 for table in tables)
+    every = [curve for table in tables for curve in table.curves]
     width = max((curve.shape[1] for curve in every), default=len(names))
     across = len(names) + BOUNDS.index("x_low")  # where bounds across start
     if all(np.isnan(curve[:, across:]).all() for curve in every):
@@ -1093,16 +1152,24 @@ def _write_csv(
     writer = csv.writer(text, lineterminator="\n")
     writer.writerow(
         [
-            *(["panel"] * named),
+            *(["source"] * sources),
+            *(["panel"] * panels),
             *(["series"] * series),
             *names,
             *BOUNDS[: width - len(names)],
         ]
     )
-    for name, curves in tables:
-        for number, curve in enumerate(curves, start=1):
-            start = [*([name] if name is not None else []), *[str(number)] * series]
-            writer.writerows([*start, *map(_cell, row)] for row in curve[:, :width])
+    for table in tables:
+        for number, curve in enumerate(table.curves, start=1):
+            start = [
+                *[table.source] * sources,
+                *[table.panel or ""] * panels,
+                *[str(number)] * series,
+            ]
+            padding = [""] * max(0, width - curve.shape[1])
+            writer.writerows(
+                [*start, *map(_cell, row), *padding] for row in curve[:, :width]
+            )
     if isinstance(file, Path):
         file.write_text(text.getvalue(), encoding="utf-8")
     else:
