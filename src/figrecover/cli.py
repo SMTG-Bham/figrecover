@@ -30,6 +30,7 @@ from .digitize import (
     Style,
     _greyscale,
     _left_out,
+    _stroke_ranges,
     find_error_bars,
     find_marker_error_bars,
     find_marker_series,
@@ -57,6 +58,8 @@ from .pdf import (
     trace_pdf_series,
 )
 from .svg import load_svg, render_svg
+
+type TraceRanges = list[dict[Point, Point]]
 
 type Ring = tuple[Point, int, Colour]
 """A ring to draw in the preview: its centre, its radius and its colour."""
@@ -136,6 +139,7 @@ class _Table:
     panel: str | None
     columns: tuple[str, str]
     curves: Sequence[npt.NDArray[np.float64]]
+    ranges: TraceRanges | None = None
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -319,6 +323,8 @@ def _finish_record(record: metadata.InputRecord, arguments: argparse.Namespace) 
             extra.append("--remove-grid")
         if arguments.error_bars:
             extra.append("--error-bars")
+        if arguments.trace_range:
+            extra.append("--trace-range")
         record.reproduce = metadata.reproduce(record, arguments.metadata, extra)
 
 
@@ -485,6 +491,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "across, in the plot's units",
     )
     parser.add_argument(
+        "--trace-range",
+        action="store_true",
+        help="add the measured lower and upper edges of each raster stroke to the CSV",
+    )
+    parser.add_argument(
         "--metadata",
         type=Path,
         metavar="FILE",
@@ -526,7 +537,7 @@ def _digitize(arguments: argparse.Namespace) -> list[_Table]:
     rings: list[Ring] = []
     for plot in plots:
         try:
-            traced, traced_colours, marked, bars = _trace(plot, arguments)
+            traced, traced_colours, marked, bars, ranges = _trace(plot, arguments)
         except ValueError as error:
             if len(plots) == 1:
                 raise
@@ -541,6 +552,7 @@ def _digitize(arguments: argparse.Namespace) -> list[_Table]:
                 plot.name,
                 plot.columns,
                 _data(plot.calibration, traced, bars, aligned=aligned),
+                ranges,
             )
         )
         if arguments.record:
@@ -662,7 +674,11 @@ def _plots(arguments: argparse.Namespace) -> tuple[Image, Levelling, list[_Plot]
 def _trace(
     plot: _Plot, arguments: argparse.Namespace
 ) -> tuple[
-    list[npt.NDArray[np.float64]], list[Colour], list[Ring], list[ErrorBars] | None
+    list[npt.NDArray[np.float64]],
+    list[Colour],
+    list[Ring],
+    list[ErrorBars] | None,
+    TraceRanges | None,
 ]:
     """Trace the curves of a plot, by colour or by markers.
 
@@ -715,7 +731,45 @@ def _trace(
             series.points if style == "markers" else curve
             for curve, series, style in zip(curves, bars, styles, strict=True)
         ]
-    return curves, colours, rings, bars
+    ranges = (
+        _trace_ranges(plot.calibration, traced, curves, inks, styles)
+        if arguments.trace_range
+        else None
+    )
+    return curves, colours, rings, bars, ranges
+
+
+def _trace_ranges(
+    calibration: Calibration,
+    image: Image,
+    curves: Sequence[npt.NDArray[np.float64]],
+    inks: Sequence[Colour],
+    styles: Sequence[Style | None],
+) -> TraceRanges:
+    """Index measured pixel edges by point, leaving inserted error-bar rows empty."""
+    result: TraceRanges = [{} for _ in curves]
+    lines = [i for i, style in enumerate(styles) if style != "markers"]
+    if lines:
+        measured = _stroke_ranges(
+            image,
+            [inks[i] for i in lines],
+            [curves[i] for i in lines],
+            calibration.origin,
+        )
+        for i, spans in zip(lines, measured, strict=True):
+            lo = calibration.to_data(np.column_stack((curves[i][:, 0], spans[:, 0])))[
+                :, 1
+            ]
+            hi = calibration.to_data(np.column_stack((curves[i][:, 0], spans[:, 1])))[
+                :, 1
+            ]
+            result[i] = {
+                (x, y): (min(a, b), max(a, b))
+                for (x, y), a, b in zip(
+                    calibration.to_data(curves[i]), lo, hi, strict=True
+                )
+            }
+    return result
 
 
 def _bars_by_colour(
@@ -834,7 +888,8 @@ def _digitize_pdf(arguments: argparse.Namespace) -> _Table:
         image = _render(drawing)
         _save_preview(arguments.preview, image, pixels, colours, rings)
     data = _data(calibration, curves, bars, aligned=True)
-    table = _Table(arguments.source, None, names, data)
+    ranges: TraceRanges | None = [{} for _ in curves] if arguments.trace_range else None
+    table = _Table(arguments.source, None, names, data, ranges)
     if arguments.record:
         _record_plot(arguments, table, (calibration, positions, axes))
     return table
@@ -1380,6 +1435,7 @@ def _write_csv(file: Path | TextIO, tables: Sequence[_Table], *, panels: bool) -
             *(["series"] * series),
             *names,
             *BOUNDS[: width - len(names)],
+            *(("trace_low", "trace_high") if tables[0].ranges is not None else ()),
         ]
     )
     for table in tables:
@@ -1390,9 +1446,17 @@ def _write_csv(file: Path | TextIO, tables: Sequence[_Table], *, panels: bool) -
                 *[str(number)] * series,
             ]
             padding = [""] * max(0, width - curve.shape[1])
-            writer.writerows(
-                [*start, *map(_cell, row), *padding] for row in curve[:, :width]
-            )
+            if table.ranges is None:
+                writer.writerows(
+                    [*start, *map(_cell, row), *padding] for row in curve[:, :width]
+                )
+            else:
+                extents = table.ranges[number - 1]
+                for row in curve[:, :width]:
+                    span = extents.get((row[0], row[1]), (math.nan, math.nan))
+                    writer.writerow(
+                        [*start, *map(_cell, row), *padding, *map(_cell, span)]
+                    )
     if isinstance(file, Path):
         file.write_text(text.getvalue(), encoding="utf-8")
     else:

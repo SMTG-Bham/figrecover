@@ -138,6 +138,7 @@ in blue, so you can check the result at a glance:
 | `--remove-grid` | Paint over grid lines before tracing. |
 | `--level DEGREES` | The angle by which the image's axes are turned anticlockwise, or clockwise if negative, to turn it back by. Default: find it; see [Turned images](#turned-images). |
 | `--no-level` | Read the image as it is, without levelling it. |
+| `--trace-range` | Append `trace_low` and `trace_high`, the measured vertical edges of the raster stroke in data units. |
 | `--error-bars` | Also read the error bars of each marker, and add their bounds to the CSV. See [Error bars](#error-bars). |
 | `--page N` | The page of a PDF file to read, from 1. Default: 1. |
 | `--figure LABEL` | Select a captioned PDF figure by its label, such as `2` or `S1`. |
@@ -163,6 +164,21 @@ Repeated stems receive a number, such as `plot.2.preview.png`. With `-o`
 and named panels, each panel gets a CSV containing its sources. A failed
 input is reported by name. The remaining inputs still run and the command
 returns status 1 if any failed.
+
+### Measuring stroke extent
+
+```bash
+figrecover examples/labelled.png --trace-range -o voltage.csv
+```
+
+At each observed curve point, `trace_low` and `trace_high` give the outer
+edges of the lowest and highest pixels of the stroke in that column. A thin
+horizontal line may occupy just one pixel. A steep peak can occupy dozens.
+Both edges are mapped through the plot's calibration, including logarithmic
+and reversed axes. The columns follow any experimental error-bar columns.
+They are empty for marker selections, inserted points without a measured run,
+and vector documents. The span describes visible ink. Calibration error and
+parts of a curve hidden behind other marks can put the underlying data outside it.
 
 ### Recording a digitization
 
@@ -1508,6 +1524,10 @@ With an SVG file, step 1 gives way to this:
    characters.
 
 ## Limitations
+
+Use `--trace-range` to inspect the vertical stroke extent of a raster curve,
+especially near a steep peak.
+
 
 - In an image, curves of one colour are told apart by their dashes and
   where they run, not by the widths of their lines. Curves that run together

@@ -1634,3 +1634,68 @@ def test_metadata_records_missing_optional_version(
     sidecar = tmp_path / "manual.json"
     assert main([*SERIES, "--metadata", str(sidecar)]) == 0
     assert json.loads(sidecar.read_text())["versions"]["rapidocr"] is None
+
+
+@pytest.mark.parametrize(
+    "image", [PANELS, INSET, LOGARITHMIC, str(EXAMPLES / "skewed.png")]
+)
+def test_trace_ranges_use_each_plots_calibration(
+    image: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main([image, "--trace-range"]) == 0
+    rows = list(csv.reader(capsys.readouterr().out.splitlines()))
+    assert rows[0][-2:] == ["trace_low", "trace_high"]
+    for row in rows[1:]:
+        y, lo, hi = map(float, row[-3:])
+        assert lo <= y <= hi
+
+
+@pytest.mark.parametrize(
+    "args", [[LABELLED_PDF], [LABELLED_SVG], [*MARKERS, *MARKER_KEYS]]
+)
+def test_trace_ranges_leave_vector_and_marker_rows_empty(
+    args: list[str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main([*args, "--trace-range"]) == 0
+    output = capsys.readouterr().out.splitlines()
+    assert output[0].endswith("trace_low,trace_high")
+    assert len(output) > 1
+    assert all(row.endswith(",,") for row in output[1:])
+
+
+def test_trace_ranges_and_error_bars_reverse_both_bounds(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    args = [
+        *ERRORS,
+        "-p",
+        "0,0",
+        "-p",
+        "10,0",
+        "-p",
+        "0,-1",
+        *ERROR_LOCATIONS,
+        "--trace-range",
+    ]
+    sidecar = tmp_path / "err.json"
+    assert main([*args, "--metadata", str(sidecar)]) == 0
+    first = capsys.readouterr().out
+    rows = list(csv.DictReader(first.splitlines()))
+    assert list(rows[0])[-6:] == [
+        "y_low",
+        "y_high",
+        "x_low",
+        "x_high",
+        "trace_low",
+        "trace_high",
+    ]
+    marked = [r for r in rows if r["y_low"]]
+    assert marked
+    assert any(r["trace_low"] == "" for r in marked)
+    traced = [r for r in rows if r["trace_low"]]
+    assert traced
+    assert all(
+        float(r["trace_low"]) <= float(r["y"]) <= float(r["trace_high"]) for r in traced
+    )
+    assert main(shlex.split(json.loads(sidecar.read_text())["reproduce"])[1:]) == 0
+    assert capsys.readouterr().out == first
