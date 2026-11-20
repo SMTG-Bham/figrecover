@@ -6,14 +6,29 @@ The first release.
 
 - GitHub provides a software citation from `CITATION.cff`. CI validates its
   format and checks the version against the package metadata.
-
+- The CLI accepts multiple input files and adds a `source` column to the CSV.
+  `--metadata` records input hashes, calibration and series selections.
+  `--axes-from` reuses recorded ticks and titles for a matching single plot.
+- `--figure` selects a captioned figure on a PDF page. Shared legends can
+  name series across panels. Recognised legend rows are masked inside the
+  axes, including rows in unframed legends.
+- `--classes` shows detected plot objects. A matching legend label can
+  identify a mean, replicate or fitted curve. `--mask` excludes a rectangle,
+  and the CLI reports calibrated positions for detected reference lines.
+- `--trace-range` adds the outer pixel edges of each measured raster stroke
+  to the CSV in data units. Tick recognition handles smaller labels, and
+  tracing handles thick crossings, translucent bands and regular halftone
+  screens.
+- The public benchmark records 406 digitization attempts on 202 ChartX and
+  PlotQA charts. It includes per-chart scores and reproduction commands.
+  [Benchmark results](benchmarks/README.md)
 - The `figrecover` command writes the curves in an image of a plot as CSV, in
   the plot's own units, from three or more reference points.
 - Curves are told apart by colour, even neighbouring colours of a colour map,
   and found by the direction of their ink from the background, so lines
   thinner than a pixel and translucent lines are found too, and picked by
-  their full colours with `-c`. Colours are printed as their inks' full
-  strength, such as `2ca02c` for matplotlib's green, and ranked by pixels.
+  their nominal colours with `-c`. The CLI prints measured stroke colours,
+  such as `2ca02c` for matplotlib's green, and ranks them by pixel count.
   Where translucent bands overlap is not taken for a curve. When `-n` finds
   too few curves, it names those found and the colours left out, and why;
   a colour taken as one curve warns when it crosses most columns more than

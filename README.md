@@ -54,20 +54,17 @@ with Python's own XML parser.
 
 ### 1. Prepare the image
 
-Crop the image to the axes and the curves. figrecover ignores everything left
-of the y-axis and below the x-axis, and inside a frame around the axes, as
-matplotlib draws, everything beyond the frame too. It then traces the most
-common colour that stands out from the background in what remains, skipping
-filled areas and grid lines. Insets and legends inside a frame, as matplotlib
-draws them, are painted out first, with all they hold; a legend without one
-is traced too if it is the same colour as a curve, so crop or paint it out,
-unless the series are told apart by their [markers](#markers). Dark
-backgrounds work as well as light ones, and an image turned by a few
-degrees, as scans often are, is levelled first; see
-[Turned images](#turned-images). To have figrecover read the axes,
-keep their tick labels and titles in the image. A figure of several plots,
-such as panels labelled (a) and (b), or a plot with an inset, needs no
-cropping when figrecover reads the axes; see [Several panels](#several-panels).
+Keep the axes, tick labels, titles and legend in the image. figrecover traces
+the area above the x-axis and to the right of the y-axis. A frame around the
+axes bounds the trace on the other two sides. By default it traces the most
+common curve colour, skipping filled areas and gridlines. It masks framed
+insets and legends, and recognises unframed legends by their aligned samples
+and labels. Keeping the legend also lets you select series by their
+[markers](#markers). Dark backgrounds work as well as light ones.
+
+A scan turned by a few degrees is levelled before tracing. A figure with
+multiple panels or an inset can be read in one piece when figrecover reads
+the axes. See [Turned images](#turned-images) and [Several panels](#several-panels).
 
 With the OCR extra, figrecover excludes text boxes inside the axes and
 looks beside them for straight shafts with an arrowhead or bracket cap.
@@ -872,10 +869,9 @@ reading order, such as `inset1` and `inset2`.
   too, is named by its number in reading order. The labels of other panels
   are not read as a panel's titles, such as the label of the panel below, if
   it lies above that panel's axes.
-- A panel's label is painted over, inside its axes, before its curves are
-  traced, as it is usually drawn in a curve's colour. A label that OCR does
-  not find at all is traced as part of a curve of its colour, as a legend
-  without a frame is.
+- A panel label inside the axes is masked before tracing. If OCR misses it,
+  its ink can appear in a curve of the same colour. Use `--mask` to exclude
+  the label's rectangle.
 - Plots that share an axis often label its ticks only on the outer panels:
   an x-axis on the lowest panel of a column, and a y-axis on the leftmost of
   a row. A panel without tick labels on an axis takes that axis, and its
