@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 from matplotlib.figure import Figure
 
-from figrecover import Calibration, classify, find_series, trace_curves
+from figrecover import Calibration, PlotObject, classify, find_series, trace_curves
 from figrecover.cli import main
 from figrecover.plot_objects import without_objects
 
@@ -72,3 +72,10 @@ def test_pdf_reference_lines_report_data_coordinates(
     assert "reference line at y = 2.5" in output.err
     assert "reference line at x = 4.5" in output.err
     assert len(output.out.splitlines()) == 4
+
+
+def test_supplied_data_objects_remain_visible() -> None:
+    image = np.full((100, 120, 3), 255, np.uint8)
+    image[30:34, 10:80] = 0
+    line = PlotObject("data line", (0, 0, 0), 10, 30, np.ones((4, 70), dtype=bool))
+    np.testing.assert_array_equal(without_objects(image, [line]), image)
