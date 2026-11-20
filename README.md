@@ -69,6 +69,11 @@ keep their tick labels and titles in the image. A figure of several plots,
 such as panels labelled (a) and (b), or a plot with an inset, needs no
 cropping when figrecover reads the axes; see [Several panels](#several-panels).
 
+To exclude an annotation or stamp, give its bounding rectangle with
+`--mask X0,Y0,X1,Y1`. Measure from the bottom-left corner of the original
+image in pixels or of the PDF page in points. Repeat the option to mask
+several regions. Samples inside the rectangles are omitted from the CSV.
+
 ### 2. Choose reference points
 
 figrecover maps pixels to data with at least three reference points: usually
@@ -135,6 +140,7 @@ in blue, so you can check the result at a glance:
 | `--preview PATH` | Save a preview image. For several inputs, give a directory for the previews. |
 | `--metadata FILE` | Save a JSON record of the digitization. |
 | `--axes-from FILE` | Reuse the recorded ticks and axis titles for a matching single plot. |
+| `--mask X0,Y0,X1,Y1` | Exclude a rectangle before tracing. Repeat for multiple regions. |
 | `--remove-grid` | Paint over grid lines before tracing. |
 | `--level DEGREES` | The angle by which the image's axes are turned anticlockwise, or clockwise if negative, to turn it back by. Default: find it; see [Turned images](#turned-images). |
 | `--no-level` | Read the image as it is, without levelling it. |

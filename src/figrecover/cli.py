@@ -11,7 +11,7 @@ import re
 import sys
 import warnings
 from collections.abc import Callable, Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TextIO
 
@@ -42,6 +42,7 @@ from .digitize import (
 )
 from .errorbars import ErrorBars
 from .level import LEVEL_THRESHOLD, Levelling, level_image
+from .masks import painted
 from .panels import Panel, read_panels
 from .pdf import (
     PREVIEW_SCALE,
@@ -321,6 +322,8 @@ def _finish_record(record: metadata.InputRecord, arguments: argparse.Namespace) 
             extra.extend(("--log", arguments.log))
         if arguments.remove_grid:
             extra.append("--remove-grid")
+        for mask in arguments.mask:
+            extra.extend(("--mask", ",".join(map(str, mask))))
         if arguments.error_bars:
             extra.append("--error-bars")
         if arguments.trace_range:
@@ -461,6 +464,15 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="IMAGE",
         help="also save a faded copy of the image with each recovered curve "
         "drawn in its colour; with several inputs give a directory",
+    )
+    parser.add_argument(
+        "--mask",
+        type=_box,
+        action="append",
+        default=[],
+        metavar="X0,Y0,X1,Y1",
+        help="exclude this rectangle, in pixels or page points from the bottom left; "
+        "repeat for more regions",
     )
     parser.add_argument(
         "--remove-grid", action="store_true", help="paint over grid lines first"
@@ -647,7 +659,7 @@ def _plots(arguments: argparse.Namespace) -> tuple[Image, Levelling, list[_Plot]
     locations = arguments.locations
     if arguments.points and not locations:
         locations.extend(_click_locations(given, arguments.points))
-    image, levelling = _level(given, arguments.level)
+    image, levelling = _level(painted(given, arguments.mask), arguments.level)
     if arguments.record:
         arguments.record.level_degrees = levelling.angle
     # From here on, -m positions are those in the levelled image.
@@ -840,6 +852,7 @@ def _digitize_pdf(arguments: argparse.Namespace) -> _Table:
             arguments.image, arguments.page or 1, arguments.box, figure=arguments.figure
         )
     )
+    drawing = replace(drawing, masks=tuple(arguments.mask))
     if arguments.record:
         arguments.record.box = drawing.box
         arguments.record.page = drawing.page if arguments.record.kind == "pdf" else None
