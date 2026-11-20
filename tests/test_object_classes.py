@@ -241,6 +241,11 @@ def test_shared_ink_needs_distinct_legend_evidence(
     kinds = Counter(o.kind for o in objects)
     if second_style == "--":
         assert kinds["mean curve"] == kinds["fitted or theoretical curve"] == 1
+        (fitted,) = (o for o in objects if o.kind == "fitted or theoretical curve")
+        left, top, right, bottom = fitted.box
+        pixels = image[top:bottom, left:right][fitted.mask]
+        assert np.all(pixels.min(axis=1) < 240)
+        assert np.count_nonzero(~fitted.mask.any(axis=0)) > 20
     else:
         assert kinds["data line"] == 2
     series = find_series(without_objects(image, objects), FIT.origin)

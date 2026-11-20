@@ -31,6 +31,8 @@ from .plot_objects import PlotObject, references, without_objects
 
 _MIN_GRID = 3
 _SPAN = 0.85
+_MIN_VISIBLE_INK = 0.1
+_MAX_COLOUR_RESIDUAL = 48
 _ROLES = (
     (re.compile(r"\b(mean|average)\b", re.IGNORECASE), "mean curve"),
     (
@@ -213,7 +215,21 @@ def _data_objects(
             if kind == "data line" and _connects(stroke, centres[stroke.colour]):
                 kind = "connecting line"
         result.extend(_marks(image, stroke, kind))
-    return result
+    # Tracing interpolates across dashes and occlusions. Object masks show
+    # only the portion of that path painted in the measured series ink.
+    paper = np.median(image.reshape(-1, 3)[::16], axis=0)
+    visible = []
+    for obj in result:
+        left, top, right, bottom = obj.box
+        pixels = image[top:bottom, left:right] - paper
+        ray = np.asarray(obj.colour) - paper
+        fraction = np.clip((pixels @ ray) / max(1, ray @ ray), 0, 1)
+        residual = np.max(np.abs(pixels - fraction[..., None] * ray), axis=2)
+        mask = (
+            obj.mask & (fraction > _MIN_VISIBLE_INK) & (residual < _MAX_COLOUR_RESIDUAL)
+        )
+        visible.extend(_object(obj.kind, obj.colour, mask, left, top))
+    return visible
 
 
 def legend_objects(image: Image, entries: Sequence[legends.Entry]) -> list[PlotObject]:

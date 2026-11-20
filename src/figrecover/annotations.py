@@ -88,8 +88,9 @@ def _text_boxes(
     """Keep credible words wholly inside this plot and outside framed objects."""
     height = image.shape[0]
     roi = image[area.top : area.bottom, area.left : area.right]
+    ink = _ink(roi)
     if texts is None:
-        if not _has_letters(_ink(roi)):
+        if not _has_letters(ink):
             return []
         try:
             texts = _read_text(image)
@@ -114,8 +115,11 @@ def _text_boxes(
         local = _Box(
             round(height - top), round(height - bottom), round(left), round(right)
         )
-        if area.holds(local) and not any(
-            frame.holds(local.within(area)) for frame in frames
+        region = local.within(area)
+        if (
+            area.holds(local)
+            and not any(frame.holds(region) for frame in frames)
+            and np.any(ink[region.top : region.bottom, region.left : region.right])
         ):
             boxes.append(box)
     return boxes
@@ -127,7 +131,7 @@ def excluded(
     texts: Sequence[_Text] | None,
     saved: Sequence[Rectangle] | None,
 ) -> tuple[Image, list[Rectangle], int]:
-    """Mask credible text inside the axes and headed shafts lying beside that text."""
+    """Mask plot text, adjacent headed shafts and isolated arrows or brackets."""
     area, frames = _framed_area(image, origin)
     roi = image[area.top : area.bottom, area.left : area.right]
     height = image.shape[0]
