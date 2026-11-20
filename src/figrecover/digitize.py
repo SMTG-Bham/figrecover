@@ -15,6 +15,7 @@ import numpy.typing as npt
 
 from .calibration import Point
 from .errorbars import ErrorBars, _Bars, _filled_markers, _read_bars
+from .halftone import recover_greys
 
 type Image = npt.NDArray[np.uint8]
 type Colour = tuple[int, int, int]
@@ -350,10 +351,11 @@ def _candidates(image: Image, origin: Point) -> list[tuple[Colour, int, str | No
     Each comes with how many pixels show it, and why it is not a curve's,
     or None if it is. See ``find_colours`` for which colours are curves.
     """
-    plot = _plot_area(image, origin)[0]
+    original = _plot_area(image, origin)[0]
+    plot = recover_greys(original)
     palette = _palette(plot)
     raw = _classify(plot, palette)
-    labels = _without_edges(raw, palette)
+    labels = _without_edges(raw, palette, width=5 if plot is not original else 3)
     depths = [_depth(raw == index) for index in range(1, len(palette))]
     bands = _bands(raw, palette, depths)
     aliases = _band_strokes(raw, palette, depths)
@@ -744,7 +746,8 @@ def _masks(
         ValueError: If no curve has one of the colours, two of them match the
             same curve, or one fills areas.
     """
-    plot, left, top = _plot_area(image, origin)
+    original, left, top = _plot_area(image, origin)
+    plot = recover_greys(original)
     palette = _palette(plot)
     raw = _classify(plot, palette)
     aliases = _band_strokes(raw, palette)
@@ -758,7 +761,9 @@ def _masks(
                 f"match the curve of colour #{bytes(_to_colour(palette[index])).hex()}"
             )
             raise ValueError(msg)
-    labels = aliases[_without_edges(raw, palette)]
+    labels = aliases[
+        _without_edges(raw, palette, width=5 if plot is not original else 3)
+    ]
     for colour, index in zip(colours, indices, strict=True):
         if _fills_areas(labels == index):
             msg = f"colour #{bytes(colour).hex()} fills areas rather than a curve"
@@ -1657,7 +1662,7 @@ def _classify(plot: Image, colours: npt.NDArray[np.float64]) -> npt.NDArray[np.i
 
 
 def _without_edges(
-    labels: npt.NDArray[np.intp], colours: npt.NDArray[np.float64]
+    labels: npt.NDArray[np.intp], colours: npt.NDArray[np.float64], *, width: int
 ) -> npt.NDArray[np.intp]:
     """Remove pixels on the edges of a darker colour on the same ink ray."""
     inks, strengths = _inks(colours - colours[0])
@@ -1665,7 +1670,9 @@ def _without_edges(
     edges = np.zeros(labels.shape, dtype=np.bool_)
     for index in range(1, len(colours)):
         darker = np.flatnonzero(alike[index] & (strengths > strengths[index]))
-        touching = cv2.dilate(np.isin(labels, darker).astype(np.uint8), np.ones((3, 3)))
+        touching = cv2.dilate(
+            np.isin(labels, darker).astype(np.uint8), np.ones((width, width))
+        )
         edges |= (labels == index) & (touching > 0)
     return np.where(edges, 0, labels)
 
