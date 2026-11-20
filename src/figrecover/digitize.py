@@ -769,6 +769,41 @@ def _masks(
     )
 
 
+def _stroke_ranges(
+    image: Image,
+    colours: Sequence[Colour],
+    curves: Sequence[npt.NDArray[np.float64]],
+    origin: Point,
+) -> list[npt.NDArray[np.float64]]:
+    """Measure vertical pixel-edge extents of observed strokes at traced points.
+
+    Use the same classified pixels, speck removal and column runs as the
+    trace. A point interpolated across a gap has no observed run there.
+    Series sharing an ink use the same mask, but keep their own branches.
+    """
+    inks = list(dict.fromkeys(colours))
+    masks, _, _, left, top = _masks(image, inks, origin)
+    cleaned = {
+        ink: _without_specks(mask) for ink, mask in zip(inks, masks, strict=True)
+    }
+    upper = image.shape[0] - top
+    result = []
+    for ink, curve in zip(colours, curves, strict=True):
+        mask = cleaned[ink]
+        bounds = np.full((len(curve), 2), np.nan)
+        for i, (x, y) in enumerate(curve):
+            column = int(x - left)
+            rows = np.flatnonzero(mask[:, column])
+            if rows.size:
+                for run in _runs(rows):
+                    low, high = upper - run[-1] - 1, upper - run[0]
+                    if low <= y <= high:
+                        bounds[i] = (low, high)
+                        break
+        result.append(bounds)
+    return result
+
+
 def find_error_bars(
     image: Image, colours: Sequence[Colour], origin: Point = (0, 0)
 ) -> list[ErrorBars]:
