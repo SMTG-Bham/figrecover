@@ -15,6 +15,7 @@ import numpy.typing as npt
 
 from .calibration import Point
 from .errorbars import ErrorBars, _Bars, _filled_markers, _read_bars
+from .halftone import recover_greys
 
 type Image = npt.NDArray[np.uint8]
 type Colour = tuple[int, int, int]
@@ -41,6 +42,8 @@ _SAME_COLOUR = 48  # colours closer than this are shades of one colour
 _FINE_BIN_WIDTH = 16  # a second look at each colour, in narrower bins,
 _FINE_SAME_COLOUR = 20  # can split it into colours this far apart
 _MATCH_DISTANCE = 96  # a colour, or a pixel, matches a curve colour this far away
+_MIN_LUMA = 2  # ignore local brightness fluctuations below two levels
+_JPEG_MATCH = 115  # allowable RGB distance after JPEG chroma subsampling
 _FAINT = 16  # a pixel this far from the background shows some ink
 _SAME_INK = 6  # inks whose directions from the background are this many degrees apart
 _INK_BIN_WIDTH = 8  # directions are grouped in bins this many levels wide, about 4°
@@ -350,10 +353,10 @@ def _candidates(image: Image, origin: Point) -> list[tuple[Colour, int, str | No
     Each comes with how many pixels show it, and why it is not a curve's,
     or None if it is. See ``find_colours`` for which colours are curves.
     """
-    plot = _plot_area(image, origin)[0]
-    palette = _palette(plot)
-    raw = _classify(plot, palette)
-    labels = _without_edges(raw, palette)
+    original = _plot_area(image, origin)[0]
+    plot = recover_greys(original)
+    raw, palette, measured = _stroke_inks(plot)
+    labels = _without_edges(raw, palette, width=5 if plot is not original else 3)
     depths = [_depth(raw == index) for index in range(1, len(palette))]
     bands = _bands(raw, palette, depths)
     aliases = _band_strokes(raw, palette, depths)
@@ -373,7 +376,7 @@ def _candidates(image: Image, origin: Point) -> list[tuple[Colour, int, str | No
             reason = "is drawn in lines across the plot, as grid lines are"
         elif aliases[index] != index or _composite(palette, labels, index):
             reason = "is where two translucent colours overlap"
-        candidates.append((_to_colour(colour), int(counts[index]), reason))
+        candidates.append((_to_colour(measured[index]), int(counts[index]), reason))
     return candidates
 
 
@@ -744,11 +747,13 @@ def _masks(
         ValueError: If no curve has one of the colours, two of them match the
             same curve, or one fills areas.
     """
-    plot, left, top = _plot_area(image, origin)
-    palette = _palette(plot)
-    raw = _classify(plot, palette)
+    original, left, top = _plot_area(image, origin)
+    plot = recover_greys(original)
+    raw, palette, measured = _stroke_inks(plot)
     aliases = _band_strokes(raw, palette)
-    indices = [int(aliases[_match(palette, colour)]) for colour in colours]
+    indices = [
+        int(aliases[_match_stroke(palette, measured, colour)]) for colour in colours
+    ]
     for (first, index), (second, other) in itertools.combinations(
         zip(colours, indices, strict=True), 2
     ):
@@ -758,7 +763,9 @@ def _masks(
                 f"match the curve of colour #{bytes(_to_colour(palette[index])).hex()}"
             )
             raise ValueError(msg)
-    labels = aliases[_without_edges(raw, palette)]
+    labels = aliases[
+        _without_edges(raw, palette, width=5 if plot is not original else 3)
+    ]
     for colour, index in zip(colours, indices, strict=True):
         if _fills_areas(labels == index):
             msg = f"colour #{bytes(colour).hex()} fills areas rather than a curve"
@@ -766,7 +773,7 @@ def _masks(
     masks = [_without_bars(labels, index) for index in indices]
     return (
         masks,
-        [_to_colour(palette[index]) for index in indices],
+        [_to_colour(measured[index]) for index in indices],
         labels > 0,
         left,
         top,
@@ -841,9 +848,8 @@ def find_error_bars(
         ValueError: If no curve has one of the colours.
     """
     plot, left, top = _plot_area(image, origin)
-    palette = _palette(plot)
-    indices = [_match(palette, colour) for colour in colours]
-    labels = _classify(plot, palette)
+    labels, palette, measured = _stroke_inks(plot)
+    indices = [_match_stroke(palette, measured, colour) for colour in colours]
     found = []
     for index in indices:
         points, low, high = _placed(_bars_of(labels, index), left, top, image.shape[0])
@@ -1197,6 +1203,65 @@ def _crossed(
         np.linalg.norm(colours[0][:, np.newaxis] - colours[1], axis=2) < _SAME_COLOUR
     )
     return bool(np.any(near & alike))
+
+
+def _stroke_inks(
+    plot: Image,
+) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+    """Classify strokes, retaining their measured colours when JPEG bleeds chroma."""
+    palette = _palette(plot)
+    corrected = _align_chroma(plot, palette)
+    if corrected is None:
+        return _classify(plot, palette), palette, palette
+    fitted = _palette(corrected)
+    labels = _classify(corrected, fitted)
+    measured = fitted.copy()
+    for index in np.unique(labels[labels != 0]):
+        values = plot[labels == index]
+        strength = np.linalg.norm(values - palette[0], axis=1)
+        measured[index] = np.median(
+            values[strength >= np.percentile(strength, 95)], axis=0
+        )
+    return labels, fitted, measured
+
+
+def _align_chroma(plot: Image, palette: npt.NDArray[np.float64]) -> Image | None:
+    """Align subsampled colour with a thin line's sharper luminance.
+
+    Compression leaves many pale fringe pixels whose colour direction differs
+    from their neighbours. A local mean retains the colour distributed across
+    the stroke; its luminance ratio places that colour on the observed line.
+    """
+    if np.ptp(palette, axis=1).max() < _FAINT:
+        return None
+    delta = palette[0].astype(np.float32) - plot
+    local = cv2.GaussianBlur(delta, (0, 0), 1.2)
+    weights = np.array([0.299, 0.587, 0.114], dtype=np.float32)
+    light, mean = delta @ weights, local @ weights
+    shade = np.max(np.abs(delta), axis=2)
+    near = (shade > _FAINT) & (shade < _MATCH_DISTANCE) & (np.abs(mean) > _FAINT / 2)
+    cosine = np.sum(delta * local, axis=2)
+    length = np.linalg.norm(delta, axis=2) * np.linalg.norm(local, axis=2)
+    fringe = np.count_nonzero(near & (cosine < 0.95 * length))
+    if fringe <= 0.12 * np.count_nonzero(shade >= _CONTRAST):
+        return None
+    coverage = np.divide(
+        light, mean, out=np.zeros_like(light), where=np.abs(mean) > _MIN_LUMA
+    )
+    restored = palette[0] - np.clip(coverage, 0, 5)[..., None] * local
+    return np.asarray(np.rint(restored).clip(0, 255), dtype=np.uint8)
+
+
+def _match_stroke(
+    palette: npt.NDArray[np.float64], measured: npt.NDArray[np.float64], colour: Colour
+) -> int:
+    """Resolve a printed colour first, then the requested ink on the de-fringed plot."""
+    if measured is not palette:
+        for i, sample in enumerate(measured[1:], 1):
+            if _to_colour(sample) == colour:
+                return i
+        return _match(palette, colour, distance=_JPEG_MATCH)
+    return _match(palette, colour)
 
 
 def _palette(plot: Image) -> npt.NDArray[np.float64]:
@@ -1657,7 +1722,7 @@ def _classify(plot: Image, colours: npt.NDArray[np.float64]) -> npt.NDArray[np.i
 
 
 def _without_edges(
-    labels: npt.NDArray[np.intp], colours: npt.NDArray[np.float64]
+    labels: npt.NDArray[np.intp], colours: npt.NDArray[np.float64], *, width: int
 ) -> npt.NDArray[np.intp]:
     """Remove pixels on the edges of a darker colour on the same ink ray."""
     inks, strengths = _inks(colours - colours[0])
@@ -1665,12 +1730,19 @@ def _without_edges(
     edges = np.zeros(labels.shape, dtype=np.bool_)
     for index in range(1, len(colours)):
         darker = np.flatnonzero(alike[index] & (strengths > strengths[index]))
-        touching = cv2.dilate(np.isin(labels, darker).astype(np.uint8), np.ones((3, 3)))
+        touching = cv2.dilate(
+            np.isin(labels, darker).astype(np.uint8), np.ones((width, width))
+        )
         edges |= (labels == index) & (touching > 0)
     return np.where(edges, 0, labels)
 
 
-def _match(palette: npt.NDArray[np.float64], colour: Colour) -> int:
+def _match(
+    palette: npt.NDArray[np.float64],
+    colour: Colour,
+    *,
+    distance: float = _MATCH_DISTANCE,
+) -> int:
     """Return the index of the curve colour in the palette that ``colour`` picks.
 
     That is the nearest within ``_MATCH_DISTANCE``, or failing that, the
@@ -1680,7 +1752,7 @@ def _match(palette: npt.NDArray[np.float64], colour: Colour) -> int:
     part of it.
     """
     distances = np.linalg.norm(palette[1:] - colour, axis=1)
-    near = distances <= _MATCH_DISTANCE
+    near = distances <= distance
     if not np.any(near):
         directions, lengths = _inks(palette[1:] - palette[0])
         (wanted,), (length,) = _inks(np.array([colour]) - palette[0])
