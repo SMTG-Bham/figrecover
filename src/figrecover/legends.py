@@ -15,6 +15,7 @@ _MIN_KEY = 5
 _MAX_KEY = 72
 _INK = 50
 _MIN_SCORE = 0.65
+_MIN_UNIFORM = 0.85  # fraction of the sampled legend width in one ink
 
 
 @dataclass(frozen=True)
@@ -127,6 +128,7 @@ def _matched_entries(image: Image, texts: Sequence[_Text]) -> list[Entry]:
     """Pair individual samples with adjacent words before testing alignment."""
     shapes = _shapes(image)
     entries = []
+    missing = []
     for text in texts:
         if text.score < _MIN_SCORE or (
             text.text and not any(c.isalpha() for c in text.text)
@@ -141,26 +143,63 @@ def _matched_entries(image: Image, texts: Sequence[_Text]) -> list[Entry]:
             and box[2] - box[0] >= 0.35 * em
             and box[3] - box[1] <= 1.2 * em
         ]
-        if not options:
-            continue
-        box, colour = max(options, key=lambda p: p[0][2])
-        x0, y0, x1, y1 = box
-        entries.append(
-            Entry(
-                text.text or None,
-                colour,
-                ((x0 + x1) / 2, (y0 + y1) / 2),
-                (
-                    x0 - 2,
-                    min(y0, text.bottom) - 2,
-                    text.right + 2,
-                    max(y1, text.top) + 2,
-                ),
-                x1 - x0,
-                y1 - y0,
-            )
-        )
-    return entries
+        if options:
+            box, colour = max(options, key=lambda p: p[0][2])
+            entries.append(_row(text, box, colour))
+        else:
+            missing.append(text)
+    return entries + [
+        found for text in missing if (found := _joined_sample(image, text, entries))
+    ]
+
+
+def _row(text: _Text, box: Rectangle, colour: Colour) -> Entry:
+    """Record a sampled key and the bounding box of its printed label."""
+    x0, y0, x1, y1 = box
+    return Entry(
+        text.text or None,
+        colour,
+        ((x0 + x1) / 2, (y0 + y1) / 2),
+        (x0 - 2, min(y0, text.bottom) - 2, text.right + 2, max(y1, text.top) + 2),
+        x1 - x0,
+        y1 - y0,
+    )
+
+
+def _joined_sample(image: Image, text: _Text, entries: Sequence[Entry]) -> Entry | None:
+    """Measure a key touching plotted ink between two verified legend rows."""
+    em = text.top - text.bottom
+    peers = [
+        e
+        for e in entries
+        if abs(e.key[1] - text.y) <= 2.5 * em
+        and 0 <= text.left - (e.key[0] + e.width / 2) <= 2 * em
+    ]
+    if not any(e.key[1] < text.y for e in peers) or not any(
+        e.key[1] > text.y for e in peers
+    ):
+        return None
+    # Both neighbours must identify the same sample columns. Measure the
+    # strongest near-uniform row directly, even if another colour crosses it.
+    left = round(max(e.key[0] - e.width / 2 for e in peers))
+    right = round(min(e.key[0] + e.width / 2 for e in peers))
+    if right - left < _MIN_KEY:
+        return None
+    top = max(0, round(image.shape[0] - text.y - 0.4 * em))
+    patch = image[top : round(image.shape[0] - text.y + 0.4 * em) + 1, left:right]
+    median = np.median(patch, axis=1)
+    uniform = (np.abs(patch - median[:, None]).max(axis=2) <= _INK).mean(axis=1)
+    contrast = np.abs(median - np.median(patch, axis=(0, 1))).max(axis=1)
+    rows = np.flatnonzero((uniform > _MIN_UNIFORM) & (contrast > _INK))
+    if not len(rows) or np.ptp(rows) > 0.4 * em:
+        return None
+    r, g, b = median[rows[contrast[rows].argmax()]]
+    y = image.shape[0] - top
+    return _row(
+        text,
+        (left, y - int(rows[-1]) - 1, right, y - int(rows[0])),
+        (int(r), int(g), int(b)),
+    )
 
 
 def line_patterns(image: Image, entries: Sequence[Entry]) -> list[Entry]:

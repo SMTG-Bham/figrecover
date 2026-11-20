@@ -9,7 +9,9 @@ import numpy as np
 import pytest
 from matplotlib.figure import Figure
 
+from figrecover.axes import _Text
 from figrecover.cli import main
+from figrecover.legends import Entry, _joined_sample, raster_entries
 
 
 def draw(path: Path, location: str) -> None:
@@ -122,3 +124,30 @@ def test_shared_legend_appears_once_in_class_view(
     assert "legend (2)" in report
     assert "data line (4)" in report
     assert view.exists()
+
+
+def test_legend_key_touching_the_data_is_measured_between_rows() -> None:
+    image = np.full((100, 180, 3), 255, np.uint8)
+    colours = [(31, 119, 180), (255, 127, 14), (44, 160, 44)]
+    texts = []
+    for i, (name, colour) in enumerate(
+        zip(("Mean", "Replicate 1", "Theory"), colours, strict=True)
+    ):
+        y = 30 + 20 * i
+        image[y : y + 2, 74:104] = colour
+        texts.append(_Text(name, 110, 92 - y, 165, 106 - y))
+    image[48:50, :76] = colours[0]
+    found = raster_entries(image, texts)
+    assert [(e.name, e.colour) for e in found] == list(
+        zip(("Mean", "Replicate 1", "Theory"), colours, strict=True)
+    )
+    assert found[1].width == 30
+
+
+def test_aligned_labels_alone_do_not_establish_a_legend_key() -> None:
+    image = np.full((100, 180, 3), 255, np.uint8)
+    word = _Text("Threshold", 100, 40, 155, 60)
+    top = Entry("Mean", (0, 0, 0), (68, 72), (60, 67, 140, 79), 20, 2)
+    for x in (68, 88):
+        bottom = Entry("Theory", (0, 0, 0), (x, 30), (x - 10, 24, 145, 39), 20, 2)
+        assert _joined_sample(image, word, [top, bottom]) is None
