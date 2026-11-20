@@ -243,7 +243,10 @@ lines by the direction of their colour from the background, which their
 blends share, and prints the strongest colour each shows, such as `eda2a3`
 for a `tab:red` line a quarter of a point wide at 100 dots per inch. A `-c`
 colour picks such a line too, as the line shows part of it: `-c d62728` picks
-that line, and `-c 1f77b4` the translucent one.
+that line, and `-c 1f77b4` the translucent one. A stroke passing through a shaded band
+can change colour again. When the blended segment touches the exposed
+stroke and its colour fits the two layers, figrecover traces them as one
+curve. The band itself is excluded from the CSV.
 
 `-n` skips colours that fill areas, those drawn mostly as straight lines
 across the plot, such as grid lines, dashed or not and even with curves drawn
@@ -1337,7 +1340,9 @@ returns, exactly, as an `ErrorBars` for each.
    colour’s strength. Depth is measured before removing antialiased edges. `-c` instead picks the colour nearest to each given colour, up to
    96 levels away, or failing that the nearest whose direction lies within
    12 degrees of its own, no further from the background: a thin or
-   translucent line of that colour.
+   translucent line of that colour. When a thin segment lies inside a broad fill, figrecover
+   checks the adjacent stroke outside the fill. A matching mixture of the
+   stroke and fill colours joins the two segments.
 7. Each pixel belongs to the colour that it best matches when blended
    with the background, if it is at least half-way there, so a curve's
    antialiased edges count towards it, and within 96 levels of the blend, so
