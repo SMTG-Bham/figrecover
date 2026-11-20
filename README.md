@@ -69,6 +69,11 @@ keep their tick labels and titles in the image. A figure of several plots,
 such as panels labelled (a) and (b), or a plot with an inset, needs no
 cropping when figrecover reads the axes; see [Several panels](#several-panels).
 
+With the OCR extra, figrecover excludes text boxes inside the axes and
+looks beside them for straight shafts with an arrowhead or bracket cap.
+It reports how many it found. A curve crossing an excluded box has a gap.
+Use `--no-annotations` to keep these objects in the raster.
+
 To exclude an annotation or stamp, give its bounding rectangle with
 `--mask X0,Y0,X1,Y1`. Measure from the bottom-left corner of the original
 image in pixels or of the PDF page in points. Repeat the option to mask
@@ -140,6 +145,7 @@ in blue, so you can check the result at a glance:
 | `--preview PATH` | Save a preview image. For several inputs, give a directory for the previews. |
 | `--metadata FILE` | Save a JSON record of the digitization. |
 | `--axes-from FILE` | Reuse the recorded ticks and axis titles for a matching single plot. |
+| `--no-annotations` | Keep text and arrows when tracing image curves. |
 | `--mask X0,Y0,X1,Y1` | Exclude a rectangle before tracing. Repeat for multiple regions. |
 | `--remove-grid` | Paint over grid lines before tracing. |
 | `--level DEGREES` | The angle by which the image's axes are turned anticlockwise, or clockwise if negative, to turn it back by. Default: find it; see [Turned images](#turned-images). |

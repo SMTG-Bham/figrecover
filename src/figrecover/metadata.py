@@ -48,6 +48,7 @@ class Region:
     crop: tuple[int, int, int, int] | None = None
     label: tuple[int, int, int, int] | None = None
     fill: tuple[int, int, int] | None = None
+    annotations: list[tuple[float, float, float, float]] = field(default_factory=list)
 
     @classmethod
     def from_image(cls, image: Image, part: Image, offset: Point) -> Region:
@@ -206,7 +207,7 @@ def reproduce(
 ) -> str:
     """Build a shell-quoted command using the original positions and selected series."""
     args = ["figrecover", record.path]
-    if record.points:
+    if record.points and not record.region.annotations:
         for flag, pairs in (("-p", record.points), ("-l", record.locations)):
             for x, y in pairs:
                 args.extend((flag, f"{float(x)!r},{float(y)!r}"))

@@ -19,8 +19,8 @@ import cv2
 import numpy as np
 import numpy.typing as npt
 
-from . import __version__, interactive, metadata
-from .axes import SMALL_IMAGE, Axes
+from . import __version__, annotations, interactive, metadata
+from .axes import SMALL_IMAGE, Axes, _Text
 from .calibration import MIN_POINTS, Calibration, Point
 from .digitize import (
     STYLES,
@@ -130,6 +130,7 @@ class _Plot:
     pixels: list[Point]
     columns: tuple[str, str]
     axes: Axes | None = None
+    texts: tuple[_Text, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -240,6 +241,7 @@ def _run(options: argparse.Namespace, inputs: set[Path]) -> int:
         arguments.source = source if batch else None
         arguments.selections = selections.copy()
         arguments.measured = {}
+        arguments.saved_annotations = None
         arguments.calibration_source = "points" if options.locations else "clicked"
         arguments.record = (
             _start_record(arguments, source) if options.metadata else None
@@ -320,6 +322,8 @@ def _finish_record(record: metadata.InputRecord, arguments: argparse.Namespace) 
         extra: list[str] = []
         if arguments.log:
             extra.extend(("--log", arguments.log))
+        if arguments.no_annotations:
+            extra.append("--no-annotations")
         if arguments.remove_grid:
             extra.append("--remove-grid")
         for mask in arguments.mask:
@@ -464,6 +468,11 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="IMAGE",
         help="also save a faded copy of the image with each recovered curve "
         "drawn in its colour; with several inputs give a directory",
+    )
+    parser.add_argument(
+        "--no-annotations",
+        action="store_true",
+        help="keep plot text, arrows and brackets when tracing",
     )
     parser.add_argument(
         "--mask",
@@ -669,6 +678,7 @@ def _plots(arguments: argparse.Namespace) -> tuple[Image, Levelling, list[_Plot]
         left, _, _, bottom = region.crop or (0, 0, image.shape[1], image.shape[0])
         offset = (left, image.shape[0] - bottom)
         image = region.apply(image)
+        arguments.saved_annotations = region.annotations
         if arguments.record:
             arguments.record.region = region
         calibration, pixels, names = _read_axes(axes, None)
@@ -716,8 +726,23 @@ def _trace(
         points or ticks, and the markers and legend keys; and with
         --error-bars, the error bars of each curve's markers.
     """
-    traced = remove_grid(plot.image) if arguments.remove_grid else plot.image
     origin = plot.calibration.origin
+    traced = plot.image
+    if not arguments.no_annotations and not arguments.markers:
+        traced, boxes, shafts = annotations.excluded(
+            traced, origin, plot.texts, arguments.saved_annotations
+        )
+        if arguments.record:
+            arguments.record.region.annotations = boxes
+        if boxes:
+            _notice(
+                f"{_prefix(plot.name)}left out {len(boxes)} text "
+                f"region{'s' if len(boxes) != 1 else ''} and {shafts} "
+                f"arrow or bracket object{'s' if shafts != 1 else ''} in the plot area",
+                arguments.record,
+            )
+    if arguments.remove_grid:
+        traced = remove_grid(traced)
     rings: list[Ring] = [(pixel, 6, (0, 0, 255)) for pixel in plot.pixels]
     inks: list[Colour] = []  # the colour of each curve, as drawn
     styles: list[Style | None] = []  # and its style, if known
@@ -1073,6 +1098,7 @@ def _read_panels(
                 pixels,
                 columns,
                 panel.axes,
+                panel.texts,
             )
         )
     return plots
