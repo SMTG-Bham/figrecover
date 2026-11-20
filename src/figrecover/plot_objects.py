@@ -64,17 +64,28 @@ _MAX_THICKNESS = 8
 _MIN_CONTRAST = 32
 _INK_DISTANCE = 36
 _SECTIONS = 12
+_SMALL_GAP = 3
+_MIN_REPEATS = 3
 
 
-def _sections(pixels: npt.NDArray[np.bool_]) -> bool:
-    """Require widespread ink along the span, including both ends."""
+def _sections(pixels: npt.NDArray[np.bool_], ink: npt.NDArray[np.bool_]) -> bool:
+    """Require a continuous or repeating rule, allowing occlusion by other ink."""
     pos = np.flatnonzero(pixels)
+    if not len(pos) or np.ptp(pos) < len(pixels) * _MIN_REACH:
+        return False
+    span = pixels[pos[0] : pos[-1] + 1]
+    if not all(np.any(part) for part in np.array_split(span, _SECTIONS)):
+        return False
+    gaps = ~ink[pos[0] : pos[-1] + 1]
+    edges = np.flatnonzero(np.diff(np.r_[False, gaps, False])).reshape(-1, 2)
+    lengths = np.diff(edges, axis=1).ravel()
+    # A flat baseline interrupted by a peak is data. A dashed or dotted
+    # rule has many similar gaps; a solid one continues behind other ink.
     return bool(
-        len(pos)
-        and np.ptp(pos) >= len(pixels) * _MIN_REACH
-        and all(
-            np.any(part)
-            for part in np.array_split(pixels[pos[0] : pos[-1] + 1], _SECTIONS)
+        not len(lengths)
+        or lengths.max() <= _SMALL_GAP
+        or (
+            len(lengths) >= _MIN_REPEATS and lengths.max() <= 3 * np.median(lengths) + 2
         )
     )
 
@@ -99,7 +110,9 @@ def _rows(
         colours, counts = np.unique(plot[row][ink[row]], axis=0, return_counts=True)
         colour = colours[counts.argmax()]
         own = np.abs(plot[group].astype(np.int16) - colour).max(axis=2) <= _INK_DISTANCE
-        if own.any(axis=0).mean() < _MIN_COVER or not _sections(own.any(axis=0)):
+        if own.any(axis=0).mean() < _MIN_COVER or not _sections(
+            own.any(axis=0), ink[group].any(axis=0)
+        ):
             continue
         start, end = max(0, int(group[0]) - 1), min(len(plot), int(group[-1]) + 2)
         # Include adjacent antialiasing in the observed columns. Preserve
