@@ -243,7 +243,14 @@ lines by the direction of their colour from the background, which their
 blends share, and prints the strongest colour each shows, such as `eda2a3`
 for a `tab:red` line a quarter of a point wide at 100 dots per inch. A `-c`
 colour picks such a line too, as the line shows part of it: `-c d62728` picks
-that line, and `-c 1f77b4` the translucent one. A stroke passing through a shaded band
+that line, and `-c 1f77b4` the translucent one.
+
+For a thin line in a JPEG, compression may spread the hue across the stroke's
+edges. When those fringes are widespread, figrecover uses nearby colour and
+the pixel's brightness to distinguish strokes. The printed colour comes
+from the original pixels. A nominal colour can still select the series.
+
+A stroke passing through a shaded band
 can change colour again. When the blended segment touches the exposed
 stroke and its colour fits the two layers, figrecover traces them as one
 curve. The band itself is excluded from the CSV.
