@@ -2,6 +2,7 @@
 
 import dataclasses
 import math
+import os
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -259,7 +260,7 @@ def test_engine_uses_the_processors_the_process_may_run_on(
             created.append(params)
 
     monkeypatch.setitem(sys.modules, "rapidocr", SimpleNamespace(RapidOCR=RapidOCR))
-    monkeypatch.setattr(axes.os, "process_cpu_count", lambda: processors)
+    monkeypatch.setattr(os, "process_cpu_count", lambda: processors)
     _engine.cache_clear()
     try:
         _engine()
