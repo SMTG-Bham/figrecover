@@ -30,6 +30,10 @@ or with pip:
 python -m pip install git+https://github.com/SMTG-Bham/figrecover
 ```
 
+figrecover is not on PyPI: `pip install figrecover` installs an unrelated
+package of the same name. To install a release rather than the latest commit,
+add its tag, as in `git+https://github.com/SMTG-Bham/figrecover@v0.1.0`.
+
 To have figrecover read the axes for you (see
 [Reading the axes](#reading-the-axes)), install the `ocr` extra instead. It
 adds the [RapidOCR](https://github.com/RapidAI/RapidOCR) text reader and its
@@ -1768,24 +1772,23 @@ protection.
 
 ### Releasing
 
-1. Add the repository as a
-   [trusted publisher](https://docs.pypi.org/trusted-publishers/) on PyPI, with
-   workflow `release.yml` and environment `pypi`, and create a `pypi`
-   environment in the repository settings.
-2. Enable the repository in the release owner's [Zenodo GitHub settings](https://zenodo.org/account/settings/github/)
+figrecover is released on GitHub only. The name `figrecover` on PyPI belongs
+to an unrelated project, so the PyPI workflow `release.yml` is disabled; its
+header says what to change before enabling it.
+
+1. Enable the repository in the release owner's [Zenodo GitHub settings](https://zenodo.org/account/settings/github/)
    before publishing the first release.
-3. Bump the version, for example `uv version --bump minor`. Update the
+2. Bump the version, for example `uv version --bump minor`. Update the
    version and `date-released` in `CITATION.cff`, and update `CHANGELOG.md`.
-4. Publish a GitHub release tagged with the version prefixed by `v`, such as
-   `v0.1.0`. The release workflow checks the tag, builds the distributions and
-   uploads them to PyPI. After Zenodo archives the first release, add the
-   concept DOI for all versions to the Citing section.
+3. Publish a GitHub release tagged with the version prefixed by `v`, such as
+   `v0.1.0`. After Zenodo archives the first release, add the concept DOI for
+   all versions to the Citing section.
 
 ## Project layout
 
 ```text
 .
-├── .github/                 # CI, PyPI release and Dependabot
+├── .github/                 # CI, the disabled PyPI release and Dependabot
 ├── examples/                # example plots, their previews and the script that draws them
 ├── src/figrecover/
 │   ├── axes.py              # reading the axes from their tick labels

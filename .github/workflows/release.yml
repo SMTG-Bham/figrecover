@@ -1,7 +1,11 @@
 name: Release
 
 # Publishes to PyPI with trusted publishing when a GitHub release is published.
-# Before the first release, add this repository as a trusted publisher on PyPI
+#
+# Disabled in the repository settings: the name figrecover on PyPI belongs to
+# an unrelated project, so figrecover is released on GitHub only. Before
+# enabling it, change the distribution name in pyproject.toml and the
+# environment URL below, add this repository as a trusted publisher on PyPI
 # and create a "pypi" environment in the repository settings.
 
 on:
