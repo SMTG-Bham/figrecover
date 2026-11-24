@@ -2,6 +2,7 @@
 
 import dataclasses
 import math
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,6 +14,7 @@ import pytest
 from figrecover import Axes, Image, axes, load_image, read_axes
 from figrecover.axes import (
     _PLAIN,
+    _engine,
     _factor,
     _in_line_along,
     _merged,
@@ -244,6 +246,33 @@ def test_needs_tick_labels() -> None:
 def test_needs_the_ocr_extra() -> None:
     with pytest.raises(ModuleNotFoundError, match="needs the ocr extra"):
         read_axes(load_image(EXAMPLES / "labelled.png"))
+
+
+@pytest.mark.parametrize(("processors", "threads"), [(4, 4), (None, 1)])
+def test_engine_uses_the_processors_the_process_may_run_on(
+    monkeypatch: pytest.MonkeyPatch, processors: int | None, threads: int
+) -> None:
+    created: list[dict[str, object]] = []
+
+    class RapidOCR:
+        def __init__(self, params: dict[str, object]) -> None:
+            created.append(params)
+
+    monkeypatch.setitem(sys.modules, "rapidocr", SimpleNamespace(RapidOCR=RapidOCR))
+    monkeypatch.setattr(axes.os, "process_cpu_count", lambda: processors)
+    _engine.cache_clear()
+    try:
+        _engine()
+    finally:
+        _engine.cache_clear()
+
+    assert created == [
+        {
+            "Global.log_level": "critical",
+            "EngineConfig.onnxruntime.intra_op_num_threads": threads,
+            "EngineConfig.onnxruntime.inter_op_num_threads": 1,
+        }
+    ]
 
 
 def text(content: str, x: float, y: float, width: float = 20) -> _Text:

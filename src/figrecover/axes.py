@@ -3,6 +3,7 @@
 import functools
 import itertools
 import math
+import os
 import re
 import unicodedata
 from collections import Counter
@@ -364,14 +365,30 @@ def _fit_axes(image: Image, texts: list[_Text], ink: npt.NDArray[np.uint8]) -> A
 
 @functools.cache
 def _engine() -> Any:
-    """Load the OCR engine, once, as it is slow to load."""
+    """Load the OCR engine, once, as it is slow to load.
+
+    ONNX Runtime otherwise starts a thread for each processor of the
+    machine, not each one the process may run on. Under a batch scheduler,
+    which gives a job a few processors of a large node, that is many times
+    too many: the threads fight over the processors the job has, and
+    pinning each to a processor outside them fails with an error printed
+    for every thread. So the engine gets one thread for each processor the
+    process may use, which also stops ONNX Runtime pinning them.
+    """
     try:
         # Imported here, as it is an optional dependency.
         from rapidocr import RapidOCR  # noqa: PLC0415
     except ModuleNotFoundError as error:
         msg = "reading the axes needs the ocr extra: pip install 'figrecover[ocr]'"
         raise ModuleNotFoundError(msg) from error
-    return RapidOCR(params={"Global.log_level": "critical"})
+    return RapidOCR(
+        params={
+            "Global.log_level": "critical",
+            "EngineConfig.onnxruntime.intra_op_num_threads": os.process_cpu_count()
+            or 1,
+            "EngineConfig.onnxruntime.inter_op_num_threads": 1,
+        }
+    )
 
 
 def _read_text(image: Image, *, flip: bool = True) -> list[_Text]:

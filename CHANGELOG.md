@@ -99,7 +99,10 @@ The first release.
   written, and those misread as other digits, off the even steps of a linear
   axis, such as 758 among 250 and 500, are dropped. Titles keep their Greek
   letters, symbols, superscripts and subscripts, such as Δ, μm, CO₂ and mg
-  L⁻¹, each written one way however OCR reads it.
+  L⁻¹, each written one way however OCR reads it. OCR runs one thread for
+  each processor the process may use, not each of the machine's, so a batch
+  job given a few processors of a large node no longer starts a thread for
+  every processor of the node and prints an error for each it cannot pin.
 - With the `ocr` extra, a figure of several plots, such as panels labelled
   (a), (b), (c), is read panel by panel: each is found by its axis lines,
   read from its own part of the image, and named after its label, taking the
