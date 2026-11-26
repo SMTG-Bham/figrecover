@@ -12,29 +12,31 @@ the same way from the command line.
 
 Use **Cite this repository** on GitHub to copy the citation or download it
 as BibTeX. Include the version you used. For an unreleased checkout,
-include its Git commit as well. See [CITATION.cff](CITATION.cff).
+include its Git commit as well. See
+[CITATION.cff](https://github.com/SMTG-Bham/plottracer/blob/main/CITATION.cff).
 
 ## Installation
 
 plottracer runs on Linux only, and needs Python 3.14 (a standard build;
 OpenCV does not support the free-threaded build yet). Install the command
-with [uv](https://docs.astral.sh/uv/):
+from [PyPI](https://pypi.org/project/plottracer/) with
+[uv](https://docs.astral.sh/uv/):
 
 ```bash
-uv tool install git+https://github.com/SMTG-Bham/plottracer
+uv tool install plottracer
 ```
 
 or with pip:
 
 ```bash
-python -m pip install git+https://github.com/SMTG-Bham/plottracer
+python -m pip install plottracer
 ```
 
-plottracer is not on PyPI, so install it from GitHub as above. To install a
-release rather than the latest commit, add its tag, as in
-`git+https://github.com/SMTG-Bham/plottracer@v0.1.0`. Version 0.1.0 was
-released under the old name, figrecover, so it installs the command and the
-Python package as `figrecover`.
+To install the latest commit rather than a release, install from GitHub, as
+in `uv tool install git+https://github.com/SMTG-Bham/plottracer`. Version
+0.1.0 was released on GitHub only, under the old name, figrecover, so
+`git+https://github.com/SMTG-Bham/plottracer@v0.1.0` installs the command and
+the Python package as `figrecover`.
 
 To have plottracer read the axes for you (see
 [Reading the axes](#reading-the-axes)), install the `ocr` extra instead. It
@@ -42,7 +44,7 @@ adds the [RapidOCR](https://github.com/RapidAI/RapidOCR) text reader and its
 models, so it needs no network access when it runs:
 
 ```bash
-uv tool install "plottracer[ocr] @ git+https://github.com/SMTG-Bham/plottracer"
+uv tool install "plottracer[ocr]"
 ```
 
 To read plots in PDF files (see [PDF files](#pdf-files)), install the `pdf`
@@ -50,7 +52,7 @@ extra, which adds the [pypdfium2](https://github.com/pypdfium2-team/pypdfium2)
 PDF reader. Extras combine, as in `plottracer[ocr,pdf]`:
 
 ```bash
-uv tool install "plottracer[pdf] @ git+https://github.com/SMTG-Bham/plottracer"
+uv tool install "plottracer[pdf]"
 ```
 
 SVG files (see [SVG files](#svg-files)) need no extra: plottracer reads them
@@ -133,8 +135,8 @@ Without `-o`, the CSV goes to standard output. The preview draws the recovered
 curve in its own colour over a faded copy of the plot, and the reference points
 in blue, so you can check the result at a glance:
 
-![The input plot](examples/spectrum.png)
-![The recovered curve drawn over the plot](examples/spectrum.preview.png)
+![The input plot](https://raw.githubusercontent.com/SMTG-Bham/plottracer/main/examples/spectrum.png)
+![The recovered curve drawn over the plot](https://raw.githubusercontent.com/SMTG-Bham/plottracer/main/examples/spectrum.preview.png)
 
 | Option | Meaning |
 | --- | --- |
@@ -249,7 +251,7 @@ series,x,y
 ...
 ```
 
-![Four crossing curves, each recovered in its own colour](examples/series.preview.png)
+![Four crossing curves, each recovered in its own colour](https://raw.githubusercontent.com/SMTG-Bham/plottracer/main/examples/series.preview.png)
 
 Which curve has the most pixels can change from one plot to the next.
 Across separate runs, pass the printed `-c` options to fix the order of
@@ -323,7 +325,7 @@ plottracer: the image is greyscale, so curves of different colours may share a g
 plottracer: colours: -c 000000:solid -c 000000:dashed -c 000000:dotted
 ```
 
-![Three crossing black curves, solid, dashed and dotted, each recovered in a colour of its own](examples/styles.preview.png)
+![Three crossing black curves, solid, dashed and dotted, each recovered in a colour of its own](https://raw.githubusercontent.com/SMTG-Bham/plottracer/main/examples/styles.preview.png)
 
 Colours of one curve come in their usual order, and the curves of a colour of
 several come in among them by their pixels, most first: so the mean of pale
@@ -390,7 +392,7 @@ plottracer: markers found in each series: 19, 19, 19, 19
 
 The preview rings each marker, and each key, in a colour for its series:
 
-![Four series told apart by their markers](examples/markers.preview.png)
+![Four series told apart by their markers](https://raw.githubusercontent.com/SMTG-Bham/plottracer/main/examples/markers.preview.png)
 
 - The markers can be filled or open, such as squares, diamonds, triangles,
   circles and crosses. Each series needs a shape or a colour of its own:
@@ -479,7 +481,7 @@ series,Time (s),Voltage (mV),y_low,y_high,x_low,x_high
 The preview draws each bar, with a short line across each end, in its
 series' colour:
 
-![Four series of markers with error bars, each bar recovered in its series' colour](examples/errorbars.preview.png)
+![Four series of markers with error bars, each bar recovered in its series' colour](https://raw.githubusercontent.com/SMTG-Bham/plottracer/main/examples/errorbars.preview.png)
 
 - A marker is a filled shape of its series' colour, a pixel or more
   thicker each side than the series' lines, and its point is the middle of
@@ -517,7 +519,7 @@ plottracer examples/grid.png \
     --preview grid.preview.png
 ```
 
-![A damped oscillation recovered from a plot with a dark grid](examples/grid.preview.png)
+![A damped oscillation recovered from a plot with a dark grid](https://raw.githubusercontent.com/SMTG-Bham/plottracer/main/examples/grid.preview.png)
 
 A grid drawn in the same colour as a curve has to be removed first, with
 `--remove-grid`.
@@ -548,7 +550,7 @@ Time (s),Voltage (mV)
 
 The preview circles each tick it read, on its axis line:
 
-![A damped oscillation recovered from a plot whose axes were read](examples/labelled.preview.png)
+![A damped oscillation recovered from a plot whose axes were read](https://raw.githubusercontent.com/SMTG-Bham/plottracer/main/examples/labelled.preview.png)
 
 Each image is calibrated from its own labels, so the plots in a batch can have
 different axes. The other options, such as `-n`, `-c` and `--remove-grid`,
@@ -717,7 +719,7 @@ plottracer: logarithmic x-axis "Frequency (Hz)" with ticks at 1, 10, 100, 1000, 
 plottracer: logarithmic y-axis "Power (mW)" with ticks at 0.1, 1, 10, 100, 1000
 ```
 
-![A low-pass filter's response recovered from a plot with logarithmic axes](examples/logarithmic.preview.png)
+![A low-pass filter's response recovered from a plot with logarithmic axes](https://raw.githubusercontent.com/SMTG-Bham/plottracer/main/examples/logarithmic.preview.png)
 
 The tick labels can be decimals, such as `0.01` and `1000`, or powers with
 superscript exponents, such as 10⁻², 2×10³ and 2⁵, as matplotlib draws them.
@@ -800,7 +802,7 @@ a,0.117437,0.505713
 
 The preview draws every panel's curves and ticks on the one image:
 
-![Four panels, each recovered with its own axes, one of them logarithmic](examples/panels.preview.png)
+![Four panels, each recovered with its own axes, one of them logarithmic](https://raw.githubusercontent.com/SMTG-Bham/plottracer/main/examples/panels.preview.png)
 
 The panels of `examples/shared.png` share their axes, so matplotlib labels
 the x-axes only on the lower panels, and the y-axes only on the left ones.
@@ -843,7 +845,7 @@ for its inset. An inset is named after the panel it lies in, such as
 `b_inset` in panel (b), and several insets in one panel are numbered in
 reading order, such as `inset1` and `inset2`.
 
-![A plot and its inset, each recovered with its own axes](examples/inset.preview.png)
+![A plot and its inset, each recovered with its own axes](https://raw.githubusercontent.com/SMTG-Bham/plottracer/main/examples/inset.preview.png)
 
 - The panels are found by their axes: a horizontal and a vertical axis line,
   each at least a tenth of the image's shorter side long, that meet, as
@@ -916,7 +918,7 @@ plottracer: y-axis "Voltage (mV)" with ticks at 0, 0.5, 1, 1.5, 2, 2.5, 3
 The preview is drawn on the image as given, with the curves and the ticks
 turned back onto it:
 
-![A damped oscillation recovered from a plot turned by 1°](examples/skewed.preview.png)
+![A damped oscillation recovered from a plot turned by 1°](https://raw.githubusercontent.com/SMTG-Bham/plottracer/main/examples/skewed.preview.png)
 
 - The angle is that of the image's long straight lines, within 10° of
   horizontal or vertical, such as the axis lines, a frame and grid lines,
@@ -1602,7 +1604,8 @@ scored 0.322 mean numeric F1 with automatic axes and a supplied series
 count. On the PlotQA subset, supplying tick calibration raised the score
 from 0.230 to 0.553. These figures cover the paired public items only.
 The benchmark gives per-chart results, error percentiles, failure counts
-and the comparison with other systems. [Public chart benchmark](benchmarks/README.md).
+and the comparison with other systems.
+[Public chart benchmark](https://github.com/SMTG-Bham/plottracer/blob/main/benchmarks/README.md).
 
 ## Limitations
 
@@ -1774,22 +1777,24 @@ protection.
 
 ### Releasing
 
-plottracer is released on GitHub only, so the PyPI workflow `release.yml` is
-disabled; its header says what to set up before enabling it.
+Publishing a GitHub release publishes plottracer to PyPI: `release.yml` checks
+that the tag matches the package version, builds the sdist and wheel, and
+uploads them with trusted publishing. Its header says what PyPI and the
+repository settings need for that.
 
 1. Enable the repository in the release owner's [Zenodo GitHub settings](https://zenodo.org/account/settings/github/)
    before publishing the first release.
 2. Bump the version, for example `uv version --bump minor`. Update the
    version and `date-released` in `CITATION.cff`, and update `CHANGELOG.md`.
 3. Publish a GitHub release tagged with the version prefixed by `v`, such as
-   `v0.1.0`. After Zenodo archives the first release, add the concept DOI for
+   `v0.2.0`. After Zenodo archives the first release, add the concept DOI for
    all versions to the Citing section.
 
 ## Project layout
 
 ```text
 .
-├── .github/                 # CI, the disabled PyPI release and Dependabot
+├── .github/                 # CI, the PyPI release and Dependabot
 ├── examples/                # example plots, their previews and the script that draws them
 ├── src/plottracer/
 │   ├── axes.py              # reading the axes from their tick labels
@@ -1808,7 +1813,9 @@ disabled; its header says what to set up before enabling it.
 ## License
 
 plottracer is free software under the GNU Lesser General Public License,
-version 3 or later: see [`LICENSE`](LICENSE), which supplements the GNU
-General Public License in [`COPYING`](COPYING). It is a modified version of
-[PlotDigitizer](https://github.com/dilawar/PlotDigitizer) by Dilawar Singh,
-rewritten in 2026.
+version 3 or later: see
+[`LICENSE`](https://github.com/SMTG-Bham/plottracer/blob/main/LICENSE), which
+supplements the GNU General Public License in
+[`COPYING`](https://github.com/SMTG-Bham/plottracer/blob/main/COPYING). It is
+a modified version of [PlotDigitizer](https://github.com/dilawar/PlotDigitizer)
+by Dilawar Singh, rewritten in 2026.

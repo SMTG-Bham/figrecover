@@ -2,9 +2,9 @@ name: Release
 
 # Publishes to PyPI with trusted publishing when a GitHub release is published.
 #
-# Disabled in the repository settings: plottracer is released on GitHub only.
-# Before enabling it, add this repository as a trusted publisher on PyPI and
-# create a "pypi" environment in the repository settings.
+# It needs a trusted publisher on PyPI for the plottracer project, naming the
+# SMTG-Bham/plottracer repository, this workflow (release.yml) and the "pypi"
+# environment, and that environment in the repository settings.
 
 on:
   release:

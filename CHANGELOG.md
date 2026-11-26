@@ -1,11 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 (2026-11-26)
 
 - Renamed from figrecover to plottracer: the distribution, the command, the
   Python package (`import plottracer`, `python -m plottracer`) and the
   version key in `--metadata` JSON files, which was `"figrecover"`. The
   repository moved to `SMTG-Bham/plottracer`.
+- Released on PyPI, so `pip install plottracer` and
+  `uv tool install plottracer` install it. Publishing a GitHub release
+  publishes it to PyPI with trusted publishing.
 
 ## 0.1.0 (2026-11-24)
 
