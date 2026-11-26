@@ -3,7 +3,8 @@
 Recover data from images of plots. plottracer finds the curves in a picture of
 a plot, such as a scanned figure or a screenshot, and writes their points as
 CSV in the plot's own units. Curves are told apart by colour. It reads plots in
-PDF and SVG files too, exactly, from what they draw rather than from pixels.
+PDF, SVG, EPS, PostScript and compatible Adobe Illustrator files using the
+coordinates of the drawn curves.
 
 It suits batches of similar plots: calibrate once, then digitize every image
 the same way from the command line.
@@ -57,6 +58,12 @@ uv tool install "plottracer[pdf]"
 
 SVG files (see [SVG files](#svg-files)) need no extra: plottracer reads them
 with Python's own XML parser.
+
+EPS, PostScript and Adobe Illustrator files use the same `pdf` extra. For
+`.eps`, `.ps` and PostScript-based `.ai` files, also install Ghostscript
+(`sudo apt install ghostscript` on Debian or Ubuntu). PDF-compatible
+Illustrator files need only the Python extra. From this checkout, run
+`uv run --extra pdf plottracer figure.eps -o figure.csv`.
 
 ## Usage
 
@@ -1067,6 +1074,33 @@ plottracer examples/rasterised.pdf -n 2
 ```text
 plottracer: colours: -c ff7f0e -c 1f77b4
 ```
+
+### EPS, PostScript and Adobe Illustrator files
+
+```bash
+plottracer plot.eps -o plot.csv --preview plot.png
+plottracer report.ps --page 2 -o page2.csv
+plottracer illustration.ai -o curves.csv
+```
+
+For EPS, PostScript and self-contained PostScript-based Illustrator artwork,
+Ghostscript converts the drawing to PDF. plottracer then reads the paths,
+text and embedded images as described under [PDF files](#pdf-files). Curves
+stored as bitmaps are traced at the embedded image resolution. When the EPS
+header supplies a bounding box, Ghostscript crops to it. Manual calibration
+and crop coordinates start at the bottom-left of the resulting page, in points.
+Automatic calibration needs readable tick labels. Some exporters turn labels
+into outlines or use fonts without usable character mappings. In that case,
+use `-p` and `-l` for manual calibration. When exporting from Matplotlib,
+`matplotlib.rcParams["ps.fonttype"] = 42` can preserve readable labels.
+
+PDF-compatible Illustrator files go directly to the PDF reader. For files
+containing only Illustrator's private editing data, resave from Illustrator
+with **Create PDF Compatible File** enabled. This also works for legacy
+files that depend on external Illustrator resources.
+
+In Python, use `from plottracer import load_postscript` for all three file
+types. It accepts the same `page`, `box` and `figure` options as `load_pdf`.
 
 ### SVG files
 

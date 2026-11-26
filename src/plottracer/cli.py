@@ -63,6 +63,7 @@ from .pdf import (
     trace_pdf_series,
 )
 from .plot_objects import PlotObject, without_objects
+from .postscript import load_postscript
 from .svg import load_svg, render_svg
 
 type TraceRanges = list[dict[Point, Point]]
@@ -185,7 +186,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             "--log needs -p; plottracer finds logarithmic axes itself when reading them"
         )
     sources = arguments.images
-    if len(sources) == 1 and (error := _input_error(Path(sources[0]), arguments)):
+    if len(sources) == 1 and (
+        error := _input_error(_input_kind(Path(sources[0])), arguments)
+    ):
         parser.error(error)
     try:
         return _run(arguments, _protected_paths(arguments, parser))
@@ -229,16 +232,16 @@ def _protected_paths(
     return inputs
 
 
-def _input_error(image: Path, arguments: argparse.Namespace) -> str | None:
+def _input_error(kind: str, arguments: argparse.Namespace) -> str | None:
     """Return the reason a file cannot use the given options, if any."""
-    if arguments.figure and not _is_pdf(image):
-        return "--figure chooses a captioned figure on a PDF page"
-    if arguments.page and _is_svg(image):
+    if arguments.figure and kind in {"image", "svg"}:
+        return "--figure chooses a captioned figure on a PDF page or in EPS, PS or AI"
+    if arguments.page and kind == "svg":
         return "--page chooses a page of a PDF file; an SVG file has only one"
-    if (arguments.page or arguments.box) and not _is_drawing(image):
-        return "--page and --box choose what to read in a PDF or SVG file"
-    if arguments.level is not None and _is_drawing(image):
-        return "--level and --no-level level images, not PDF or SVG files"
+    if (arguments.page or arguments.box) and kind == "image":
+        return "--page and --box choose what to read in a PDF, SVG, EPS, PS or AI file"
+    if arguments.level is not None and kind != "image":
+        return "--level and --no-level level images, not PDF, SVG, EPS, PS or AI files"
     return None
 
 
@@ -257,6 +260,7 @@ def _run(options: argparse.Namespace, inputs: set[Path]) -> int:
     for source in options.images:
         arguments = argparse.Namespace(**vars(options))
         arguments.image = Path(source)
+        arguments.kind = _input_kind(arguments.image)
         arguments.source = source if batch else None
         arguments.selections = selections.copy()
         arguments.measured = {}
@@ -302,7 +306,7 @@ def _prepare_batch_input(
     inputs: set[Path],
 ) -> None:
     """Validate input-specific options and choose a distinct preview destination."""
-    if error := _input_error(arguments.image, arguments):
+    if error := _input_error(arguments.kind, arguments):
         raise ValueError(error)
     for name in ("preview", "classes"):
         directory = getattr(options, name)
@@ -317,16 +321,9 @@ def _prepare_batch_input(
 
 def _start_record(arguments: argparse.Namespace, source: str) -> metadata.InputRecord:
     """Retain original image coordinates before levelling or collecting clicks."""
-    kind = (
-        "pdf"
-        if _is_pdf(arguments.image)
-        else "svg"
-        if _is_svg(arguments.image)
-        else "image"
-    )
     return metadata.InputRecord(
         source,
-        kind,
+        arguments.kind,
         page=arguments.page,
         box=arguments.box,
         points=arguments.points,
@@ -376,8 +373,8 @@ def _build_parser() -> argparse.ArgumentParser:
     """Create the command-line argument parser."""
     parser = argparse.ArgumentParser(
         prog="plottracer",
-        description="Recover the curves in an image of a plot, or a PDF or SVG file, "
-        "as CSV, with columns for x and y, and a series column if there are several "
+        description="Recover curves from a plot image or a PDF, SVG, EPS, PS or AI "
+        "drawing as CSV, with columns for x and y, and a series column for several "
         "curves. An image of several plots, such as the panels of a figure, gives "
         "a CSV for each when its axes are read.",
     )
@@ -386,29 +383,29 @@ def _build_parser() -> argparse.ArgumentParser:
         "images",
         nargs="+",
         metavar="image",
-        help="one or more images of plots, or a PDF or SVG file, whose curves are read "
-        "exactly from its drawing (a PDF file needs the pdf extra); positions in "
-        "them are in points from the bottom-left corner of the page",
+        help="one or more plot images or vector drawings (PDF, SVG, EPS, PS or AI). "
+        "Drawing coordinates are in points from the bottom-left corner. PDF, EPS, PS "
+        "and AI need the pdf extra. PostScript-based files also need Ghostscript.",
     )
     parser.add_argument(
         "--page",
         type=_count,
         metavar="N",
-        help="the page of the PDF file to read, from 1 (default: 1)",
+        help="the page of a PDF, EPS, PS or AI drawing to read, from 1 (default: 1)",
     )
     selection = parser.add_mutually_exclusive_group()
     selection.add_argument(
         "--figure",
         metavar="LABEL",
-        help="read the PDF figure with this caption label, such as 2 or S1",
+        help="read a figure by its caption label (such as 2 or S1) "
+        "on a PDF, EPS, PS or AI page",
     )
     selection.add_argument(
         "--box",
         type=_box,
         metavar="X0,Y0,X1,Y1",
-        help="the left, bottom, right and top edges of the part of the PDF's page, "
-        "or the SVG's drawing, to read, such as one figure, in points (default: the "
-        "whole page)",
+        help="the left, bottom, right and top edges of the part of the drawing "
+        "to read, in points (default: the whole page)",
     )
     parser.add_argument(
         "-p",
@@ -420,8 +417,8 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="X,Y",
         help="data coordinates of a reference point, such as the origin or a "
         f"labelled tick; repeat for at least {MIN_POINTS} points (default: read "
-        "the tick labels, and name the columns after the axis titles; this needs "
-        "the ocr extra)",
+        "the tick labels, and name the columns after the axis titles; raster inputs "
+        "need the ocr extra)",
     )
     parser.add_argument(
         "-l",
@@ -431,9 +428,9 @@ def _build_parser() -> argparse.ArgumentParser:
         default=[],
         type=_point,
         metavar="X,Y",
-        help="pixel position of each reference point, in the same order, measured "
-        "from the bottom-left corner (default: click on them, then reuse the "
-        "printed -l options)",
+        help="position of each reference point, in the same order, in pixels or "
+        "page points from the bottom-left corner (default: click on them, then "
+        "reuse the printed -l options)",
     )
     parser.add_argument(
         "--log",
@@ -449,7 +446,7 @@ def _build_parser() -> argparse.ArgumentParser:
         type=_count,
         metavar="N",
         help="trace N curves, told apart by colour, then by style: in an image "
-        "the most common colours first, in a PDF file the longest curves first; "
+        "the most common colours first, in a vector drawing the longest curves first; "
         "then reuse the printed -c options (default: 1)",
     )
     curves.add_argument(
@@ -474,9 +471,9 @@ def _build_parser() -> argparse.ArgumentParser:
         default=[],
         type=_point,
         metavar="X,Y",
-        help="pixel position of the marker in a series' legend key, measured from "
-        "the bottom-left corner; repeat for each series, to find the series by "
-        "the shapes and colours of their markers, rather than as curves of a colour",
+        help="position of the marker in a series' legend key, in pixels or page "
+        "points from the bottom-left corner; repeat for each series to find it by "
+        "the shape and colour of its markers",
     )
     parser.add_argument(
         "-o",
@@ -565,7 +562,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _digitize(arguments: argparse.Namespace) -> list[_Table]:
-    """Write the curves in the image, each of its panels or the PDF file, as CSV.
+    """Write curves from an image, its panels or a vector drawing as CSV.
 
     A panel whose curves cannot be traced is left out, with a warning. With
     ``-m``, insets are left out, as the markers are those of one plot.
@@ -575,8 +572,8 @@ def _digitize(arguments: argparse.Namespace) -> list[_Table]:
     given, are turned with it. The preview is drawn on the image as given,
     with the curves and rings turned back onto it.
     """
-    if _is_drawing(arguments.image):
-        return _digitize_pdf(arguments)
+    if arguments.kind != "image":
+        return _digitize_drawing(arguments)
     given, levelling, plots = _plots(arguments)
     entries = (
         arguments.saved_legend
@@ -1076,19 +1073,19 @@ def _report_pdf_references(
         )
 
 
-def _digitize_pdf(arguments: argparse.Namespace) -> list[_Table]:
-    """Write the curves in a plot on a page of the PDF file, or the SVG file, as CSV.
+def _digitize_drawing(arguments: argparse.Namespace) -> list[_Table]:
+    """Write the curves in a plot on a page of a vector drawing as CSV.
 
     Positions on the page are in points, and the preview shows the part of
     the page read, ``PREVIEW_SCALE`` pixels to the point.
     """
-    drawing = (
-        load_svg(arguments.image, arguments.box)
-        if _is_svg(arguments.image)
-        else load_pdf(
+    if arguments.kind == "svg":
+        drawing = load_svg(arguments.image, arguments.box)
+    else:
+        load = load_pdf if arguments.kind == "pdf" else load_postscript
+        drawing = load(
             arguments.image, arguments.page or 1, arguments.box, figure=arguments.figure
         )
-    )
     entries = pdf_legend(drawing)
     panels = (
         legend_panels(drawing)
@@ -1097,7 +1094,7 @@ def _digitize_pdf(arguments: argparse.Namespace) -> list[_Table]:
     )
     if arguments.record:
         arguments.record.box = drawing.box
-        arguments.record.page = drawing.page if arguments.record.kind == "pdf" else None
+        arguments.record.page = None if arguments.kind == "svg" else drawing.page
         arguments.record.plot_count = len(panels) or 1
     drawings: Sequence[tuple[str | None, Drawing]] = panels or [(None, drawing)]
     tables = []
@@ -1333,39 +1330,27 @@ def _record_plot(
     )
 
 
-def _is_pdf(path: Path) -> bool:
-    """Return whether a file is a PDF file, by its name."""
-    return path.suffix.lower() == ".pdf"
-
-
-def _is_svg(path: Path) -> bool:
-    """Return whether a file is an SVG file, by its name, or else its start.
-
-    A file named neither .pdf nor .svg, .svgz or .svg.gz is an SVG file if it
-    starts with a tag and an ``<svg`` tag starts within ``_SNIFF`` bytes.
-    """
+def _input_kind(path: Path) -> str:
+    """Identify a vector format by filename, also recognising SVG from its XML."""
     suffix = path.suffix.lower()
+    if suffix in {".pdf", ".ps", ".eps", ".ai"}:
+        return suffix[1:]
     if path.name.lower().endswith((".svg", ".svgz", ".svg.gz")):
-        return True
+        return "svg"
     try:
         with path.open("rb") as file:
             start = file.read(_SNIFF)
     except OSError:
-        return False
-    return suffix != ".pdf" and start.lstrip().startswith(b"<") and b"<svg" in start
-
-
-def _is_drawing(path: Path) -> bool:
-    """Return whether a file is read from its drawing: a PDF or SVG file."""
-    return _is_pdf(path) or _is_svg(path)
+        return "image"
+    return "svg" if start.lstrip().startswith(b"<") and b"<svg" in start else "image"
 
 
 def _render(drawing: Drawing) -> Image:
-    """Draw the part of the page of a PDF or SVG file read, as for a preview.
+    """Draw the selected part of a vector page, as for a preview.
 
     It is drawn ``PREVIEW_SCALE`` pixels to the point.
     """
-    if _is_svg(Path(drawing.path)):
+    if _input_kind(Path(drawing.path)) == "svg":
         return render_svg(drawing, PREVIEW_SCALE)
     return render_pdf(drawing, PREVIEW_SCALE)
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Read EPS, PostScript and Illustrator plots from the CLI or with
+  `load_postscript`. PDF-compatible AI uses the PDF reader directly.
+  PostScript inputs use Ghostscript to preserve vector paths for extraction.
+
 ## 0.2.0 (2026-11-26)
 
 - Renamed from figrecover to plottracer: the distribution, the command, the

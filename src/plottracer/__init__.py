@@ -42,6 +42,7 @@ from .pdf import (
     trace_pdf_series,
 )
 from .plot_objects import PlotObject
+from .postscript import load_postscript
 from .svg import load_svg, render_svg
 
 __version__ = version("plottracer")
@@ -79,6 +80,7 @@ __all__ = [
     "level_image",
     "load_image",
     "load_pdf",
+    "load_postscript",
     "load_svg",
     "read_axes",
     "read_panels",

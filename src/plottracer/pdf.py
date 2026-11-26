@@ -166,7 +166,7 @@ class Drawing:
     corner of the page, as PDF files give them.
 
     Attributes:
-        path: The PDF file.
+        path: The source file.
         page: The number of the page, from 1.
         box: The left, bottom, right and top edges of the part of the page
             read, such as one figure on it.
@@ -182,6 +182,8 @@ class Drawing:
     paths: tuple[_Path, ...] = field(repr=False)
     pictures: tuple[_Picture, ...] = field(repr=False)
     masks: tuple[Box, ...] = ()
+    # Converted PostScript needs its PDF again when a preview is rendered.
+    pdf_bytes: bytes | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -291,9 +293,20 @@ def load_pdf(
         ValueError: If the file cannot be read as a PDF, has no such page, or
             the box lies off the page.
     """
+    return _load_pdf(os.fspath(path), page, box, figure)
+
+
+def _load_pdf(
+    path: str,
+    page: int,
+    box: Box | None,
+    figure: str | None,
+    content: bytes | None = None,
+) -> Drawing:
+    """Read a PDF on disk or the PDF produced by converting the named source."""
     pdfium = _pdfium()
     try:
-        document = pdfium.PdfDocument(os.fspath(path))
+        document = pdfium.PdfDocument(path if content is None else content)
     except pdfium.PdfiumError as error:
         msg = f"cannot read PDF {os.fspath(path)!r}: {error}"
         raise ValueError(msg) from None
@@ -321,7 +334,7 @@ def load_pdf(
         elif drawn.type == pdfium.raw.FPDF_PAGEOBJ_IMAGE:
             pictures += _picture(drawn, matrix, clip)
     return Drawing(
-        os.fspath(path), page, area, tuple(texts), tuple(paths), tuple(pictures)
+        path, page, area, tuple(texts), tuple(paths), tuple(pictures), pdf_bytes=content
     )
 
 
@@ -346,7 +359,8 @@ def render_pdf(drawing: Drawing, scale: float = PREVIEW_SCALE) -> Image:
         A ``(height, width, 3)`` ``uint8`` array of red, green and blue
         levels, whose bottom-left corner is that of the drawing's box.
     """
-    sheet = _pdfium().PdfDocument(drawing.path)[drawing.page - 1]
+    source = drawing.path if drawing.pdf_bytes is None else drawing.pdf_bytes
+    sheet = _pdfium().PdfDocument(source)[drawing.page - 1]
     left, bottom, right, top = _edges(sheet.get_bbox())
     edges = drawing.box
     crop = (edges[0] - left, edges[1] - bottom, right - edges[2], top - edges[3])
