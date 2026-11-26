@@ -5,7 +5,7 @@
 """Draw the example plots, whose curves the tests know exactly.
 
 Run from the repository root with ``uv run examples/make_examples.py``. It
-prints the pixel position of each reference point, for figrecover's -l option,
+prints the pixel position of each reference point, for plottracer's -l option,
 or in a PDF its position in points, which is its position in the SVG files too.
 """
 
@@ -29,7 +29,7 @@ ALSO_PDF = {"errorbars", "labelled", "logarithmic", "markers", "series", "styles
 # Also saved as SVG files: name.svg with text drawn as glyph outlines, as
 # matplotlib draws it by default, and name-text.svg with text as text.
 ALSO_SVG = {"labelled", "logarithmic", "markers", "series", "rasterised"}
-plt.rcParams["svg.hashsalt"] = "figrecover"  # the same ids in SVG files each time
+plt.rcParams["svg.hashsalt"] = "plottracer"  # the same ids in SVG files each time
 
 
 def spectrum(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
@@ -310,7 +310,7 @@ def draw_markers(name: str, curves: dict[str, Curve]) -> None:
 
     The markers lie every half unit of x from 0.5 to 9.5, and the legend lies
     below the axes, as spreadsheets draw it. The pixel positions of the
-    legend's markers are printed too, for figrecover's -m option.
+    legend's markers are printed too, for plottracer's -m option.
     """
     figure, axes = plt.subplots(figsize=(6.4, 4), dpi=100, layout="constrained")
     x = np.arange(0.5, 10, 0.5)
@@ -335,7 +335,7 @@ def draw_keyed(name: str, series: list[tuple[str, str, Curve]]) -> None:
     points across and lie every half unit of x from 0.5 to 9.5, and the
     legend lies in the top-left corner of the axes, in 7 point type. The
     pixel positions of the legend's markers are printed too, for
-    figrecover's -m option.
+    plottracer's -m option.
     """
     figure, axes = plt.subplots(figsize=(6.4, 4), dpi=100)
     x = np.arange(0.5, 10, 0.5)

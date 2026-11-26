@@ -3,7 +3,7 @@ requires = ["uv_build>=0.13.5,<0.14"]
 build-backend = "uv_build"
 
 [project]
-name = "figrecover"
+name = "plottracer"
 version = "0.1.0"
 description = "Recover data from images of plots."
 readme = "README.md"
@@ -41,15 +41,15 @@ pdf = [
 ]
 
 [project.scripts]
-figrecover = "figrecover.cli:main"
+plottracer = "plottracer.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/SMTG-Bham/figrecover"
-Issues = "https://github.com/SMTG-Bham/figrecover/issues"
-Repository = "https://github.com/SMTG-Bham/figrecover"
+Homepage = "https://github.com/SMTG-Bham/plottracer"
+Issues = "https://github.com/SMTG-Bham/plottracer/issues"
+Repository = "https://github.com/SMTG-Bham/plottracer"
 
 [tool.uv]
-# figrecover supports Linux only, so lock dependencies for Linux alone. The
+# plottracer supports Linux only, so lock dependencies for Linux alone. The
 # lock also stops before Python 3.15, for which onnxruntime (needed by the ocr
 # extra) has no wheels yet.
 environments = ["sys_platform == 'linux' and python_full_version < '3.15'"]
@@ -62,7 +62,7 @@ dev = [
   "ruff>=0.16.10",
 ]
 test = [
-  "figrecover[ocr,pdf]",
+  "plottracer[ocr,pdf]",
   "matplotlib>=3.10.7",
   "pytest>=9.1.1",
   "pytest-cov>=7.1.0",
@@ -76,7 +76,7 @@ filterwarnings = ["error"]
 
 [tool.coverage.run]
 branch = true
-source_pkgs = ["figrecover"]
+source_pkgs = ["plottracer"]
 
 [tool.coverage.report]
 fail_under = 100

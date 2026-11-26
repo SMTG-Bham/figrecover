@@ -10,7 +10,7 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 
-from figrecover import (
+from plottracer import (
     Image,
     Levelling,
     Point,
@@ -19,8 +19,8 @@ from figrecover import (
     level_image,
     load_image,
 )
-from figrecover.cli import main
-from figrecover.level import LEVEL_THRESHOLD, _tilt
+from plottracer.cli import main
+from plottracer.level import LEVEL_THRESHOLD, _tilt
 
 type Curve = Callable[[npt.NDArray[np.float64]], npt.NDArray[np.float64]]
 
@@ -102,9 +102,9 @@ def read_csv(text: str, header: str = "x,y") -> npt.NDArray[np.float64]:
 
 
 def levelled_message(angle: float) -> str:
-    """Return the message that figrecover prints when it levels an image."""
+    """Return the message that plottracer prints when it levels an image."""
     turn = "clockwise" if angle > 0 else "anticlockwise"
-    return f"figrecover: turned the image {abs(angle):.2f}° {turn} to level its axes"
+    return f"plottracer: turned the image {abs(angle):.2f}° {turn} to level its axes"
 
 
 def assert_close(
@@ -176,8 +176,8 @@ def test_reads_the_axes_of_turned_plots(
     captured = capsys.readouterr()
     assert captured.err == (
         f"{levelled_message(angle)}\n"
-        'figrecover: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10\n'
-        f'figrecover: y-axis "Voltage (mV)" with ticks at {y_axis}\n'
+        'plottracer: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10\n'
+        f'plottracer: y-axis "Voltage (mV)" with ticks at {y_axis}\n'
     )
     header = "Time (s),Voltage (mV)"
     assert_close(read_csv(captured.out, header), curve, span, count)
@@ -350,7 +350,7 @@ def test_asks_for_locations_on_the_image_as_given(
     captured = capsys.readouterr()
     clicked = " ".join(f"-l {x:g},{y:g}" for x, y in locations)
     assert captured.err == (
-        f"figrecover: locations: {clicked}\n{levelled_message(1)}\n"
+        f"plottracer: locations: {clicked}\n{levelled_message(1)}\n"
     )
     assert_close(read_csv(captured.out), curve, 3, 490)
 

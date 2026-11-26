@@ -7,8 +7,8 @@ import numpy as np
 import pytest
 from matplotlib.figure import Figure
 
-from figrecover import Image, find_series
-from figrecover.halftone import recover_greys
+from plottracer import Image, find_series
+from plottracer.halftone import recover_greys
 
 
 def render(fig: Figure) -> Image:

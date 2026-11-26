@@ -379,7 +379,7 @@ def _engine() -> Any:
         # Imported here, as it is an optional dependency.
         from rapidocr import RapidOCR  # noqa: PLC0415
     except ModuleNotFoundError as error:
-        msg = "reading the axes needs the ocr extra: pip install 'figrecover[ocr]'"
+        msg = "reading the axes needs the ocr extra: pip install 'plottracer[ocr]'"
         raise ModuleNotFoundError(msg) from error
     return RapidOCR(
         params={

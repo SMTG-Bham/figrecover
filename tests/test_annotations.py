@@ -11,8 +11,8 @@ import pytest
 from matplotlib.figure import Figure
 from matplotlib.patches import FancyArrowPatch
 
-from figrecover import annotations
-from figrecover.cli import main
+from plottracer import annotations
+from plottracer.cli import main
 
 EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
 

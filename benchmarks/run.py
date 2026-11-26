@@ -8,7 +8,10 @@ from pathlib import Path
 
 from datasets import cases
 
-from figrecover.cli import main as figrecover
+try:
+    from plottracer.cli import main as plottracer
+except ModuleNotFoundError:  # extractors from before the rename, such as 45db93d
+    from figrecover.cli import main as plottracer
 
 
 def extract(cache, results, case, mode):
@@ -25,7 +28,7 @@ def extract(cache, results, case, mode):
     stdout, stderr = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
         try:
-            status = figrecover(args)
+            status = plottracer(args)
         except SystemExit as exc:
             status = exc.code
     path.with_suffix(".csv").write_text(stdout.getvalue())

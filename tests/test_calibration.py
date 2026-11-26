@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from figrecover import Calibration, Point, Tick
+from plottracer import Calibration, Point, Tick
 
 
 def test_calibration_maps_reference_points_exactly() -> None:

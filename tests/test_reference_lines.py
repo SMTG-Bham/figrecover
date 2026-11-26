@@ -8,9 +8,9 @@ import numpy as np
 import pytest
 from matplotlib.figure import Figure
 
-from figrecover import Calibration, PlotObject, classify, find_series, trace_curves
-from figrecover.cli import main
-from figrecover.plot_objects import without_objects
+from plottracer import Calibration, PlotObject, classify, find_series, trace_curves
+from plottracer.cli import main
+from plottracer.plot_objects import without_objects
 
 
 @pytest.mark.parametrize("colour", ["black", "tab:red"])

@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from figrecover.errorbars import _capped, _filled_markers, _line_depth, _run
+from plottracer.errorbars import _capped, _filled_markers, _line_depth, _run
 
 
 def test_a_colour_without_pixels_has_lines_of_no_depth() -> None:

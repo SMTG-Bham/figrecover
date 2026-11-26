@@ -9,9 +9,9 @@ import numpy as np
 import pytest
 from matplotlib.figure import Figure
 
-from figrecover.axes import _Text
-from figrecover.cli import main
-from figrecover.legends import Entry, _joined_sample, raster_entries
+from plottracer.axes import _Text
+from plottracer.cli import main
+from plottracer.legends import Entry, _joined_sample, raster_entries
 
 
 def draw(path: Path, location: str) -> None:

@@ -9,7 +9,7 @@ import numpy as np
 from .calibration import Point
 from .digitize import Image
 
-WINDOW = "figrecover"
+WINDOW = "plottracer"
 _QUIT_KEYS = {ord("q"), 27}  # q and Escape
 
 

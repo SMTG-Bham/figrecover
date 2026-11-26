@@ -2,11 +2,9 @@ name: Release
 
 # Publishes to PyPI with trusted publishing when a GitHub release is published.
 #
-# Disabled in the repository settings: the name figrecover on PyPI belongs to
-# an unrelated project, so figrecover is released on GitHub only. Before
-# enabling it, change the distribution name in pyproject.toml and the
-# environment URL below, add this repository as a trusted publisher on PyPI
-# and create a "pypi" environment in the repository settings.
+# Disabled in the repository settings: plottracer is released on GitHub only.
+# Before enabling it, add this repository as a trusted publisher on PyPI and
+# create a "pypi" environment in the repository settings.
 
 on:
   release:
@@ -62,7 +60,7 @@ jobs:
     timeout-minutes: 10
     environment:
       name: pypi
-      url: https://pypi.org/project/figrecover/
+      url: https://pypi.org/project/plottracer/
     permissions:
       id-token: write # trusted publishing and PEP 740 attestations
 

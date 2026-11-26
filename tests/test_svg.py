@@ -11,7 +11,7 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 
-from figrecover import (
+from plottracer import (
     Drawing,
     find_pdf_colours,
     find_pdf_markers,
@@ -21,8 +21,8 @@ from figrecover import (
     render_svg,
     trace_pdf_curves,
 )
-from figrecover import svg as svg_module
-from figrecover.svg import _plain
+from plottracer import svg as svg_module
+from plottracer.svg import _plain
 
 type Curve = Callable[[npt.NDArray[np.float64]], npt.NDArray[np.float64]]
 

@@ -9,7 +9,7 @@ import pytest
 from matplotlib.figure import Figure
 from matplotlib.patches import FancyArrowPatch
 
-from figrecover import (
+from plottracer import (
     Calibration,
     Image,
     PlotObject,
@@ -18,10 +18,10 @@ from figrecover import (
     find_series,
     load_image,
 )
-from figrecover.cli import main
-from figrecover.digitize import _band_edges
-from figrecover.legends import Entry, line_patterns
-from figrecover.plot_objects import without_objects
+from plottracer.cli import main
+from plottracer.digitize import _band_edges
+from plottracer.legends import Entry, line_patterns
+from plottracer.plot_objects import without_objects
 
 EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
 FIT = Calibration.from_points(

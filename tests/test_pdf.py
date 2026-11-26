@@ -9,7 +9,7 @@ import numpy.typing as npt
 import pypdfium2
 import pytest
 
-from figrecover import (
+from plottracer import (
     Drawing,
     find_pdf_colours,
     find_pdf_error_bars,
@@ -22,8 +22,8 @@ from figrecover import (
     trace_pdf_curves,
     trace_pdf_series,
 )
-from figrecover.cli import main
-from figrecover.pdf_figures import _label
+from plottracer.cli import main
+from plottracer.pdf_figures import _label
 
 type Curve = Callable[[npt.NDArray[np.float64]], npt.NDArray[np.float64]]
 

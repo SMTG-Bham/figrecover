@@ -58,7 +58,7 @@ def fetch(cache):
 
 
 def reference(cache, dataset):
-    """Read all paired results on chart types supported by figrecover."""
+    """Read all paired results on chart types supported by plottracer."""
     with (cache / f"{dataset}-results.jsonl").open() as stream:
         rows = map(json.loads, stream)
         if dataset == "chartx":

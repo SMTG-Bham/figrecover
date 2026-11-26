@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 import pytest
 
-from figrecover import Image, interactive
+from plottracer import Image, interactive
 
 type MouseCallback = Callable[[int, int, int, int, object], None]
 

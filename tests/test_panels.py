@@ -9,10 +9,10 @@ import cv2
 import numpy as np
 import pytest
 
-from figrecover import Axes, Calibration, Image, Panel, load_image, panels, read_panels
-from figrecover.axes import _Text
-from figrecover.digitize import _Box
-from figrecover.panels import (
+from plottracer import Axes, Calibration, Image, Panel, load_image, panels, read_panels
+from plottracer.axes import _Text
+from plottracer.digitize import _Box
+from plottracer.panels import (
     _beside,
     _boxes,
     _in_order,

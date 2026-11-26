@@ -1,16 +1,16 @@
 cff-version: 1.2.0
-message: "Please cite figrecover when publishing data recovered with this software."
+message: "Please cite plottracer when publishing data recovered with this software."
 type: software
-title: figrecover
+title: plottracer
 authors:
   - given-names: Louie
     family-names: Slocombe
 version: "0.1.0"
 date-released: "2026-11-24"
 license: LGPL-3.0-or-later
-repository-code: "https://github.com/SMTG-Bham/figrecover"
+repository-code: "https://github.com/SMTG-Bham/plottracer"
 abstract: >-
-  figrecover recovers the points of curves from plot images, including scanned
+  plottracer recovers the points of curves from plot images, including scanned
   figures and screenshots, and writes CSV in the plot's units. It also reads
   the drawing objects in PDF and SVG figures.
 keywords:

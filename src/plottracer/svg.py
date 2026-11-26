@@ -815,7 +815,7 @@ def _parsed(data: bytes, name: str) -> ET.Element:
             builder.end(_COMMENT)
 
     def refuse(*_: object) -> None:
-        msg = f"SVG {name!r} declares XML entities, which figrecover does not read"
+        msg = f"SVG {name!r} declares XML entities, which plottracer does not read"
         raise ValueError(msg)
 
     parser.StartElementHandler = start

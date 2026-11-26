@@ -1,4 +1,4 @@
-"""Run the command-line interface with ``python -m figrecover``."""
+"""Run the command-line interface with ``python -m plottracer``."""
 
 from .cli import main
 

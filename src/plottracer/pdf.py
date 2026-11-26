@@ -170,9 +170,9 @@ class Drawing:
         page: The number of the page, from 1.
         box: The left, bottom, right and top edges of the part of the page
             read, such as one figure on it.
-        texts: The lines of text on the page, for figrecover's own use.
-        paths: The paths drawn on the page, for figrecover's own use.
-        pictures: The images drawn on the page, for figrecover's own use.
+        texts: The lines of text on the page, for plottracer's own use.
+        paths: The paths drawn on the page, for plottracer's own use.
+        pictures: The images drawn on the page, for plottracer's own use.
     """
 
     path: str
@@ -245,7 +245,7 @@ def _pdfium() -> Any:
         import pypdfium2  # noqa: PLC0415
         import pypdfium2.raw  # noqa: PLC0415
     except ModuleNotFoundError as error:
-        msg = "reading PDF files needs the pdf extra: pip install 'figrecover[pdf]'"
+        msg = "reading PDF files needs the pdf extra: pip install 'plottracer[pdf]'"
         raise ModuleNotFoundError(msg) from error
     return pypdfium2
 

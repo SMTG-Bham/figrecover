@@ -1,4 +1,4 @@
-"""Measure how well figrecover finds and traces several series by colour.
+"""Measure how well plottracer finds and traces several series by colour.
 
 Run from the repository root with ``uv run --with matplotlib
 examples/benchmark_colours.py``, which uses the project's environment and
@@ -21,7 +21,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import numpy.typing as npt
 
-from figrecover import Calibration, Image, find_series
+from plottracer import Calibration, Image, find_series
 
 mpl.use("Agg")
 

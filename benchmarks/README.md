@@ -50,7 +50,7 @@ Numeric F1 is the mean of per-chart scores. Failed runs and unaddressable catego
 
 The scorer averages y values at duplicate output x coordinates and linearly interpolates at the table's x positions, strictly within the observed trace. For PlotQA, automatic extraction is queried at the printed numeric labels, while manual calibration uses annotated category ordinals. This matters for charts with equally spaced but nonconsecutive years. The scorer assigns series one-to-one to minimise absolute error, charging one range for a missing position during assignment. It reports y errors only for available positions on outputs with the expected series count. For PlotQA the denominator is the span of the labelled y ticks. For ChartX it is the span of the ground-truth y data, since tick geometry is unavailable. The median and p95 pool individual positions. Failures and missing positions reduce coverage, so compare the counts as well as the percentiles.
 
-Each run has one observable outcome. Categorical labels take precedence over an axis-reading failure. After extraction, the bins distinguish selecting markers and a line in the same ink, a colour over 60 RGB levels in Euclidean distance from all annotated PlotQA inks, missing x coverage, and residual numeric disagreement. The category describes a symptom and can coexist with other errors. Individual item IDs, scores, outcomes and counts are in [items.csv](items.csv). The largest gaps have dedicated issues for [axis reading](https://github.com/SMTG-Bham/figrecover/issues/52), [marker keys](https://github.com/SMTG-Bham/figrecover/issues/53), [category labels](https://github.com/SMTG-Bham/figrecover/issues/54), and [series detection and coverage](https://github.com/SMTG-Bham/figrecover/issues/55).
+Each run has one observable outcome. Categorical labels take precedence over an axis-reading failure. After extraction, the bins distinguish selecting markers and a line in the same ink, a colour over 60 RGB levels in Euclidean distance from all annotated PlotQA inks, missing x coverage, and residual numeric disagreement. The category describes a symptom and can coexist with other errors. Individual item IDs, scores, outcomes and counts are in [items.csv](items.csv). The largest gaps have dedicated issues for [axis reading](https://github.com/SMTG-Bham/plottracer/issues/52), [marker keys](https://github.com/SMTG-Bham/plottracer/issues/53), [category labels](https://github.com/SMTG-Bham/plottracer/issues/54), and [series detection and coverage](https://github.com/SMTG-Bham/plottracer/issues/55).
 
 ## Reproduce
 
@@ -59,11 +59,11 @@ The measured extractor is commit `45db93d`, using the project's locked test depe
 To reproduce the published result from the repository root, keep the benchmark scripts from this checkout and run them with the measured extractor in a separate worktree.
 
 ```sh
-git worktree add --detach /tmp/figrecover-measured 45db93d
-uv sync --project /tmp/figrecover-measured --locked --group test
+git worktree add --detach /tmp/plottracer-measured 45db93d
+uv sync --project /tmp/plottracer-measured --locked --group test
 scripts="$(pwd)/benchmarks"
-uv run --project /tmp/figrecover-measured --locked --with pyarrow==26.0.1 python "$scripts/run.py" /tmp/figrecover-data /tmp/figrecover-results
-uv run --project /tmp/figrecover-measured --locked --with pyarrow==26.0.1 python "$scripts/score.py" /tmp/figrecover-data /tmp/figrecover-results
+uv run --project /tmp/plottracer-measured --locked --with pyarrow==26.0.1 python "$scripts/run.py" /tmp/plottracer-data /tmp/plottracer-results
+uv run --project /tmp/plottracer-measured --locked --with pyarrow==26.0.1 python "$scripts/score.py" /tmp/plottracer-data /tmp/plottracer-results
 ```
 
 The results directory retains each CLI invocation's CSV, diagnostics, metadata and exit status. The score command also creates `items.csv`. Reuse the data directory for other extractor versions and choose a fresh results directory for each version.

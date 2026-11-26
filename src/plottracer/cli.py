@@ -182,7 +182,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error(f"give at least {MIN_POINTS} reference points with -p")
     if arguments.log and not arguments.points:
         parser.error(
-            "--log needs -p; figrecover finds logarithmic axes itself when reading them"
+            "--log needs -p; plottracer finds logarithmic axes itself when reading them"
         )
     sources = arguments.images
     if len(sources) == 1 and (error := _input_error(Path(sources[0]), arguments)):
@@ -190,7 +190,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         return _run(arguments, _protected_paths(arguments, parser))
     except (ImportError, OSError, ValueError, cv2.error) as error:
-        print(f"figrecover: error: {error}", file=sys.stderr)
+        print(f"plottracer: error: {error}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
         return 130
@@ -286,7 +286,7 @@ def _run(options: argparse.Namespace, inputs: set[Path]) -> int:
             if not batch and not options.metadata:
                 raise
             prefix = f"{source}: " if batch else ""
-            print(f"figrecover: {prefix}error: {error}", file=sys.stderr)
+            print(f"plottracer: {prefix}error: {error}", file=sys.stderr)
             status = 1
     if tables:
         _write(options.output, tables, inputs | previews)
@@ -375,7 +375,7 @@ def _preview_path(
 def _build_parser() -> argparse.ArgumentParser:
     """Create the command-line argument parser."""
     parser = argparse.ArgumentParser(
-        prog="figrecover",
+        prog="plottracer",
         description="Recover the curves in an image of a plot, or a PDF or SVG file, "
         "as CSV, with columns for x and y, and a series column if there are several "
         "curves. An image of several plots, such as the panels of a figure, gives "
@@ -793,7 +793,7 @@ def _print_resolution(plot: _Plot) -> None:
         for step, log in ((fit.x_scale, fit.x_log), (fit.y_scale, fit.y_log))
     ]
     print(
-        f"figrecover: {_prefix(plot.name)}one pixel spans {steps[0]} on x "
+        f"plottracer: {_prefix(plot.name)}one pixel spans {steps[0]} on x "
         f"and {steps[1]} on y",
         file=sys.stderr,
     )
@@ -811,7 +811,7 @@ def _level(image: Image, angle: float | None) -> tuple[Image, Levelling]:
         message = (
             f"turned the image {abs(levelling.angle):.2f}° {turn} to level its axes"
         )
-        print(f"figrecover: {message}", file=sys.stderr)
+        print(f"plottracer: {message}", file=sys.stderr)
     return levelled, levelling
 
 
@@ -1043,7 +1043,7 @@ def _bars_by_colour(
 
 def _notice(message: str, record: metadata.InputRecord | None) -> None:
     """Report a diagnostic and retain it when recording the run."""
-    print(f"figrecover: {message}", file=sys.stderr)
+    print(f"plottracer: {message}", file=sys.stderr)
     if record:
         record.warnings.append(message)
 
@@ -1052,7 +1052,7 @@ def _notice(message: str, record: metadata.InputRecord | None) -> None:
 def _warnings_printed(
     prefix: str, record: metadata.InputRecord | None
 ) -> Iterator[None]:
-    """Print the warnings given in the block, as figrecover's messages.
+    """Print the warnings given in the block, as plottracer's messages.
 
     ``prefix`` starts each message, naming the panel.
     """
@@ -1393,7 +1393,7 @@ def _click_positions(drawing: Drawing, points: Sequence[Point]) -> list[Point]:
         (left + x / PREVIEW_SCALE, bottom + y / PREVIEW_SCALE) for x, y in pixels
     ]
     options = " ".join(f"-l {x:g},{y:g}" for x, y in positions)
-    print(f"figrecover: locations: {options}", file=sys.stderr)
+    print(f"plottracer: locations: {options}", file=sys.stderr)
     return positions
 
 
@@ -1410,7 +1410,7 @@ def _click_locations(image: Image, points: Sequence[Point]) -> list[Point]:
     """Ask the user to click on each point, and print the -l options to reuse."""
     pixels = interactive.pick_points(image, [f"{x:g},{y:g}" for x, y in points])
     options = " ".join(f"-l {x:g},{y:g}" for x, y in pixels)
-    print(f"figrecover: locations: {options}", file=sys.stderr)
+    print(f"plottracer: locations: {options}", file=sys.stderr)
     return pixels
 
 
@@ -1487,7 +1487,7 @@ def _read_axes(
         scale = "logarithmic " if log else ""
         titled = f' "{title}"' if title else ""
         message = f"{_prefix(name)}{scale}{axis}-axis{titled} with ticks at {values}"
-        print(f"figrecover: {message}", file=sys.stderr)
+        print(f"plottracer: {message}", file=sys.stderr)
     x_origin, y_origin = axes.calibration.origin
     positions = [(x, y_origin) for x, _ in axes.x_ticks]
     positions += [(x_origin, y) for y, _ in axes.y_ticks]
@@ -1534,7 +1534,7 @@ def _found(
         if count is not None:
             arguments.selections[panel] = selectors
             options = " ".join(f"-c {option}" for option in written)
-            print(f"figrecover: {_prefix(panel)}colours: {options}", file=sys.stderr)
+            print(f"plottracer: {_prefix(panel)}colours: {options}", file=sys.stderr)
     return found
 
 
@@ -1689,7 +1689,7 @@ def _counted(
     as its key or the axes may be wrong.
     """
     counts = ", ".join(str(len(series)) for series in markers)
-    print(f"figrecover: markers found in each series: {counts}", file=sys.stderr)
+    print(f"plottracer: markers found in each series: {counts}", file=sys.stderr)
     for number, (series, (x, y)) in enumerate(zip(markers, keys, strict=True), 1):
         if not len(series):
             message = f"found no markers like the key at {x:g},{y:g}"
@@ -1822,7 +1822,7 @@ def _write(output: Path | None, tables: Sequence[_Table], protected: set[Path]) 
         groups.setdefault(path, []).append(table)
     for path, group in groups.items():
         _write_csv(path, group, panels=False)
-    print(f"figrecover: wrote {', '.join(map(str, groups))}", file=sys.stderr)
+    print(f"plottracer: wrote {', '.join(map(str, groups))}", file=sys.stderr)
 
 
 def _write_csv(file: Path | TextIO, tables: Sequence[_Table], *, panels: bool) -> None:

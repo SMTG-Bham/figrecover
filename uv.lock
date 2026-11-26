@@ -247,68 +247,6 @@ wheels = [
 ]
 
 [[package]]
-name = "figrecover"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "numpy" },
-    { name = "opencv-python" },
-]
-
-[package.optional-dependencies]
-ocr = [
-    { name = "onnxruntime" },
-    { name = "rapidocr" },
-]
-pdf = [
-    { name = "pypdfium2" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "figrecover", extra = ["ocr", "pdf"] },
-    { name = "matplotlib" },
-    { name = "mypy" },
-    { name = "prek" },
-    { name = "pytest" },
-    { name = "pytest-cov" },
-    { name = "ruff" },
-]
-test = [
-    { name = "figrecover", extra = ["ocr", "pdf"] },
-    { name = "matplotlib" },
-    { name = "pytest" },
-    { name = "pytest-cov" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "numpy", specifier = ">=2.3.3" },
-    { name = "onnxruntime", marker = "extra == 'ocr'", specifier = ">=1.24.1" },
-    { name = "opencv-python", specifier = ">=4.10.0.84" },
-    { name = "pypdfium2", marker = "extra == 'pdf'", specifier = ">=5.0.0" },
-    { name = "rapidocr", marker = "extra == 'ocr'", specifier = ">=3.9.0,<3.10" },
-]
-provides-extras = ["ocr", "pdf"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "figrecover", extras = ["ocr", "pdf"] },
-    { name = "matplotlib", specifier = ">=3.10.7" },
-    { name = "mypy", specifier = ">=2.4.0" },
-    { name = "prek", specifier = ">=0.5.5" },
-    { name = "pytest", specifier = ">=9.1.1" },
-    { name = "pytest-cov", specifier = ">=7.1.0" },
-    { name = "ruff", specifier = ">=0.16.10" },
-]
-test = [
-    { name = "figrecover", extras = ["ocr", "pdf"] },
-    { name = "matplotlib", specifier = ">=3.10.7" },
-    { name = "pytest", specifier = ">=9.1.1" },
-    { name = "pytest-cov", specifier = ">=7.1.0" },
-]
-
-[[package]]
 name = "flatbuffers"
 version = "25.12.19"
 source = { registry = "https://pypi.org/simple" }
@@ -647,6 +585,68 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/5c/20/cd1e9b3f60a9f3d5ebe46da36955c26004092a501f7f2c42f9fcc26611bc/pillow-13.0.0-cp315-cp315t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:ffea6b2986a797c84b6d1d27d4f43e0b83c73fc16281a930891cd237cf0d08fe", size = 7230176, upload-time = "2026-10-16T22:17:37.362Z" },
     { url = "https://files.pythonhosted.org/packages/b6/ef/ffb0a2fc85690714fb7ac662956949645d57f15bf4426f520da361e7b6e3/pillow-13.0.0-cp315-cp315t-musllinux_1_2_aarch64.whl", hash = "sha256:05cd2cd39055d0b9650060e4513ef4a9a0aea870083950bd046a0d6490f93a22", size = 6703640, upload-time = "2026-10-16T22:17:39.313Z" },
     { url = "https://files.pythonhosted.org/packages/e0/c2/6402ee3ccb3363aeed8fdb3f9fe56703ac5377a539f0b81b53999d7e121f/pillow-13.0.0-cp315-cp315t-musllinux_1_2_x86_64.whl", hash = "sha256:c6fd031333dedcad7ce3e03d244093f43504f209e86925ebdb2b868fa4037630", size = 7309231, upload-time = "2026-10-16T22:17:41.021Z" },
+]
+
+[[package]]
+name = "plottracer"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "numpy" },
+    { name = "opencv-python" },
+]
+
+[package.optional-dependencies]
+ocr = [
+    { name = "onnxruntime" },
+    { name = "rapidocr" },
+]
+pdf = [
+    { name = "pypdfium2" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "matplotlib" },
+    { name = "mypy" },
+    { name = "plottracer", extra = ["ocr", "pdf"] },
+    { name = "prek" },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "ruff" },
+]
+test = [
+    { name = "matplotlib" },
+    { name = "plottracer", extra = ["ocr", "pdf"] },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "numpy", specifier = ">=2.3.3" },
+    { name = "onnxruntime", marker = "extra == 'ocr'", specifier = ">=1.24.1" },
+    { name = "opencv-python", specifier = ">=4.10.0.84" },
+    { name = "pypdfium2", marker = "extra == 'pdf'", specifier = ">=5.0.0" },
+    { name = "rapidocr", marker = "extra == 'ocr'", specifier = ">=3.9.0,<3.10" },
+]
+provides-extras = ["ocr", "pdf"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "matplotlib", specifier = ">=3.10.7" },
+    { name = "mypy", specifier = ">=2.4.0" },
+    { name = "plottracer", extras = ["ocr", "pdf"] },
+    { name = "prek", specifier = ">=0.5.5" },
+    { name = "pytest", specifier = ">=9.1.1" },
+    { name = "pytest-cov", specifier = ">=7.1.0" },
+    { name = "ruff", specifier = ">=0.16.10" },
+]
+test = [
+    { name = "matplotlib", specifier = ">=3.10.7" },
+    { name = "plottracer", extras = ["ocr", "pdf"] },
+    { name = "pytest", specifier = ">=9.1.1" },
+    { name = "pytest-cov", specifier = ">=7.1.0" },
 ]
 
 [[package]]

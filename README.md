@@ -1,6 +1,6 @@
-# figrecover
+# plottracer
 
-Recover data from images of plots. figrecover finds the curves in a picture of
+Recover data from images of plots. plottracer finds the curves in a picture of
 a plot, such as a scanned figure or a screenshot, and writes their points as
 CSV in the plot's own units. Curves are told apart by colour. It reads plots in
 PDF and SVG files too, exactly, from what they draw rather than from pixels.
@@ -16,49 +16,51 @@ include its Git commit as well. See [CITATION.cff](CITATION.cff).
 
 ## Installation
 
-figrecover runs on Linux only, and needs Python 3.14 (a standard build;
+plottracer runs on Linux only, and needs Python 3.14 (a standard build;
 OpenCV does not support the free-threaded build yet). Install the command
 with [uv](https://docs.astral.sh/uv/):
 
 ```bash
-uv tool install git+https://github.com/SMTG-Bham/figrecover
+uv tool install git+https://github.com/SMTG-Bham/plottracer
 ```
 
 or with pip:
 
 ```bash
-python -m pip install git+https://github.com/SMTG-Bham/figrecover
+python -m pip install git+https://github.com/SMTG-Bham/plottracer
 ```
 
-figrecover is not on PyPI: `pip install figrecover` installs an unrelated
-package of the same name. To install a release rather than the latest commit,
-add its tag, as in `git+https://github.com/SMTG-Bham/figrecover@v0.1.0`.
+plottracer is not on PyPI, so install it from GitHub as above. To install a
+release rather than the latest commit, add its tag, as in
+`git+https://github.com/SMTG-Bham/plottracer@v0.1.0`. Version 0.1.0 was
+released under the old name, figrecover, so it installs the command and the
+Python package as `figrecover`.
 
-To have figrecover read the axes for you (see
+To have plottracer read the axes for you (see
 [Reading the axes](#reading-the-axes)), install the `ocr` extra instead. It
 adds the [RapidOCR](https://github.com/RapidAI/RapidOCR) text reader and its
 models, so it needs no network access when it runs:
 
 ```bash
-uv tool install "figrecover[ocr] @ git+https://github.com/SMTG-Bham/figrecover"
+uv tool install "plottracer[ocr] @ git+https://github.com/SMTG-Bham/plottracer"
 ```
 
 To read plots in PDF files (see [PDF files](#pdf-files)), install the `pdf`
 extra, which adds the [pypdfium2](https://github.com/pypdfium2-team/pypdfium2)
-PDF reader. Extras combine, as in `figrecover[ocr,pdf]`:
+PDF reader. Extras combine, as in `plottracer[ocr,pdf]`:
 
 ```bash
-uv tool install "figrecover[pdf] @ git+https://github.com/SMTG-Bham/figrecover"
+uv tool install "plottracer[pdf] @ git+https://github.com/SMTG-Bham/plottracer"
 ```
 
-SVG files (see [SVG files](#svg-files)) need no extra: figrecover reads them
+SVG files (see [SVG files](#svg-files)) need no extra: plottracer reads them
 with Python's own XML parser.
 
 ## Usage
 
 ### 1. Prepare the image
 
-Keep the axes, tick labels, titles and legend in the image. figrecover traces
+Keep the axes, tick labels, titles and legend in the image. plottracer traces
 the area above the x-axis and to the right of the y-axis. A frame around the
 axes bounds the trace on the other two sides. By default it traces the most
 common curve colour, skipping filled areas and gridlines. It masks framed
@@ -67,10 +69,10 @@ and labels. Keeping the legend also lets you select series by their
 [markers](#markers). Dark backgrounds work as well as light ones.
 
 A scan turned by a few degrees is levelled before tracing. A figure with
-multiple panels or an inset can be read in one piece when figrecover reads
+multiple panels or an inset can be read in one piece when plottracer reads
 the axes. See [Turned images](#turned-images) and [Several panels](#several-panels).
 
-With the OCR extra, figrecover excludes text boxes inside the axes and
+With the OCR extra, plottracer excludes text boxes inside the axes and
 looks beside them for straight shafts with an arrowhead or bracket cap.
 It reports how many it found. A curve crossing an excluded box has a gap.
 Use `--no-annotations` to keep these objects in the raster.
@@ -82,16 +84,16 @@ several regions. Samples inside the rectangles are omitted from the CSV.
 
 ### 2. Choose reference points
 
-figrecover maps pixels to data with at least three reference points: usually
+plottracer maps pixels to data with at least three reference points: usually
 the origin, a labelled tick on the x-axis and one on the y-axis. Give their
 data coordinates with `-p` and their pixel positions with `-l`, in the same
 order. Pixel positions are measured from the bottom-left corner of the image,
 so the centre of the bottom-left pixel is at 0.5,0.5.
-With the `ocr` extra, you can leave out both and let figrecover read the tick
+With the `ocr` extra, you can leave out both and let plottracer read the tick
 labels instead; see [Reading the axes](#reading-the-axes). For logarithmic
 axes, see [Logarithmic axes](#logarithmic-axes).
 
-figrecover traces the part of the image above and right of the lowest and
+plottracer traces the part of the image above and right of the lowest and
 leftmost reference points, so take them on the axis lines. If they lie a
 little below or left of an axis line, up to 12 pixels, the part traced still
 starts just beyond the line, as if they had been taken on it, though the
@@ -100,18 +102,18 @@ whose values fall from left to right or from bottom to top, starts at its
 largest value, so take the corner where the axes cross rather than the
 origin, and ticks on the axis lines.
 
-If you leave out `-l`, figrecover opens the image and asks you to click on each
+If you leave out `-l`, plottracer opens the image and asks you to click on each
 reference point in turn (press q to cancel). It then prints the matching `-l`
 options, ready to reuse for the rest of a batch of similar plots:
 
 ```text
-figrecover: locations: -l 80.5,43.5 -l 576.5,43.5 -l 80.5,147.5
+plottracer: locations: -l 80.5,43.5 -l 576.5,43.5 -l 80.5,147.5
 ```
 
 ### 3. Digitize
 
 ```bash
-figrecover examples/spectrum.png \
+plottracer examples/spectrum.png \
     -p 0,0 -p 10,0 -p 0,1 \
     -l 80,44 -l 576,44 -l 80,147 \
     -o spectrum.csv --preview spectrum.preview.png
@@ -164,14 +166,14 @@ Give several files to write one table with a leading `source` column.
 For example, to recover four curves from each of a set of similar plots:
 
 ```bash
-figrecover plots/*.png -n 4 -o curves.csv --preview previews/
+plottracer plots/*.png -n 4 -o curves.csv --preview previews/
 ```
 
 With `-n`, the first successful input supplies the colours and styles for
 each panel. Later files reuse those selectors so the series numbers stay in
 the same order. Use a separate run for plots with different series.
 With `-p`, click once and use those positions throughout the batch.
-Without `-p`, figrecover reads the axes separately for each input.
+Without `-p`, plottracer reads the axes separately for each input.
 
 Preview files are named `<stem>.preview.png` in the directory you give.
 Repeated stems receive a number, such as `plot.2.preview.png`. With `-o`
@@ -182,7 +184,7 @@ returns status 1 if any failed.
 ### Measuring stroke extent
 
 ```bash
-figrecover examples/labelled.png --trace-range -o voltage.csv
+plottracer examples/labelled.png --trace-range -o voltage.csv
 ```
 
 At each observed curve point, `trace_low` and `trace_high` give the outer
@@ -197,7 +199,7 @@ parts of a curve hidden behind other marks can put the underlying data outside i
 ### Recording a digitization
 
 ```bash
-figrecover examples/labelled.png -o voltage.csv --metadata voltage.json
+plottracer examples/labelled.png -o voltage.csv --metadata voltage.json
 ```
 
 The JSON records the command arguments, UTC time, software versions and the
@@ -225,17 +227,17 @@ OCR, geometric samples can still be masked and the series keep numbers.
 Give the number of curves with `-n`:
 
 ```bash
-figrecover examples/series.png \
+plottracer examples/series.png \
     -p 0,0 -p 10,0 -p 0,1 -l 80,44 -l 576,44 -l 80,147 \
     -n 4 --preview series.preview.png
 ```
 
-figrecover traces the four most common colours that stand out from the
+plottracer traces the four most common colours that stand out from the
 background, the curve with the most pixels first, and prints their colours as
 `-c` options:
 
 ```text
-figrecover: colours: -c 2ca02c -c 1f77b4 -c ff7f0e -c 000000
+plottracer: colours: -c 2ca02c -c 1f77b4 -c ff7f0e -c 000000
 ```
 
 The CSV gains a `series` column that numbers the curves in that order:
@@ -258,7 +260,7 @@ libraries work too, such as `-c 1f77b4` for matplotlib's first colour.
 
 Lines thinner than a pixel never show their full colour, as antialiasing
 blends them with the background, nor do lines drawn translucent: a
-`tab:blue` line at half opacity shows as `#8ebad9`. figrecover finds such
+`tab:blue` line at half opacity shows as `#8ebad9`. plottracer finds such
 lines by the direction of their colour from the background, which their
 blends share, and prints the strongest colour each shows, such as `eda2a3`
 for a `tab:red` line a quarter of a point wide at 100 dots per inch. A `-c`
@@ -266,13 +268,13 @@ colour picks such a line too, as the line shows part of it: `-c d62728` picks
 that line, and `-c 1f77b4` the translucent one.
 
 For a thin line in a JPEG, compression may spread the hue across the stroke's
-edges. When those fringes are widespread, figrecover uses nearby colour and
+edges. When those fringes are widespread, plottracer uses nearby colour and
 the pixel's brightness to distinguish strokes. The printed colour comes
 from the original pixels. A nominal colour can still select the series.
 
 A stroke passing through a shaded band
 can change colour again. When the blended segment touches the exposed
-stroke and its colour fits the two layers, figrecover traces them as one
+stroke and its colour fits the two layers, plottracer traces them as one
 curve. The band itself is excluded from the CSV.
 
 `-n` skips colours that fill areas, those drawn mostly as straight lines
@@ -286,12 +288,12 @@ for those it found and explains which colours it left out. For example,
 asking for three curves in [the grid example](#grids) gives this error.
 
 ```text
-figrecover: error: found only 1 of 3 curves, -c 000000; left out #404040 (3078 pixels), as it is drawn in lines across the plot, as grid lines are
+plottracer: error: found only 1 of 3 curves, -c 000000; left out #404040 (3078 pixels), as it is drawn in lines across the plot, as grid lines are
 ```
 
 In a greyscale image, such as a photocopy, colours that differed may have
 become one grey, and the edges of a dark curve, blended with the background,
-show the lighter greys of other curves. figrecover leaves those edges out of
+show the lighter greys of other curves. plottracer leaves those edges out of
 the lighter curves, and with several curves asked for, says that the image
 is greyscale, as curves of different colours may then share a grey. Such
 curves are told apart as other curves of one colour are, below: in a
@@ -299,26 +301,26 @@ greyscale copy of `examples/series.png`, the blue and green curves both
 become `#5c5c5c`, and `-n 4` gives them as `-c 5c5c5c:solid` and
 `-c 5c5c5c:solid2`. Series can be found by their [markers](#markers) too.
 
-For a greyscale scan with a regular dot screen, figrecover measures the
+For a greyscale scan with a regular dot screen, plottracer measures the
 screen's spacing and angle and averages over one repeating cell before
 finding the curves. The axes are read from the original scan.
 
 Curves that share a colour are told apart by how they are drawn and where
-they run. figrecover follows each curve of a colour across the image,
+they run. plottracer follows each curve of a colour across the image,
 through the places where it crosses or touches another, and across the gaps
 between its dashes, and names its style from its dashes: `solid`, `dashed`,
 `dotted` or `dashdot`. `-n` lists each as a curve of its own, and prints the
 `-c` option that picks it, the colour followed by the style:
 
 ```bash
-figrecover examples/styles.png \
+plottracer examples/styles.png \
     -p 0,0 -p 10,0 -p 0,1 -l 80,44 -l 576,44 -l 80,147 \
     -n 3 --preview styles.preview.png
 ```
 
 ```text
-figrecover: the image is greyscale, so curves of different colours may share a grey
-figrecover: colours: -c 000000:solid -c 000000:dashed -c 000000:dotted
+plottracer: the image is greyscale, so curves of different colours may share a grey
+plottracer: colours: -c 000000:solid -c 000000:dashed -c 000000:dotted
 ```
 
 ![Three crossing black curves, solid, dashed and dotted, each recovered in a colour of its own](examples/styles.preview.png)
@@ -339,11 +341,11 @@ drawn with, a dash at most two line widths long being a dot, and lines of
 other widths, or drawn apart, are curves of their own:
 
 ```bash
-figrecover examples/styles.pdf -n 3
+plottracer examples/styles.pdf -n 3
 ```
 
 ```text
-figrecover: colours: -c 000000:dotted -c 000000:dashed -c 000000:solid
+plottracer: colours: -c 000000:dotted -c 000000:dashed -c 000000:solid
 ```
 
 A second curve of the same colour and style is numbered, such as
@@ -371,19 +373,19 @@ charts, give the pixel position of the marker in each series' legend key with
 `-m`, measured from the bottom-left corner like `-l`:
 
 ```bash
-figrecover examples/markers.png \
+plottracer examples/markers.png \
     -p 0,0 -p 10,0 -p 0,1 -l 55,83 -l 627,83 -l 55,185 \
     -m 148,18 -m 260,18 -m 377,18 -m 483,18 --preview markers.preview.png
 ```
 
-figrecover cuts each key's marker out of the legend, in its colour, leaving
+plottracer cuts each key's marker out of the legend, in its colour, leaving
 out the line through it, and finds the markers of that shape and colour in
 the plot. The CSV has a point at the middle of each marker, numbered by series
-in the order of the `-m` options, and figrecover prints how many markers each
+in the order of the `-m` options, and plottracer prints how many markers each
 series has:
 
 ```text
-figrecover: markers found in each series: 19, 19, 19, 19
+plottracer: markers found in each series: 19, 19, 19, 19
 ```
 
 The preview rings each marker, and each key, in a colour for its series:
@@ -397,34 +399,34 @@ The preview rings each marker, and each key, in a colour for its series:
 - Shapes that look alike at the image's size are told apart by fitting
   each to the marker to a fraction of a pixel. In `examples/similar.png`,
   whose circles, pentagons, hexagons and octagons are 6 points, or 8
-  pixels, across, every marker is found in its series, and figrecover warns
+  pixels, across, every marker is found in its series, and plottracer warns
   of the circles' keys, alike with the hexagons' and the octagons':
 
   ```text
-  figrecover: the markers of the keys at 98,339 and 270,339 look alike at this size, so some may be taken for each other
-  figrecover: the markers of the keys at 98,339 and 355,339 look alike at this size, so some may be taken for each other
+  plottracer: the markers of the keys at 98,339 and 270,339 look alike at this size, so some may be taken for each other
+  plottracer: the markers of the keys at 98,339 and 355,339 look alike at this size, so some may be taken for each other
   ```
 
   A marker that another key's marker fits almost as well is ambiguous, and
-  figrecover prints how many each series has, and where, in the plot's x
+  plottracer prints how many each series has, and where, in the plot's x
   units, such as `series 1: 19 found, 2 of them ambiguous near x = 3.5, 7`.
 - Lines and error bars that cross a marker are allowed for. A marker partly
   covered by another, as where series cross or crowd together, is found by
   what shows of it. Where the other series have markers at an x and a
   series has none, under another's marker, its marker is probably hidden
-  there, and figrecover says so. In `examples/overlapping.png`, diamonds
+  there, and plottracer says so. In `examples/overlapping.png`, diamonds
   cover the tops of the circles below them, and the four series cross at
   x = 5:
 
   ```bash
-  figrecover examples/overlapping.png -p 0,0 -p 10,0 -p 0,1 \
+  plottracer examples/overlapping.png -p 0,0 -p 10,0 -p 0,1 \
       -l 80,44 -l 576,44 -l 80,147 -m 98,339 -m 184,339 -m 270,339 -m 355,339
   ```
 
   ```text
-  figrecover: markers found in each series: 17, 20, 19, 18
-  figrecover: series 1: 17 found, 2 probably hidden near x = 4, 5
-  figrecover: series 4: 18 found, 1 probably hidden near x = 5
+  plottracer: markers found in each series: 17, 20, 19, 18
+  plottracer: series 1: 17 found, 2 probably hidden near x = 4, 5
+  plottracer: series 4: 18 found, 1 probably hidden near x = 5
   ```
 
   The circle at x = 5 lies wholly under a square. At x = 5.5, the
@@ -442,11 +444,11 @@ The preview rings each marker, and each key, in a colour for its series:
 
 ### Error bars
 
-With `--error-bars`, figrecover also reads the error bars drawn through
+With `--error-bars`, plottracer also reads the error bars drawn through
 each marker, and writes their ends in the plot's units:
 
 ```bash
-figrecover examples/errorbars.png -n 4 --error-bars \
+plottracer examples/errorbars.png -n 4 --error-bars \
     -o errorbars.csv --preview errorbars.preview.png
 ```
 
@@ -455,7 +457,7 @@ series of their own (see [Several curves](#several-curves)), so `-n 4`
 gives the four series of markers, and `-n 7` adds the three lines:
 
 ```text
-figrecover: colours: -c 2ca02c -c ff7f0e:markers -c 1f77b4:markers -c d62728:markers
+plottracer: colours: -c 2ca02c -c ff7f0e:markers -c 1f77b4:markers -c d62728:markers
 ```
 
 The CSV gains `y_low` and `y_high` columns, the lower and upper ends of
@@ -510,7 +512,7 @@ Grids need no special handling, light or dark, because grid lines run
 straight across the plot and curves do not:
 
 ```bash
-figrecover examples/grid.png \
+plottracer examples/grid.png \
     -p 0,0 -p 10,0 -p 0,1 -l 80,44 -l 576,44 -l 80,167 \
     --preview grid.preview.png
 ```
@@ -522,18 +524,18 @@ A grid drawn in the same colour as a curve has to be removed first, with
 
 ### Reading the axes
 
-With the `ocr` extra installed, leave out `-p` and `-l`, and figrecover reads
+With the `ocr` extra installed, leave out `-p` and `-l`, and plottracer reads
 the tick labels and axis titles itself:
 
 ```bash
-figrecover examples/labelled.png --preview labelled.preview.png
+plottracer examples/labelled.png --preview labelled.preview.png
 ```
 
 It prints what it read, so you can check it:
 
 ```text
-figrecover: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10
-figrecover: y-axis "Voltage (mV)" with ticks at -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1
+plottracer: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10
+plottracer: y-axis "Voltage (mV)" with ticks at -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1
 ```
 
 and names the CSV columns after the axis titles:
@@ -572,7 +574,7 @@ work as before.
 - Decimal commas work too, with points or spaces as thousands separators
   (`0,5` and `2.000`), as many European plots write them. A plot's labels
   decide: a label such as `0,5` reads as a number only with decimal commas,
-  `0.5` only with decimal points, and `2.000` either way, so figrecover takes
+  `0.5` only with decimal points, and `2.000` either way, so plottracer takes
   the way more labels read only one way, decimal points if neither wins. A
   single label misread with a comma does not outvote the rest.
 - OCR can mistake letters for digits, and dashes for minus signs. In a label
@@ -601,7 +603,7 @@ work as before.
   Labels written across stay at their middles, which OCR finds to about a
   pixel: matplotlib draws its marks on whole pixels, on average half a pixel
   from where it draws the curves, so they are no surer.
-- Tick labels can be rotated to any angle, on either axis. figrecover finds
+- Tick labels can be rotated to any angle, on either axis. plottracer finds
   how far the labels slant from their ink, from the long axis of each
   character, and if OCR misread a slanted label, missed one, or lost
   characters of one, it reads the labels again with the image turned to lay
@@ -621,9 +623,9 @@ work as before.
   0.5, 1.0 and 1.5 as `5`, `10` and `15`: values in line, but ten times too
   large. So a label read as fewer characters than there are pieces of ink
   wholly inside its box is dropped, and an axis left with fewer than three
-  labels is not read: figrecover stops with `OCR lost characters, such as
+  labels is not read: plottracer stops with `OCR lost characters, such as
   decimal points, of 3 of the 5 y-axis tick labels`.
-- figrecover traces the curves from the axis lines, not from the first ticks,
+- plottracer traces the curves from the axis lines, not from the first ticks,
   so the margins that plotting libraries leave inside the axes are kept. If
   there are no axis lines, it starts just beyond the tick labels and their
   tick marks.
@@ -657,18 +659,18 @@ work as before.
   and tick labels alike. OCR reads symbols less surely than letters, so
   check the printed titles. Turned upright, it has read `ΔE` as `ΔΔE`, so if
   a title reads upright as it first did but with a character twice,
-  figrecover takes whichever reading OCR is surer of; `ΔΔG`, read alike both
+  plottracer takes whichever reading OCR is surer of; `ΔΔG`, read alike both
   ways, is kept.
 
 The titles of `examples/titled.png` run over two lines:
 
 ```bash
-figrecover examples/titled.png
+plottracer examples/titled.png
 ```
 
 ```text
-figrecover: x-axis "Photon energy (eV)" with ticks at 0, 2, 4, 6, 8, 10
-figrecover: y-axis "Absorbance (arb. units)" with ticks at 0, 0.5, 1, 1.5, 2, 2.5, 3
+plottracer: x-axis "Photon energy (eV)" with ticks at 0, 2, 4, 6, 8, 10
+plottracer: y-axis "Absorbance (arb. units)" with ticks at 0, 0.5, 1, 1.5, 2, 2.5, 3
 ```
 
 The x-axis tick labels of `examples/slanted.png` are written at 45°, which
@@ -676,12 +678,12 @@ OCR misreads as drawn, reading 2 as a Chinese character and 6 as 9, but reads
 turned level:
 
 ```bash
-figrecover examples/slanted.png
+plottracer examples/slanted.png
 ```
 
 ```text
-figrecover: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10
-figrecover: y-axis "Voltage (mV)" with ticks at 0, 0.5, 1, 1.5, 2, 2.5
+plottracer: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10
+plottracer: y-axis "Voltage (mV)" with ticks at 0, 0.5, 1, 1.5, 2, 2.5
 ```
 
 So are those of `examples/tilted.png`, at 30° on the x-axis and 45° on the
@@ -690,29 +692,29 @@ y-axis. Those of `examples/downwards.png` are written downwards on both
 axes, as is its y-axis title:
 
 ```bash
-figrecover examples/downwards.png
+plottracer examples/downwards.png
 ```
 
 ```text
-figrecover: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10
-figrecover: y-axis "Voltage (mV)" with ticks at 0, 0.5, 1, 1.5, 2, 2.5
+plottracer: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10
+plottracer: y-axis "Voltage (mV)" with ticks at 0, 0.5, 1, 1.5, 2, 2.5
 ```
 
 When a plot's labels cannot be read, give `-p` as before.
 
 ### Logarithmic axes
 
-When figrecover reads the axes, it finds logarithmic ones itself: an axis is
+When plottracer reads the axes, it finds logarithmic ones itself: an axis is
 logarithmic if more of its tick labels fall in line on a logarithmic scale
 than on a linear one. It says so as it prints the ticks:
 
 ```bash
-figrecover examples/logarithmic.png --preview logarithmic.preview.png
+plottracer examples/logarithmic.png --preview logarithmic.preview.png
 ```
 
 ```text
-figrecover: logarithmic x-axis "Frequency (Hz)" with ticks at 1, 10, 100, 1000, 10000
-figrecover: logarithmic y-axis "Power (mW)" with ticks at 0.1, 1, 10, 100, 1000
+plottracer: logarithmic x-axis "Frequency (Hz)" with ticks at 1, 10, 100, 1000, 10000
+plottracer: logarithmic y-axis "Power (mW)" with ticks at 0.1, 1, 10, 100, 1000
 ```
 
 ![A low-pass filter's response recovered from a plot with logarithmic axes](examples/logarithmic.preview.png)
@@ -720,7 +722,7 @@ figrecover: logarithmic y-axis "Power (mW)" with ticks at 0.1, 1, 10, 100, 1000
 The tick labels can be decimals, such as `0.01` and `1000`, or powers with
 superscript exponents, such as 10⁻², 2×10³ and 2⁵, as matplotlib draws them.
 OCR often misses a superscript, reading 10² as `102` and 2⁵ as `25`, so
-figrecover checks how a label of digits is drawn: if its last digit sits
+plottracer checks how a label of digits is drawn: if its last digit sits
 raised above the others, the raised digits are an exponent and the full-size
 ones its base, and a raised minus sign before the exponent makes it negative.
 Each axis takes the base that most of its powers have. A label that reads as
@@ -735,12 +737,12 @@ The plot in `examples/binary.png` is labelled with powers of two, most of
 whose superscripts OCR misses:
 
 ```bash
-figrecover examples/binary.png
+plottracer examples/binary.png
 ```
 
 ```text
-figrecover: logarithmic x-axis "Size (KiB)" with ticks at 1, 2, 4, 8, 16
-figrecover: logarithmic y-axis "Time (ms)" with ticks at 0.25, 0.5, 1, 2, 4, 8, 16, 32, 64
+plottracer: logarithmic x-axis "Size (KiB)" with ticks at 1, 2, 4, 8, 16
+plottracer: logarithmic y-axis "Time (ms)" with ticks at 0.25, 0.5, 1, 2, 4, 8, 16, 32, 64
 ```
 
 Superscripts are small, so at low resolution OCR can misread them as other
@@ -752,7 +754,7 @@ Reference points on a logarithmic axis must be positive, so take the lowest
 labelled tick as the origin, rather than zero:
 
 ```bash
-figrecover examples/logarithmic.png \
+plottracer examples/logarithmic.png \
     -p 1,0.1 -p 1e4,0.1 -p 1,1e3 -l 93,66 -l 610,66 -l 93,380 --log xy
 ```
 
@@ -764,25 +766,25 @@ names and reusable selectors. In vector PDFs, distinct plot clips and the
 printed legend allow the panels to retain separate calibrations.
 
 A figure of several plots, such as panels labelled (a), (b), (c), is read
-panel by panel when figrecover reads the axes:
+panel by panel when plottracer reads the axes:
 
 ```bash
-figrecover examples/panels.png -o panels.csv --preview panels.preview.png
+plottracer examples/panels.png -o panels.csv --preview panels.preview.png
 ```
 
 It prints what it read of each panel, named after its label, and the files
 it wrote:
 
 ```text
-figrecover: panel a: x-axis "Energy (eV)" with ticks at 0, 2, 4, 6, 8, 10
-figrecover: panel a: y-axis "Intensity" with ticks at 0, 0.5, 1, 1.5, 2, 2.5, 3
-figrecover: panel b: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10
-figrecover: panel b: y-axis "Voltage (mV)" with ticks at -1, -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1
-figrecover: panel c: x-axis "Depth (m)" with ticks at 0, 2, 4, 6, 8, 10
-figrecover: panel c: y-axis "Temperature (K)" with ticks at 0, 0.5, 1, 1.5, 2, 2.5, 3
-figrecover: panel d: logarithmic x-axis "Frequency (Hz)" with ticks at 1, 10, 100, 1000, 10000
-figrecover: panel d: logarithmic y-axis "Power (mW)" with ticks at 0.1, 1, 10, 100, 1000
-figrecover: wrote panels_a.csv, panels_b.csv, panels_c.csv, panels_d.csv
+plottracer: panel a: x-axis "Energy (eV)" with ticks at 0, 2, 4, 6, 8, 10
+plottracer: panel a: y-axis "Intensity" with ticks at 0, 0.5, 1, 1.5, 2, 2.5, 3
+plottracer: panel b: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10
+plottracer: panel b: y-axis "Voltage (mV)" with ticks at -1, -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1
+plottracer: panel c: x-axis "Depth (m)" with ticks at 0, 2, 4, 6, 8, 10
+plottracer: panel c: y-axis "Temperature (K)" with ticks at 0, 0.5, 1, 1.5, 2, 2.5, 3
+plottracer: panel d: logarithmic x-axis "Frequency (Hz)" with ticks at 1, 10, 100, 1000, 10000
+plottracer: panel d: logarithmic y-axis "Power (mW)" with ticks at 0.1, 1, 10, 100, 1000
+plottracer: wrote panels_a.csv, panels_b.csv, panels_c.csv, panels_d.csv
 ```
 
 Each panel's CSV is like a single plot's, with its columns named after the
@@ -805,16 +807,16 @@ the x-axes only on the lower panels, and the y-axes only on the left ones.
 Each panel takes the axes that it lacks from those beside it:
 
 ```bash
-figrecover examples/shared.png -o shared.csv
+plottracer examples/shared.png -o shared.csv
 ```
 
 ```text
-figrecover: panel a: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10
-figrecover: panel a: y-axis "Voltage (mV)" with ticks at 0, 0.5, 1, 1.5, 2, 2.5, 3
-figrecover: panel b: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10
-figrecover: panel b: y-axis "Voltage (mV)" with ticks at 0, 0.5, 1, 1.5, 2, 2.5, 3
+plottracer: panel a: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10
+plottracer: panel a: y-axis "Voltage (mV)" with ticks at 0, 0.5, 1, 1.5, 2, 2.5, 3
+plottracer: panel b: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10
+plottracer: panel b: y-axis "Voltage (mV)" with ticks at 0, 0.5, 1, 1.5, 2, 2.5, 3
 ...
-figrecover: wrote shared_a.csv, shared_b.csv, shared_c.csv, shared_d.csv
+plottracer: wrote shared_a.csv, shared_b.csv, shared_c.csv, shared_d.csv
 ```
 
 An inset, a smaller plot drawn in a frame inside a plot's axes, as
@@ -822,15 +824,15 @@ matplotlib's `inset_axes` draws one, is read as a panel of its own, with its
 own axes, while the plot's curves are traced with it painted out:
 
 ```bash
-figrecover examples/inset.png -o decay.csv --preview inset.preview.png
+plottracer examples/inset.png -o decay.csv --preview inset.preview.png
 ```
 
 ```text
-figrecover: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10
-figrecover: y-axis "Voltage (mV)" with ticks at 0, 0.5, 1, 1.5, 2, 2.5, 3
-figrecover: panel inset: x-axis with ticks at 6, 7, 8, 9, 10
-figrecover: panel inset: y-axis with ticks at 0.1, 0.2, 0.3
-figrecover: wrote decay.csv, decay_inset.csv
+plottracer: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10
+plottracer: y-axis "Voltage (mV)" with ticks at 0, 0.5, 1, 1.5, 2, 2.5, 3
+plottracer: panel inset: x-axis with ticks at 6, 7, 8, 9, 10
+plottracer: panel inset: y-axis with ticks at 0.1, 0.2, 0.3
+plottracer: wrote decay.csv, decay_inset.csv
 ```
 
 The plot keeps the name it has without the inset: none, in an image of one
@@ -887,7 +889,7 @@ reading order, such as `inset1` and `inset2`.
 - A panel whose axes cannot be read, such as a colour bar with a frame, or a
   panel without tick labels on an axis that no panel read lines up with, is
   left out with a warning, as is one whose curves cannot be traced.
-  figrecover fails only if no panel is left.
+  plottracer fails only if no panel is left.
 - `-n` and `-c` apply to each panel, and `-n` prints the colours of each.
   `-m` needs an image of one plot, and leaves its insets painted out, unread.
   With `-p`, the image is one plot, and its insets are painted out, as
@@ -898,17 +900,17 @@ reading order, such as `inset1` and `inset2`.
 
 A scanned or photocopied plot is seldom quite level, and a turn of a quarter
 of a degree, two pixels across a plot, is enough for its axis lines or frame
-to be traced as part of a curve. So figrecover finds the angle by which an
+to be traced as part of a curve. So plottracer finds the angle by which an
 image's axes are turned, and turns the image back before reading it:
 
 ```bash
-figrecover examples/skewed.png --preview skewed.preview.png
+plottracer examples/skewed.png --preview skewed.preview.png
 ```
 
 ```text
-figrecover: turned the image 1.00° clockwise to level its axes
-figrecover: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10
-figrecover: y-axis "Voltage (mV)" with ticks at 0, 0.5, 1, 1.5, 2, 2.5, 3
+plottracer: turned the image 1.00° clockwise to level its axes
+plottracer: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10
+plottracer: y-axis "Voltage (mV)" with ticks at 0, 0.5, 1, 1.5, 2, 2.5, 3
 ```
 
 The preview is drawn on the image as given, with the curves and the ticks
@@ -948,31 +950,31 @@ turned back onto it:
 ### PDF files
 
 With the `pdf` extra installed, give a PDF file instead of an image, and
-figrecover reads the plot on its first page exactly, from what the PDF draws
+plottracer reads the plot on its first page exactly, from what the PDF draws
 rather than from pixels. The tick labels and titles are text, so they need no
 OCR, and the curves are lines through points whose positions the PDF holds:
 
 ```bash
-figrecover examples/labelled.pdf --preview labelled.pdf.png
+plottracer examples/labelled.pdf --preview labelled.pdf.png
 ```
 
-For a paper with several figures on one page, start with `figrecover paper.pdf
---page 3`. When figrecover identifies multiple figures, it prints their caption
+For a paper with several figures on one page, start with `plottracer paper.pdf
+--page 3`. When plottracer identifies multiple figures, it prints their caption
 labels and boxes and asks you to choose. For example:
 
 ```bash
-figrecover paper.pdf --page 3 --figure S1 -o supplement.csv
+plottracer paper.pdf --page 3 --figure S1 -o supplement.csv
 ```
 
-Figrecover associates labels such as “Fig. 2” and “Supplementary Figure S1”
+Plottracer associates labels such as “Fig. 2” and “Supplementary Figure S1”
 with nearby vector drawings or images in the same column. It checks for
 intervening article text. With one figure or no recognised captions, the
 default is the whole page. Use `--box` to select a region manually.
 
 
 ```text
-figrecover: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10
-figrecover: y-axis "Voltage (mV)" with ticks at -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1
+plottracer: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10
+plottracer: y-axis "Voltage (mV)" with ticks at -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1
 ```
 
 ```text
@@ -993,7 +995,7 @@ its ends.
 
 - Positions on a PDF's page are in points, 72 to the inch, from its bottom-left
   corner, as PDF files give them. So are `-l` locations, and those that
-  figrecover prints when you click. The preview shows the part of the page
+  plottracer prints when you click. The preview shows the part of the page
   read, at 2 pixels to the point.
 - `--page N` reads another page than the first. On a page with several
   figures, such as a page of a paper, give the part of it to read with
@@ -1038,14 +1040,14 @@ its ends.
   every end lies within 1.3×10⁻⁶ of the truth.
 
 ```bash
-figrecover examples/markers.pdf \
+plottracer examples/markers.pdf \
     -m 108.45,12.91 -m 187.85,12.91 -m 272.06,12.91 -m 347.51,12.91
 ```
 
 ```text
-figrecover: x-axis "x" with ticks at 0, 2, 4, 6, 8, 10
-figrecover: y-axis "y" with ticks at 0, 0.5, 1, 1.5, 2, 2.5, 3
-figrecover: markers found in each series: 19, 19, 19, 19
+plottracer: x-axis "x" with ticks at 0, 2, 4, 6, 8, 10
+plottracer: y-axis "y" with ticks at 0, 0.5, 1, 1.5, 2, 2.5, 3
+plottracer: markers found in each series: 19, 19, 19, 19
 ```
 
 - Curves drawn as images, as plots of many points often are to keep their PDF
@@ -1057,28 +1059,28 @@ figrecover: markers found in each series: 19, 19, 19, 19
   over grid lines in such images.
 
 ```bash
-figrecover examples/rasterised.pdf -n 2
+plottracer examples/rasterised.pdf -n 2
 ```
 
 ```text
-figrecover: colours: -c ff7f0e -c 1f77b4
+plottracer: colours: -c ff7f0e -c 1f77b4
 ```
 
 ### SVG files
 
-Give an SVG file, and figrecover reads it as it reads a PDF file, exactly,
+Give an SVG file, and plottracer reads it as it reads a PDF file, exactly,
 from what it draws: its text, its paths, through their transforms and clip
 paths, and its images. It needs no extra. Files compressed with gzip, such as
 `.svgz` and `.svg.gz` files, are read too, and a file named otherwise is taken
 for an SVG file if it starts with a tag, and an `<svg` tag in its first 4 KiB:
 
 ```bash
-figrecover examples/labelled.svg
+plottracer examples/labelled.svg
 ```
 
 ```text
-figrecover: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10
-figrecover: y-axis "Voltage (mV)" with ticks at -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1
+plottracer: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10
+plottracer: y-axis "Voltage (mV)" with ticks at -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1
 ```
 
 The examples `labelled`, `logarithmic`, `series`, `markers` and `rasterised`
@@ -1123,7 +1125,7 @@ image in `rasterised.svg` as closely as in `rasterised.pdf`.
 - Images, given as data URIs or as files beside the SVG file, are traced as in
   a PDF file, placed and turned as they are shown: matplotlib draws them
   upside down and turns them over.
-- The preview is drawn by figrecover itself, with OpenCV: the paths, the
+- The preview is drawn by plottracer itself, with OpenCV: the paths, the
   images and the text, in a font of its own.
 - Files that declare XML entities are refused, as their entities can expand
   to fill the memory: the "billion laughs" is refused in a tenth of a
@@ -1135,7 +1137,7 @@ image in `rasterised.svg` as closely as in `rasterised.pdf`.
 The same steps are available as a library:
 
 ```python
-from figrecover import Calibration, load_image, trace_curve
+from plottracer import Calibration, load_image, trace_curve
 
 image = load_image("examples/spectrum.png")
 calibration = Calibration.from_points(
@@ -1148,7 +1150,7 @@ data = calibration.to_data(trace_curve(image, calibration.origin))
 or, with the `ocr` extra, reading the axes:
 
 ```python
-from figrecover import load_image, read_axes, trace_curve
+from plottracer import load_image, read_axes, trace_curve
 
 image = load_image("examples/labelled.png")
 axes = read_axes(image)
@@ -1168,7 +1170,7 @@ An image of one plot is one panel, of the whole image, and each inset
 follows the panel it lies in, without a label:
 
 ```python
-from figrecover import load_image, read_panels, trace_curve
+from plottracer import load_image, read_panels, trace_curve
 
 for panel in read_panels(load_image("examples/panels.png")):
     calibration = panel.axes.calibration
@@ -1182,7 +1184,7 @@ colour. Pixel positions are those of pixel centres, and a curve that crosses a
 column more than once gives a point for each crossing, sorted by x, then y:
 
 ```python
-from figrecover import find_colours, trace_curves
+from plottracer import find_colours, trace_curves
 
 colours = find_colours(image, 4, calibration.origin)
 curves = trace_curves(image, colours, calibration.origin)
@@ -1198,7 +1200,7 @@ pixels, or in a PDF file in points; its `points`; and its `name`, such as
 `040404-dashed`:
 
 ```python
-from figrecover import find_series, load_image
+from plottracer import find_series, load_image
 
 for series in find_series(load_image("examples/styles.png"), (80, 44)):
     print(series.name, len(series.points))  # 040404-solid 493, ...
@@ -1209,7 +1211,7 @@ position of each series' legend key, and returns the middle of each marker of
 that shape:
 
 ```python
-from figrecover import Calibration, find_markers, load_image
+from plottracer import Calibration, find_markers, load_image
 
 image = load_image("examples/markers.png")
 calibration = Calibration.from_points(
@@ -1236,7 +1238,7 @@ its end cannot be seen. On a reversed axis, the lower end is the larger
 value:
 
 ```python
-from figrecover import find_error_bars
+from plottracer import find_error_bars
 
 for bars in find_error_bars(image, colours, calibration.origin):
     points = calibration.to_data(bars.points)
@@ -1256,7 +1258,7 @@ and `back` methods find where pixel positions lie in the levelled image, and
 back:
 
 ```python
-from figrecover import Calibration, level_image, load_image, trace_curve
+from plottracer import Calibration, level_image, load_image, trace_curve
 
 image, levelling = level_image(load_image("examples/skewed.png"))
 pixels = levelling.points([(82.8, 39.8), (578.7, 48.5), (81.0, 142.5)])
@@ -1272,7 +1274,7 @@ the same steps work on it, in points from the page's bottom-left corner; so
 does `load_svg`, for an SVG file, without the extra:
 
 ```python
-from figrecover import find_pdf_colours, load_pdf, read_pdf_axes, trace_pdf_curves
+from plottracer import find_pdf_colours, load_pdf, read_pdf_axes, trace_pdf_curves
 
 drawing = load_pdf("examples/series.pdf", page=1)
 axes = read_pdf_axes(drawing)
@@ -1296,7 +1298,7 @@ as well as by colour, and `trace_pdf_series(drawing, colours, origin)` the
 series of each colour:
 
 ```python
-from figrecover import find_pdf_series, load_pdf
+from plottracer import find_pdf_series, load_pdf
 
 for series in find_pdf_series(load_pdf("examples/styles.pdf"), (57.6, 31.68)):
     print(series.name, series.width)  # 000000-dotted 1.5, 000000-dashed 1.5, ...
@@ -1315,7 +1317,7 @@ coordinate and colour. A lone flat stroke has no independent data beside
 it, so the reference classifier leaves it as data. A PDF supplies its
 clipped reference path coordinates directly.
 
-To inspect the classification, run `figrecover figure.png --classes objects.png`.
+To inspect the classification, run `plottracer figure.png --classes objects.png`.
 The image has a colour key, and the terminal gives a count for each class.
 Lines, marker groups and error-bar groups are counted per detected series.
 Regularly spaced parallel rules appear as gridlines. Broad fills can appear as
@@ -1405,7 +1407,7 @@ Reference objects carry their axis, pixel coordinate and calibrated value.
    colour’s strength. Depth is measured before removing antialiased edges. `-c` instead picks the colour nearest to each given colour, up to
    96 levels away, or failing that the nearest whose direction lies within
    12 degrees of its own, no further from the background: a thin or
-   translucent line of that colour. When a thin segment lies inside a broad fill, figrecover
+   translucent line of that colour. When a thin segment lies inside a broad fill, plottracer
    checks the adjacent stroke outside the fill. A matching mixture of the
    stroke and fill colours joins the two segments.
 7. Each pixel belongs to the colour that it best matches when blended
@@ -1595,7 +1597,7 @@ With an SVG file, step 1 gives way to this:
 
 ## Accuracy
 
-Across 100 ChartX line charts and 102 PlotQA dot-line charts, figrecover
+Across 100 ChartX line charts and 102 PlotQA dot-line charts, plottracer
 scored 0.322 mean numeric F1 with automatic axes and a supplied series
 count. On the PlotQA subset, supplying tick calibration raised the score
 from 0.230 to 0.553. These figures cover the paired public items only.
@@ -1610,7 +1612,7 @@ especially near a steep peak.
 
 For images up to 400 pixels on the longer side, the CLI reports how much one
 pixel spans on each axis. A logarithmic axis reports a multiplier per pixel.
-When the first OCR pass finds too few ticks, figrecover looks for long axis
+When the first OCR pass finds too few ticks, plottracer looks for long axis
 lines, isolates their labels and enlarges each label for recognition. It
 traces curves at their original resolution.
 
@@ -1645,7 +1647,7 @@ this size can still be misread, including axis titles.
 - Where curves cross, the one drawn underneath loses a few pixels, and its
   points there can be a pixel or two out.
 - The axes must be horizontal and vertical, or turned alike by up to 10°, as
-  in a scan, which figrecover levels (see [Turned images](#turned-images)),
+  in a scan, which plottracer levels (see [Turned images](#turned-images)),
   with linear or logarithmic scales, though either may be reversed. To read
   the axes, the x-axis must lie below the plot and the y-axis left of it. A
   photo of a page or a screen, in perspective, is not made square, nor is a
@@ -1754,7 +1756,7 @@ curves that `examples/make_examples.py` draws; after changing that script,
 redraw the examples with `uv run examples/make_examples.py`, which also prints
 their `-l` options.
 
-`examples/benchmark_colours.py` measures how well figrecover finds and traces
+`examples/benchmark_colours.py` measures how well plottracer finds and traces
 several series by colour, over plots of 2 to 12 series in several palettes,
 line widths, resolutions and JPEG qualities, with and without grids and
 legends. Run it with `uv run --with matplotlib examples/benchmark_colours.py`,
@@ -1772,9 +1774,8 @@ protection.
 
 ### Releasing
 
-figrecover is released on GitHub only. The name `figrecover` on PyPI belongs
-to an unrelated project, so the PyPI workflow `release.yml` is disabled; its
-header says what to change before enabling it.
+plottracer is released on GitHub only, so the PyPI workflow `release.yml` is
+disabled; its header says what to set up before enabling it.
 
 1. Enable the repository in the release owner's [Zenodo GitHub settings](https://zenodo.org/account/settings/github/)
    before publishing the first release.
@@ -1790,7 +1791,7 @@ header says what to change before enabling it.
 .
 ├── .github/                 # CI, the disabled PyPI release and Dependabot
 ├── examples/                # example plots, their previews and the script that draws them
-├── src/figrecover/
+├── src/plottracer/
 │   ├── axes.py              # reading the axes from their tick labels
 │   ├── panels.py            # finding the panels of a figure and their insets, and reading each
 │   ├── calibration.py       # pixel-to-data mapping
@@ -1800,13 +1801,13 @@ header says what to change before enabling it.
 │   ├── interactive.py       # window for clicking on reference points
 │   ├── pdf.py               # reading plots from PDF files, from their drawing
 │   ├── svg.py               # reading plots from SVG files, from their drawing
-│   └── cli.py               # the figrecover command
+│   └── cli.py               # the plottracer command
 └── tests/
 ```
 
 ## License
 
-figrecover is free software under the GNU Lesser General Public License,
+plottracer is free software under the GNU Lesser General Public License,
 version 3 or later: see [`LICENSE`](LICENSE), which supplements the GNU
 General Public License in [`COPYING`](COPYING). It is a modified version of
 [PlotDigitizer](https://github.com/dilawar/PlotDigitizer) by Dilawar Singh,

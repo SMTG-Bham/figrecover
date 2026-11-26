@@ -220,7 +220,7 @@ def reproduce(
     extra: Sequence[str],
 ) -> str:
     """Build a shell-quoted command using the original positions and selected series."""
-    args = ["figrecover", record.path]
+    args = ["plottracer", record.path]
     if record.points and not (record.region.annotations or record.region.legend):
         for flag, pairs in (("-p", record.points), ("-l", record.locations)):
             for x, y in pairs:
@@ -258,7 +258,7 @@ def save(path: Path, argv: Sequence[str], inputs: Sequence[InputRecord]) -> None
         if entry["reproduce"] is None:
             del entry["reproduce"]
     result = {
-        "figrecover": __version__,
+        "plottracer": __version__,
         "created_utc": datetime.now(UTC).isoformat(),
         "argv": list(argv),
         "versions": versions,

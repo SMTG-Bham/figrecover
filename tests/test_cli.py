@@ -19,7 +19,7 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 
-from figrecover import (
+from plottracer import (
     Axes,
     Calibration,
     Image,
@@ -33,7 +33,7 @@ from figrecover import (
     load_image,
     metadata,
 )
-from figrecover.cli import _names, _options, main
+from plottracer.cli import _names, _options, main
 
 type Curve = Callable[[npt.NDArray[np.float64]], npt.NDArray[np.float64]]
 
@@ -264,7 +264,7 @@ def test_traces_several_series_and_prints_their_colours(
 
     captured = capsys.readouterr()
     colours = "-c 2ca02c -c 1f77b4 -c ff7f0e -c 000000"  # the most pixels first
-    assert captured.err == f"figrecover: colours: {colours}\n"
+    assert captured.err == f"plottracer: colours: {colours}\n"
     assert_recovers_series(captured.out, [wave, decay, growth, trend])
 
 
@@ -282,9 +282,9 @@ def test_says_when_the_image_is_greyscale(
     # The two curves of one grey are told apart by where they run.
     captured = capsys.readouterr()
     assert captured.err == (
-        "figrecover: the image is greyscale, so curves of different colours may "
+        "plottracer: the image is greyscale, so curves of different colours may "
         "share a grey\n"
-        "figrecover: colours: -c 919191 -c 000000 -c 5c5c5c:solid -c 5c5c5c:solid2\n"
+        "plottracer: colours: -c 919191 -c 000000 -c 5c5c5c:solid -c 5c5c5c:solid2\n"
     )
     assert_recovers_series(captured.out, [growth, trend, decay, wave])
 
@@ -323,7 +323,7 @@ def test_finds_series_by_their_markers(
     counts = [np.count_nonzero(data[:, 0] == series) for series in range(1, 5)]
     found = ", ".join(map(str, counts))
     assert captured.err.startswith(
-        f"figrecover: markers found in each series: {found}\n"
+        f"plottracer: markers found in each series: {found}\n"
     )
     # The markers lie every half unit from 0.5 to 9.5, even where the series
     # cross.
@@ -376,12 +376,12 @@ def test_tells_apart_markers_alike_in_shape(
     captured = capsys.readouterr()
     # Circles look like hexagons and octagons at 6 points, but are told apart.
     assert captured.err == (
-        "figrecover: the markers of the keys at 98,339 and 270,339 look alike at "
+        "plottracer: the markers of the keys at 98,339 and 270,339 look alike at "
         "this size, so some may be taken for each other\n"
-        "figrecover: the markers of the keys at 98,339 and 355,339 look alike at "
+        "plottracer: the markers of the keys at 98,339 and 355,339 look alike at "
         "this size, so some may be taken for each other\n"
-        "figrecover: markers found in each series: 19, 19, 19, 19\n"
-        "figrecover: legend (in this plot): Series 1 = -m 99,338.5, "
+        "plottracer: markers found in each series: 19, 19, 19, 19\n"
+        "plottracer: legend (in this plot): Series 1 = -m 99,338.5, "
         "Series 2 = -m 184.5,339, Series 3 = -m 270.5,338.5, Series 4 = -m 356,338.5\n"
     )
     data = marker_csv(captured.out, [f"Series {i}" for i in range(1, 5)])
@@ -395,8 +395,8 @@ def test_tells_apart_markers_of_one_shape_by_colour(
 
     captured = capsys.readouterr()
     assert captured.err == (
-        "figrecover: markers found in each series: 19, 19, 19, 19\n"
-        "figrecover: legend (in this plot): Series 1 = -c 1f77b4, "
+        "plottracer: markers found in each series: 19, 19, 19, 19\n"
+        "plottracer: legend (in this plot): Series 1 = -c 1f77b4, "
         "Series 2 = -c ff7f0e, Series 3 = -c 2ca02c, Series 4 = -c d62728\n"
     )
     data = marker_csv(captured.out, [f"Series {i}" for i in range(1, 5)])
@@ -415,9 +415,9 @@ def test_finds_markers_partly_hidden_and_reports_those_hidden(
     # 5.5 and at 4, but for the lower edge.
     captured = capsys.readouterr()
     assert captured.err.startswith(
-        "figrecover: markers found in each series: 17, 20, 19, 18\n"
-        "figrecover: series 1: 17 found, 2 probably hidden near x = 4, 5\n"
-        "figrecover: series 4: 18 found, 1 probably hidden near x = 5\n"
+        "plottracer: markers found in each series: 17, 20, 19, 18\n"
+        "plottracer: series 1: 17 found, 2 probably hidden near x = 4, 5\n"
+        "plottracer: series 4: 18 found, 1 probably hidden near x = 5\n"
     )
     data = marker_csv(captured.out, ["Series 1", "Series 2", "Series 3", "Series 4"])
     on_curves = [17, 19, 18, 17]
@@ -473,11 +473,11 @@ def test_reports_markers_ambiguous_hidden_or_missing(
     assert main([*MARKERS, *MARKER_KEYS[:6]]) == 0
 
     assert capsys.readouterr().err.startswith(
-        "figrecover: two keys look alike\n"
-        "figrecover: markers found in each series: 2, 2, 0\n"
-        "figrecover: series 3: found no markers like the key at 377,18\n"
-        "figrecover: series 1: 2 found, 1 of them ambiguous near x = 1\n"
-        "figrecover: series 2: 2 found, 1 of them ambiguous near x = 2.5, and 2 "
+        "plottracer: two keys look alike\n"
+        "plottracer: markers found in each series: 2, 2, 0\n"
+        "plottracer: series 3: found no markers like the key at 377,18\n"
+        "plottracer: series 1: 2 found, 1 of them ambiguous near x = 1\n"
+        "plottracer: series 2: 2 found, 1 of them ambiguous near x = 2.5, and 2 "
         "probably hidden near x = 1.5, 2\n"
     )
 
@@ -490,8 +490,8 @@ def test_tells_curves_of_one_colour_apart_by_style(
     captured = capsys.readouterr()
     options = "-c 000000:solid -c 000000:dashed -c 000000:dotted"  # most pixels first
     assert captured.err == (
-        "figrecover: the image is greyscale, so curves of different colours may "
-        f"share a grey\nfigrecover: colours: {options}\n"
+        "plottracer: the image is greyscale, so curves of different colours may "
+        f"share a grey\nplottracer: colours: {options}\n"
     )
     assert_recovers_styles(captured.out, [decay, growth, wave])
 
@@ -549,7 +549,7 @@ def test_asks_for_missing_locations_and_prints_them(
     assert main(SPECTRUM) == 0
     assert asked == [["0,0", "10,0", "0,1"]]
     captured = capsys.readouterr()
-    assert captured.err == f"figrecover: locations: {' '.join(LOCATIONS)}\n"
+    assert captured.err == f"plottracer: locations: {' '.join(LOCATIONS)}\n"
     assert_recovers(captured.out, spectrum)
 
 
@@ -562,8 +562,8 @@ def test_reads_the_axes_without_reference_points(
 
     captured = capsys.readouterr()
     assert captured.err == (
-        'figrecover: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10\n'
-        'figrecover: y-axis "Voltage (mV)" with ticks at '
+        'plottracer: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10\n'
+        'plottracer: y-axis "Voltage (mV)" with ticks at '
         "-0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1\n"
     )
     assert_recovers(captured.out, ringing, header="Time (s),Voltage (mV)")
@@ -577,9 +577,9 @@ def test_reads_logarithmic_axes(capsys: pytest.CaptureFixture[str]) -> None:
 
     captured = capsys.readouterr()
     assert captured.err == (
-        'figrecover: logarithmic x-axis "Frequency (Hz)" with ticks at '
+        'plottracer: logarithmic x-axis "Frequency (Hz)" with ticks at '
         "1, 10, 100, 1000, 10000\n"
-        'figrecover: logarithmic y-axis "Power (mW)" with ticks at '
+        'plottracer: logarithmic y-axis "Power (mW)" with ticks at '
         "0.1, 1, 10, 100, 1000\n"
     )
     assert_follows_lowpass(read_csv(captured.out, "Frequency (Hz),Power (mW)"))
@@ -590,8 +590,8 @@ def test_reads_powers_of_two(capsys: pytest.CaptureFixture[str]) -> None:
 
     captured = capsys.readouterr()
     assert captured.err == (
-        'figrecover: logarithmic x-axis "Size (KiB)" with ticks at 1, 2, 4, 8, 16\n'
-        'figrecover: logarithmic y-axis "Time (ms)" with ticks at '
+        'plottracer: logarithmic x-axis "Size (KiB)" with ticks at 1, 2, 4, 8, 16\n'
+        'plottracer: logarithmic y-axis "Time (ms)" with ticks at '
         "0.25, 0.5, 1, 2, 4, 8, 16, 32, 64\n"
     )
     data = read_csv(captured.out, "Size (KiB),Time (ms)")
@@ -635,8 +635,8 @@ def test_quotes_titles_in_the_csv_header(
 
     captured = capsys.readouterr()
     assert captured.err == (
-        'figrecover: x-axis "E, eV" with ticks at 0, 10\n'
-        "figrecover: y-axis with ticks at 0, 1\n"
+        'plottracer: x-axis "E, eV" with ticks at 0, 10\n'
+        "plottracer: y-axis with ticks at 0, 1\n"
     )
     assert_recovers(captured.out, spectrum, header='"E, eV",y')
 
@@ -650,20 +650,20 @@ def test_reads_each_panel_of_a_figure(
 
     paths = [tmp_path / f"panels_{letter}.csv" for letter in "abcd"]
     assert capsys.readouterr().err == (
-        'figrecover: panel a: x-axis "Energy (eV)" with ticks at 0, 2, 4, 6, 8, 10\n'
-        'figrecover: panel a: y-axis "Intensity" with ticks at '
+        'plottracer: panel a: x-axis "Energy (eV)" with ticks at 0, 2, 4, 6, 8, 10\n'
+        'plottracer: panel a: y-axis "Intensity" with ticks at '
         "0, 0.5, 1, 1.5, 2, 2.5, 3\n"
-        'figrecover: panel b: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10\n'
-        'figrecover: panel b: y-axis "Voltage (mV)" with ticks at '
+        'plottracer: panel b: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10\n'
+        'plottracer: panel b: y-axis "Voltage (mV)" with ticks at '
         "-1, -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1\n"
-        'figrecover: panel c: x-axis "Depth (m)" with ticks at 0, 2, 4, 6, 8, 10\n'
-        'figrecover: panel c: y-axis "Temperature (K)" with ticks at '
+        'plottracer: panel c: x-axis "Depth (m)" with ticks at 0, 2, 4, 6, 8, 10\n'
+        'plottracer: panel c: y-axis "Temperature (K)" with ticks at '
         "0, 0.5, 1, 1.5, 2, 2.5, 3\n"
-        'figrecover: panel d: logarithmic x-axis "Frequency (Hz)" with ticks at '
+        'plottracer: panel d: logarithmic x-axis "Frequency (Hz)" with ticks at '
         "1, 10, 100, 1000, 10000\n"
-        'figrecover: panel d: logarithmic y-axis "Power (mW)" with ticks at '
+        'plottracer: panel d: logarithmic y-axis "Power (mW)" with ticks at '
         "0.1, 1, 10, 100, 1000\n"
-        f"figrecover: wrote {', '.join(map(str, paths))}\n"
+        f"plottracer: wrote {', '.join(map(str, paths))}\n"
     )
     assert not output.exists()
     for path, curve, header in zip(
@@ -717,12 +717,12 @@ def test_writes_panels_to_standard_output_with_a_panel_column(
     captured = capsys.readouterr()
     y_title = f' "{titles[1]}"' if titles[1] else ""
     assert captured.err.splitlines() == [
-        'figrecover: panel a: x-axis "E" with ticks at 0, 10',
-        'figrecover: panel a: y-axis "I" with ticks at 0, 1',
-        f'figrecover: panel 2: x-axis "{titles[0]}" with ticks at 0, 10',
-        f"figrecover: panel 2: y-axis{y_title} with ticks at 0, 1",
-        "figrecover: panel a: colours: -c 000000",
-        "figrecover: panel 2: colours: -c 000000",
+        'plottracer: panel a: x-axis "E" with ticks at 0, 10',
+        'plottracer: panel a: y-axis "I" with ticks at 0, 1',
+        f'plottracer: panel 2: x-axis "{titles[0]}" with ticks at 0, 10',
+        f"plottracer: panel 2: y-axis{y_title} with ticks at 0, 1",
+        "plottracer: panel a: colours: -c 000000",
+        "plottracer: panel 2: colours: -c 000000",
     ]
     data = read_panel_csv(captured.out, header)
     assert list(data) == ["a", "2"]
@@ -748,9 +748,9 @@ def test_reports_panels_left_out(
 
     captured = capsys.readouterr()
     lines = captured.err.splitlines()
-    assert lines[0] == "figrecover: left out the panel at 1,2, as ..."
+    assert lines[0] == "plottracer: left out the panel at 1,2, as ..."
     assert lines[-1].startswith(
-        "figrecover: left out panel b, as its curves cannot be traced: "
+        "plottracer: left out panel b, as its curves cannot be traced: "
     )
     data = read_panel_csv(captured.out, "panel,E,I")
     assert list(data) == ["a"]
@@ -764,7 +764,7 @@ def test_needs_a_panel_whose_curves_can_be_traced(
 
     assert main([str(EXAMPLES / "spectrum.png")]) == 1
     assert capsys.readouterr().err.endswith(
-        "figrecover: error: cannot trace the curves of any of the 2 panels\n"
+        "plottracer: error: cannot trace the curves of any of the 2 panels\n"
     )
 
 
@@ -776,7 +776,7 @@ def test_reports_an_invalid_marker_key_across_panels(
 
     assert main([str(EXAMPLES / "spectrum.png"), "-m", "148,18"]) == 1
     assert capsys.readouterr().err.endswith(
-        "figrecover: error: cannot trace the curves of any of the 2 panels\n"
+        "plottracer: error: cannot trace the curves of any of the 2 panels\n"
     )
 
 
@@ -789,11 +789,11 @@ def test_reads_an_inset_as_a_plot_of_its_own(
 
     paths = [output, tmp_path / "decay_inset.csv"]
     assert capsys.readouterr().err == (
-        'figrecover: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10\n'
-        'figrecover: y-axis "Voltage (mV)" with ticks at 0, 0.5, 1, 1.5, 2, 2.5, 3\n'
-        "figrecover: panel inset: x-axis with ticks at 6, 7, 8, 9, 10\n"
-        "figrecover: panel inset: y-axis with ticks at 0.1, 0.2, 0.3\n"
-        f"figrecover: wrote {', '.join(map(str, paths))}\n"
+        'plottracer: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10\n'
+        'plottracer: y-axis "Voltage (mV)" with ticks at 0, 0.5, 1, 1.5, 2, 2.5, 3\n'
+        "plottracer: panel inset: x-axis with ticks at 6, 7, 8, 9, 10\n"
+        "plottracer: panel inset: y-axis with ticks at 0.1, 0.2, 0.3\n"
+        f"plottracer: wrote {', '.join(map(str, paths))}\n"
     )
     # The plot's curve is traced without the inset's, and the inset's in
     # its own units, over x from 6 to 10.
@@ -821,11 +821,11 @@ def test_writes_insets_to_files_of_their_own(
     # The plot holding the inset has no name, so is written to out.csv.
     paths = [output, tmp_path / "out_inset.csv"]
     assert capsys.readouterr().err.splitlines() == [
-        'figrecover: x-axis "E" with ticks at 0, 10',
-        'figrecover: y-axis "I" with ticks at 0, 1',
-        'figrecover: panel inset: x-axis "E" with ticks at 0, 10',
-        'figrecover: panel inset: y-axis "I" with ticks at 0, 1',
-        f"figrecover: wrote {', '.join(map(str, paths))}",
+        'plottracer: x-axis "E" with ticks at 0, 10',
+        'plottracer: y-axis "I" with ticks at 0, 1',
+        'plottracer: panel inset: x-axis "E" with ticks at 0, 10',
+        'plottracer: panel inset: y-axis "I" with ticks at 0, 1',
+        f"plottracer: wrote {', '.join(map(str, paths))}",
     ]
     for path in paths:
         assert_recovers(path.read_text(), spectrum, header="E,I")
@@ -856,7 +856,7 @@ def test_reports_a_plot_with_insets_left_out(
 
     captured = capsys.readouterr()
     assert captured.err.splitlines()[-1].startswith(
-        "figrecover: left out the plot, as its curves cannot be traced: "
+        "plottracer: left out the plot, as its curves cannot be traced: "
     )
     assert list(read_panel_csv(captured.out, "panel,E,I")) == ["inset"]
 
@@ -910,8 +910,8 @@ def test_reads_pdf_files_exactly(
 
     captured = capsys.readouterr()
     assert captured.err == (
-        'figrecover: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10\n'
-        'figrecover: y-axis "Voltage (mV)" with ticks at '
+        'plottracer: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10\n'
+        'plottracer: y-axis "Voltage (mV)" with ticks at '
         "-0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1\n"
     )
     data = read_csv(captured.out, header="Time (s),Voltage (mV)")
@@ -930,7 +930,7 @@ def test_traces_the_curves_of_pdf_files_by_colour(
 
     captured = capsys.readouterr()
     assert (
-        captured.err == "figrecover: colours: -c 2ca02c -c ff7f0e -c 1f77b4 -c 000000\n"
+        captured.err == "plottracer: colours: -c 2ca02c -c ff7f0e -c 1f77b4 -c 000000\n"
     )
     data = read_csv(captured.out, header="series,x,y")
     for series, curve in enumerate([wave, growth, decay, trend], start=1):
@@ -964,7 +964,7 @@ def test_asks_for_missing_locations_in_pdf_files_and_prints_them(
     assert main([str(EXAMPLES / "series.pdf"), *POINTS, "-c", "1f77b4"]) == 0
     assert shown[0].shape == (576, 922, 3)
     captured = capsys.readouterr()
-    assert captured.err == f"figrecover: locations: {' '.join(PDF_LOCATIONS)}\n"
+    assert captured.err == f"plottracer: locations: {' '.join(PDF_LOCATIONS)}\n"
     data = read_csv(captured.out)
     np.testing.assert_allclose(data[:, 1], decay(data[:, 0]), atol=1e-5)
 
@@ -977,7 +977,7 @@ def test_traces_curves_drawn_as_images_in_pdf_files(
     assert main([rasterised, "-n", "2", "--remove-grid"]) == 0
 
     captured = capsys.readouterr()
-    assert captured.err.endswith("figrecover: colours: -c ff7f0e -c 1f77b4\n")
+    assert captured.err.endswith("plottracer: colours: -c ff7f0e -c 1f77b4\n")
     data = read_csv(captured.out, header="series,Time (s),Voltage (mV)")
     for series, curve in enumerate([growth, decay], start=1):
         assert_follows(data[data[:, 0] == series, 1:], curve)
@@ -991,7 +991,7 @@ def test_finds_series_by_their_markers_in_pdf_files(
     assert main([MARKERS_PDF, *MARKER_PDF_KEYS, "--preview", str(preview)]) == 0
 
     captured = capsys.readouterr()
-    assert "figrecover: markers found in each series: 19, 19, 19, 19\n" in captured.err
+    assert "plottracer: markers found in each series: 19, 19, 19, 19\n" in captured.err
     data = marker_csv(captured.out, ["Decay", "Growth", "Wave", "Trend"])
     for series, curve in enumerate([decay, growth, wave, trend], start=1):
         x, y = data[data[:, 0] == series, 1:].T
@@ -1011,7 +1011,7 @@ def test_traces_series_of_markers_in_pdf_files_by_colour(
     assert main([str(EXAMPLES / "scatter.pdf"), "-n", "2"]) == 0
 
     captured = capsys.readouterr()
-    assert "figrecover: colours: -c " in captured.err
+    assert "plottracer: colours: -c " in captured.err
     data = marker_csv(
         captured.out, ["Growth", "Decay"], header="series,Time (s),Voltage (mV)"
     )
@@ -1028,7 +1028,7 @@ def test_tells_curves_of_pdf_files_apart_by_style(
 
     captured = capsys.readouterr()
     options = "-c 000000:dotted -c 000000:dashed -c 000000:solid"  # longest first
-    assert captured.err.endswith(f"figrecover: colours: {options}\n")
+    assert captured.err.endswith(f"plottracer: colours: {options}\n")
     data = read_csv(captured.out, header="series,x,y")
     for series, curve in enumerate([wave, growth, decay], start=1):
         x, y = data[data[:, 0] == series, 1:].T
@@ -1159,8 +1159,8 @@ def test_reads_svg_files_exactly(
 
     captured = capsys.readouterr()
     assert captured.err == (
-        'figrecover: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10\n'
-        'figrecover: y-axis "Voltage (mV)" with ticks at '
+        'plottracer: x-axis "Time (s)" with ticks at 0, 2, 4, 6, 8, 10\n'
+        'plottracer: y-axis "Voltage (mV)" with ticks at '
         "-0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1\n"
     )
     data = read_csv(captured.out, header="Time (s),Voltage (mV)")
@@ -1186,7 +1186,7 @@ def test_reads_svg_files_by_their_start_and_in_a_box(
     np.testing.assert_allclose(data[:, 1], decay(data[:, 0]), atol=1e-5)
     assert main([str(compressed), "-n", "4"]) == 0
     assert capsys.readouterr().err.endswith(
-        "figrecover: colours: -c 2ca02c -c 1f77b4 -c ff7f0e -c 000000\n"
+        "plottracer: colours: -c 2ca02c -c 1f77b4 -c ff7f0e -c 000000\n"
     )
 
 
@@ -1215,7 +1215,7 @@ def test_asks_for_missing_locations_in_svg_files_and_prints_them(
     assert main([str(EXAMPLES / "series.svg"), *POINTS, "-c", "1f77b4"]) == 0
     assert shown[0].shape == (576, 922, 3)
     captured = capsys.readouterr()
-    assert captured.err == f"figrecover: locations: {' '.join(PDF_LOCATIONS)}\n"
+    assert captured.err == f"plottracer: locations: {' '.join(PDF_LOCATIONS)}\n"
     data = read_csv(captured.out)
     np.testing.assert_allclose(data[:, 1], decay(data[:, 0]), atol=1e-5)
 
@@ -1304,7 +1304,7 @@ def test_reports_errors(
     arguments: list[str], message: str, capsys: pytest.CaptureFixture[str]
 ) -> None:
     assert main(arguments) == 1
-    assert capsys.readouterr().err.startswith(f"figrecover: error: {message}")
+    assert capsys.readouterr().err.startswith(f"plottracer: error: {message}")
 
 
 def test_accepts_points_with_spaces_and_exponents(
@@ -1379,10 +1379,10 @@ def test_version_flag(capsys: pytest.CaptureFixture[str]) -> None:
 def test_module_runs_the_cli(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.setattr(sys, "argv", ["figrecover", "--version"])
+    monkeypatch.setattr(sys, "argv", ["plottracer", "--version"])
 
     with pytest.raises(SystemExit) as exit_info:
-        runpy.run_module("figrecover", run_name="__main__")
+        runpy.run_module("plottracer", run_name="__main__")
 
     assert exit_info.value.code == 0
     assert capsys.readouterr().out == f"{__version__}\n"
@@ -1546,7 +1546,7 @@ def test_metadata_reproduces_single_plot(
     first = capsys.readouterr()
     document = json.loads(sidecar.read_text())
     (entry,) = document["inputs"]
-    assert document["figrecover"] == __version__
+    assert document["plottracer"] == __version__
     assert document["argv"] == argv
     assert "+00:00" in document["created_utc"]
     assert all(document["versions"].values())
@@ -1586,7 +1586,7 @@ def test_metadata_reproduces_single_plot(
     monkeypatch.setattr(interactive, "pick_points", unexpected)
     # Recording a replay must also retain the calibration for a later replay.
     command = shlex.split(document["reproduce"])
-    assert command[0] == "figrecover"
+    assert command[0] == "plottracer"
     assert main(command[1:]) == 0
     assert capsys.readouterr().out == first.out
     assert main([*command[1:], "--metadata", str(tmp_path / "replayed.json")]) == 0

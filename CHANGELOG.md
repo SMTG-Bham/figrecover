@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Renamed from figrecover to plottracer: the distribution, the command, the
+  Python package (`import plottracer`, `python -m plottracer`) and the
+  version key in `--metadata` JSON files, which was `"figrecover"`. The
+  repository moved to `SMTG-Bham/plottracer`.
+
 ## 0.1.0 (2026-11-24)
 
 The first release.
@@ -22,7 +29,7 @@ The first release.
 - The public benchmark records 406 digitization attempts on 202 ChartX and
   PlotQA charts. It includes per-chart scores and reproduction commands.
   [Benchmark results](benchmarks/README.md)
-- The `figrecover` command writes the curves in an image of a plot as CSV, in
+- The `plottracer` command writes the curves in an image of a plot as CSV, in
   the plot's own units, from three or more reference points.
 - Curves are told apart by colour, even neighbouring colours of a colour map,
   and found by the direction of their ink from the background, so lines
@@ -72,14 +79,14 @@ The first release.
   apart. Markers that look alike at the image's size, such as circles,
   hexagons and octagons 8 pixels across, are fitted to a fraction of a pixel
   and told apart, with a warning of the keys alike; markers partly hidden
-  under others are found by what shows of them; and figrecover prints how
+  under others are found by what shows of them; and plottracer prints how
   many markers of each series are ambiguous or probably hidden, and where,
   and warns of a series without markers. Legends in small type, whose lines
   are short, and JPEG images, down to quality 25, work too.
   `find_marker_series` gives these details.
-- Reference points can be clicked on, after which figrecover prints the
+- Reference points can be clicked on, after which plottracer prints the
   matching `-l` options to reuse for similar plots.
-- With the `ocr` extra, figrecover reads the axes when `-p` is left out: it
+- With the `ocr` extra, plottracer reads the axes when `-p` is left out: it
   calibrates each image from its tick labels, including thousands separators,
   decimal commas, percentages and exponents, applying scale factors such as
   `1e-5` printed beside an axis or `×10⁻³` written in its title, traces from
@@ -123,20 +130,20 @@ The first release.
   libraries print them, so that of a panel below is not taken for one of the
   x-axis above.
 - With the `ocr` extra, tick labels rotated to any angle are read, on either
-  axis: figrecover finds their slant from the ink of their characters and,
+  axis: plottracer finds their slant from the ink of their characters and,
   if OCR misread them, reads them again turned level, or a quarter turn each
   way if they are written up or down, such as single digits written
   downwards or negative labels run together as `-0.25-0.50`. Rotated labels
   centred on their tick marks lie at the marks. A label that OCR read as
   fewer characters than are drawn, such as `5` for `0.5`, is dropped, and an
   axis left with too few is refused rather than read ten times too large.
-- Logarithmic axes work too. figrecover finds them itself when it reads the
+- Logarithmic axes work too. plottracer finds them itself when it reads the
   axes, including tick labels written as powers, such as 10⁻² or 2⁵, even
   where OCR misses the superscripts; and `--log` names them for `-p`.
 - Reversed axes, whose values fall from left to right or from bottom to top,
-  work too, when figrecover reads the axes or with `-p` reference points on
+  work too, when plottracer reads the axes or with `-p` reference points on
   the axis lines.
-- With the `pdf` extra, figrecover reads plots in PDF files exactly, from what
+- With the `pdf` extra, plottracer reads plots in PDF files exactly, from what
   they draw rather than from pixels: the axes from the PDF's text, with its
   superscripts and subscripts, and their ticks at their tick marks; and the
   curves as the points their paths pass through, told apart by colour, without
@@ -148,7 +155,7 @@ The first release.
   placed on the page. `--page` and `--box` choose the page and the part of it
   to read, such as one figure on a page of a paper, and positions on the page
   are in points.
-- figrecover reads plots in SVG files exactly too, without an extra, as it
+- plottracer reads plots in SVG files exactly too, without an extra, as it
   reads them in PDF files: their paths through their transforms, viewBoxes and
   clip paths, with their colours, stroke widths and dash patterns; markers
   drawn with `<use>`; text from `<text>` and `<tspan>` elements, rotated, with
@@ -178,7 +185,7 @@ The first release.
 - Transparent pixels are treated as white, and plots with a dark background
   work as well as light ones. Pixel positions are those of pixel centres.
 - Images whose axes are turned by up to 10°, as scans often are, are levelled
-  before they are read, and figrecover says so: it finds the angle from their
+  before they are read, and plottracer says so: it finds the angle from their
   long straight lines, horizontal and vertical, to within 0.01°, and turns
   the image back. A turn of a quarter of a degree had the axis lines or the
   frame traced as part of a curve. `-l` and `-m` positions are those in the

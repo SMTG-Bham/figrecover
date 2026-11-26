@@ -44,7 +44,7 @@ from .pdf import (
 from .plot_objects import PlotObject
 from .svg import load_svg, render_svg
 
-__version__ = version("figrecover")
+__version__ = version("plottracer")
 
 __all__ = [
     "STYLES",

@@ -5,8 +5,8 @@ from collections.abc import Iterator
 
 import pytest
 
-from figrecover.axes import _engine
-from figrecover.pdf import _pdfium
+from plottracer.axes import _engine
+from plottracer.pdf import _pdfium
 
 
 @pytest.fixture

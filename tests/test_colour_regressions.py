@@ -10,7 +10,7 @@ import numpy.typing as npt
 import pytest
 from matplotlib.figure import Figure
 
-from figrecover import (
+from plottracer import (
     Image,
     find_pdf_series,
     find_series,
@@ -19,8 +19,8 @@ from figrecover import (
     trace_curves,
     trace_pdf_curves,
 )
-from figrecover.cli import main
-from figrecover.digitize import _stroke_ranges
+from plottracer.cli import main
+from plottracer.digitize import _stroke_ranges
 
 X = np.linspace(0, 10, 2000)
 ORIGIN = (80, 44)  # default axes on a 6.4 by 4 inch figure at 100 dpi

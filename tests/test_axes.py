@@ -12,8 +12,8 @@ import cv2
 import numpy as np
 import pytest
 
-from figrecover import Axes, Image, axes, load_image, read_axes
-from figrecover.axes import (
+from plottracer import Axes, Image, axes, load_image, read_axes
+from plottracer.axes import (
     _PLAIN,
     _engine,
     _factor,
